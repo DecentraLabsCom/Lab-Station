@@ -1,8 +1,10 @@
-"""FMU storage: catalog, discovery and parsing of provisioned .fmu files."""
+"""FMU storage: catalog, discovery, validation and quarantine of provisioned .fmu files."""
 
 from __future__ import annotations
 
 import logging
+import shutil
+import time as _time
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +14,124 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+# ── quarantine state ─────────────────────────────────────────────
+
+# In-memory quarantine index: accessKey → {reason, timestamp}.
+# Written to disk as `<FMU_ROOT>/.quarantine/<accessKey>.reason`.
+_quarantine_cache: dict[str, dict[str, Any]] = {}
+
+
+def _quarantine_dir() -> Path:
+    return config.FMU_ROOT / ".quarantine"
+
+
+def _load_quarantine_cache() -> None:
+    """Load quarantine entries from disk into memory (idempotent)."""
+    q = _quarantine_dir()
+    if not q.is_dir():
+        return
+    for entry in q.iterdir():
+        key = entry.stem  # e.g. "Model.fmu" from "Model.fmu.reason"
+        if entry.suffix == ".reason" and key not in _quarantine_cache:
+            try:
+                reason = entry.read_text(encoding="utf-8").strip()
+            except OSError:
+                reason = "unknown"
+            _quarantine_cache[key] = {
+                "reason": reason,
+                "timestamp": entry.stat().st_mtime,
+            }
+
+
+def quarantine(access_key: str, reason: str) -> None:
+    """Move an FMU to quarantine so it is excluded from the active catalog."""
+    q = _quarantine_dir()
+    q.mkdir(parents=True, exist_ok=True)
+
+    # Persist reason to disk
+    reason_file = q / f"{access_key}.reason"
+    reason_file.write_text(reason, encoding="utf-8")
+
+    # Move the actual FMU aside if it exists
+    root = config.FMU_ROOT
+    candidate = root / access_key
+    quarantined_target = q / access_key
+    if candidate.exists() and not quarantined_target.exists():
+        shutil.move(str(candidate), str(quarantined_target))
+
+    _quarantine_cache[access_key] = {
+        "reason": reason,
+        "timestamp": _time.time(),
+    }
+    logger.warning("Quarantined FMU %s: %s", access_key, reason)
+
+
+def unquarantine(access_key: str) -> bool:
+    """Restore a quarantined FMU back to the active catalog.  Returns True on success."""
+    q = _quarantine_dir()
+    quarantined = q / access_key
+    reason_file = q / f"{access_key}.reason"
+    target = config.FMU_ROOT / access_key
+
+    restored = False
+    if quarantined.exists() and not target.exists():
+        shutil.move(str(quarantined), str(target))
+        restored = True
+    if reason_file.exists():
+        reason_file.unlink()
+    _quarantine_cache.pop(access_key, None)
+    if restored:
+        logger.info("Restored FMU %s from quarantine", access_key)
+    return restored
+
+
+def is_quarantined(access_key: str) -> bool:
+    _load_quarantine_cache()
+    return access_key in _quarantine_cache
+
+
+def quarantine_info(access_key: str) -> dict[str, Any] | None:
+    _load_quarantine_cache()
+    return _quarantine_cache.get(access_key)
+
+
+def list_quarantined() -> list[dict[str, Any]]:
+    _load_quarantine_cache()
+    return [
+        {"accessKey": k, **v}
+        for k, v in sorted(_quarantine_cache.items())
+    ]
+
+
+# ── validation ───────────────────────────────────────────────────
+
+def validate_fmu(access_key: str) -> tuple[bool, str]:
+    """Validate an FMU is a parseable Co-Simulation archive.
+
+    Returns ``(True, "")`` on success or ``(False, reason)`` on failure.
+    Does NOT auto-quarantine — the caller decides.
+    """
+    path = _resolve_fmu_path(access_key)
+    if path is None:
+        return False, "FMU file not found"
+    try:
+        md = fmpy.read_model_description(str(path))
+    except Exception as exc:
+        return False, f"Cannot parse model description: {exc}"
+    if md.coSimulation is None:
+        return False, "FMU does not support Co-Simulation"
+    if not md.guid:
+        return False, "FMU has no GUID"
+    return True, ""
+
 
 def _resolve_fmu_path(access_key: str) -> Path | None:
-    """Return the absolute path to the .fmu file for *access_key*, or None."""
+    """Return the absolute path to the .fmu file for *access_key*, or None.
+
+    Quarantined FMUs are excluded.
+    """
+    if is_quarantined(access_key):
+        return None
     root = config.FMU_ROOT
     # Direct file: <root>/<accessKey>  (already ends with .fmu)
     candidate = root / access_key

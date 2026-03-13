@@ -44,6 +44,9 @@ def _isolate_config(tmp_path: Path):
     # Cleanup all sessions
     from app.engine import terminate_all
     terminate_all()
+    # Clear quarantine cache between tests
+    from app.fmu_storage import _quarantine_cache
+    _quarantine_cache.clear()
 
 
 @pytest.fixture
@@ -491,3 +494,418 @@ class TestGatewayContextValidation:
         }
         # Should not raise
         validate_gateway_context(ctx, "test.fmu")
+
+
+# ---------------------------------------------------------------------------
+# Helper: create a WS session backed by a mock FMU
+# ---------------------------------------------------------------------------
+
+def _mock_fmu_patches(fmu_root: Path):
+    """Return a context manager that patches fmpy calls for session creation."""
+    dummy_fmu = fmu_root / "Test.fmu"
+    if not dummy_fmu.exists():
+        dummy_fmu.write_bytes(b"PK\x03\x04dummy")
+
+    md = MagicMock()
+    md.modelName = "Test"
+    md.guid = "{g}"
+    md.fmiVersion = "2.0"
+    md.coSimulation = MagicMock()
+    md.coSimulation.modelIdentifier = "Test"
+    md.modelExchange = None
+    md.defaultExperiment = MagicMock()
+    md.defaultExperiment.startTime = "0"
+    md.defaultExperiment.stopTime = "1"
+    md.defaultExperiment.stepSize = "0.1"
+
+    out_var = MagicMock()
+    out_var.name = "y"
+    out_var.valueReference = 1
+    out_var.causality = "output"
+    out_var.variability = "continuous"
+    out_var.type = "Real"
+    out_var.start = None
+    out_var.unit = None
+    out_var.min = None
+    out_var.max = None
+    md.modelVariables = [out_var]
+
+    from contextlib import ExitStack
+
+    class _Patches:
+        def __enter__(self_inner):
+            self_inner._stack = ExitStack()
+            self_inner._stack.__enter__()
+            self_inner._stack.enter_context(
+                patch("app.engine.read_model_description", return_value=md)
+            )
+            self_inner._stack.enter_context(
+                patch("app.engine.fmpy_extract", return_value=str(fmu_root))
+            )
+            self_inner._stack.enter_context(
+                patch("fmpy.read_model_description", return_value=md)
+            )
+            return md
+        def __exit__(self_inner, *exc):
+            self_inner._stack.__exit__(*exc)
+
+    return _Patches()
+
+
+def _ws_create_session(ws):
+    """Send session.create and return the response dict."""
+    ws.send_text(json.dumps({
+        "type": "session.create",
+        "requestId": "req-create",
+        "gatewayContext": {
+            "mode": "station",
+            "accessKey": "Test.fmu",
+            "claims": {},
+        },
+    }))
+    resp = json.loads(ws.receive_text())
+    assert resp["type"] == "session.created", f"Unexpected: {resp}"
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# WebSocket – session.attach (reattach to existing session)
+# ---------------------------------------------------------------------------
+
+class TestSessionAttach:
+    def test_attach_after_create(self, client, _isolate_config):
+        """After session.create the same WS can send session.attach."""
+        with _mock_fmu_patches(_isolate_config):
+            with client.websocket_connect(
+                "/internal/fmu/sessions",
+                headers={"X-Internal-Session-Token": "test-secret"},
+            ) as ws:
+                created = _ws_create_session(ws)
+                session_id = created["sessionId"]
+
+                ws.send_text(json.dumps({
+                    "type": "session.attach",
+                    "requestId": "req-attach",
+                }))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "session.attached"
+                assert resp["sessionId"] == session_id
+                assert resp["requestId"] == "req-attach"
+                assert "serverTime" in resp
+
+    def test_attach_without_create_fails(self, client):
+        """session.attach requires an active session."""
+        with client.websocket_connect(
+            "/internal/fmu/sessions",
+            headers={"X-Internal-Session-Token": "test-secret"},
+        ) as ws:
+            ws.send_text(json.dumps({
+                "type": "session.attach",
+                "requestId": "req-attach-no-sess",
+            }))
+            resp = json.loads(ws.receive_text())
+            assert resp["type"] == "error"
+            assert resp["requestId"] == "req-attach-no-sess"
+
+    def test_full_lifecycle_create_attach_terminate(self, client, _isolate_config):
+        """Full lifecycle: create → attach → getState → terminate."""
+        with _mock_fmu_patches(_isolate_config):
+            with client.websocket_connect(
+                "/internal/fmu/sessions",
+                headers={"X-Internal-Session-Token": "test-secret"},
+            ) as ws:
+                created = _ws_create_session(ws)
+                sid = created["sessionId"]
+
+                # Attach
+                ws.send_text(json.dumps({"type": "session.attach", "requestId": "a"}))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "session.attached"
+
+                # Get state (should be loaded, not yet initialized)
+                ws.send_text(json.dumps({"type": "sim.getState", "requestId": "s"}))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "sim.state"
+                assert resp["state"] == "loaded"
+
+                # Terminate
+                ws.send_text(json.dumps({"type": "session.terminate", "requestId": "t"}))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "session.terminated"
+                assert resp["sessionId"] == sid
+
+
+# ---------------------------------------------------------------------------
+# Engine – backpressure and dropped outputs
+# ---------------------------------------------------------------------------
+
+class TestSubscriptionBackpressure:
+    def test_rate_limiting_drops_samples(self):
+        """When sample_subscription is called faster than min_interval,
+        intermediate samples are collected but only one payload is emitted
+        per interval, with a correct 'dropped' count."""
+        import time as _time_mod
+        from app.engine import OutputSubscription, FmuSession
+
+        session = FmuSession.__new__(FmuSession)
+        session.session_id = "bp-test"
+        session.fmu_path = Path("dummy.fmu")
+        session._md = MagicMock()
+        session._slave = MagicMock()
+        session._time = 1.0
+        session._initialised = True
+        session._terminated = False
+        session._step_size = 0.01
+        session.seq = 0
+        session._pending_samples = []
+        session._pending_queue_drops = 0
+
+        out_var = MagicMock()
+        out_var.name = "y"
+        out_var.valueReference = 1
+        out_var.causality = "output"
+        out_var.type = "Real"
+        session._md.modelVariables = [out_var]
+        session._slave.getReal.return_value = [42.0]
+
+        # Subscribe at 10 Hz → min interval 0.1s
+        session.subscription = OutputSubscription(
+            variables=None,
+            period_ms=100,
+            max_batch_size=64,
+        )
+        # Force last_emit to 0 so first call emits
+        session.subscription.last_emit_monotonic = 0.0
+
+        # First call should emit (monotonic clock is well past 0)
+        result = session.sample_subscription()
+        assert result is not None
+        assert result["type"] == "sim.outputs"
+        assert result["seq"] == 0
+        assert result["dropped"] == 0
+
+        # Immediately call again — should be rate-limited (returns None)
+        result2 = session.sample_subscription()
+        assert result2 is None
+
+        # And again
+        result3 = session.sample_subscription()
+        assert result3 is None
+
+        # Simulate time passing beyond the interval
+        session.subscription.last_emit_monotonic = _time_mod.monotonic() - 0.2
+
+        # Now should emit with dropped count > 0
+        result4 = session.sample_subscription()
+        assert result4 is not None
+        assert result4["seq"] == 1
+        assert result4["dropped"] >= 2  # at least the 2 rate-limited calls
+
+    def test_max_batch_size_enforced(self):
+        """When pending samples exceed max_batch_size, oldest are dropped."""
+        from app.engine import OutputSubscription, FmuSession
+
+        session = FmuSession.__new__(FmuSession)
+        session.session_id = "batch-test"
+        session.fmu_path = Path("dummy.fmu")
+        session._md = MagicMock()
+        session._slave = MagicMock()
+        session._time = 0.0
+        session._initialised = True
+        session._terminated = False
+        session._step_size = 0.01
+        session.seq = 0
+        session._pending_samples = []
+        session._pending_queue_drops = 0
+
+        out_var = MagicMock()
+        out_var.name = "y"
+        out_var.valueReference = 1
+        out_var.causality = "output"
+        out_var.type = "Real"
+        session._md.modelVariables = [out_var]
+        session._slave.getReal.return_value = [0.0]
+
+        # Subscribe with max_batch_size=3, very fast rate to never rate-limit
+        session.subscription = OutputSubscription(
+            variables=None,
+            period_ms=1,
+            max_batch_size=3,
+        )
+        session.subscription.last_emit_monotonic = 0.0
+
+        # First call emits immediately
+        r1 = session.sample_subscription()
+        assert r1 is not None
+
+        # Now prevent emission by setting last_emit to now
+        import time as _time_mod
+        session.subscription.last_emit_monotonic = _time_mod.monotonic()
+
+        # Accumulate 5 samples without emission
+        for _ in range(5):
+            session.sample_subscription()
+
+        # Pending list should be capped at max_batch_size=3
+        assert len(session._pending_samples) <= 3
+
+    def test_subscription_variable_filter(self):
+        """Only 'output' variables matching the filter are sampled."""
+        from app.engine import OutputSubscription, FmuSession
+
+        session = FmuSession.__new__(FmuSession)
+        session.session_id = "filter-test"
+        session.fmu_path = Path("dummy.fmu")
+        session._md = MagicMock()
+        session._slave = MagicMock()
+        session._time = 0.5
+        session._initialised = True
+        session._terminated = False
+        session._step_size = 0.01
+        session.seq = 0
+        session._pending_samples = []
+        session._pending_queue_drops = 0
+
+        out_y = MagicMock()
+        out_y.name = "y"
+        out_y.valueReference = 1
+        out_y.causality = "output"
+        out_y.type = "Real"
+
+        out_z = MagicMock()
+        out_z.name = "z"
+        out_z.valueReference = 2
+        out_z.causality = "output"
+        out_z.type = "Real"
+
+        param_x = MagicMock()
+        param_x.name = "x"
+        param_x.valueReference = 3
+        param_x.causality = "parameter"
+        param_x.type = "Real"
+
+        session._md.modelVariables = [out_y, out_z, param_x]
+        session._slave.getReal.return_value = [99.0]
+
+        # Subscribe to only "y"
+        session.subscription = OutputSubscription(
+            variables=["y"],
+            period_ms=1,
+            max_batch_size=64,
+        )
+        session.subscription.last_emit_monotonic = 0.0
+
+        result = session.sample_subscription()
+        assert result is not None
+        # getReal should have been called with [1] (y's ref), not [2] (z) or [3] (x)
+        session._slave.getReal.assert_called_with([1])
+
+
+# ---------------------------------------------------------------------------
+# FMU validation and quarantine
+# ---------------------------------------------------------------------------
+
+class TestFmuValidation:
+    def test_validate_missing_fmu(self, client, auth_headers):
+        resp = client.post("/internal/fmu/validate/nonexistent.fmu", headers=auth_headers)
+        body = resp.json()
+        assert body["valid"] is False
+        assert "not found" in body["reason"].lower()
+
+    def test_validate_valid_fmu(self, client, _isolate_config, auth_headers):
+        fmu_root = _isolate_config
+        fmu_file = fmu_root / "Good.fmu"
+        fmu_file.write_bytes(b"PK\x03\x04dummy")
+
+        md = MagicMock()
+        md.coSimulation = MagicMock()
+        md.guid = "{valid-guid}"
+
+        with patch("fmpy.read_model_description", return_value=md):
+            resp = client.post("/internal/fmu/validate/Good.fmu", headers=auth_headers)
+        body = resp.json()
+        assert body["valid"] is True
+        assert body["reason"] == ""
+
+    def test_validate_unparseable_auto_quarantine(self, client, _isolate_config, auth_headers):
+        """An unparseable FMU with auto_quarantine=true gets quarantined."""
+        fmu_root = _isolate_config
+        fmu_file = fmu_root / "Broken.fmu"
+        fmu_file.write_bytes(b"not-a-zip")
+
+        resp = client.post(
+            "/internal/fmu/validate/Broken.fmu?auto_quarantine=true",
+            headers=auth_headers,
+        )
+        body = resp.json()
+        assert body["valid"] is False
+        assert "Broken.fmu" == body["accessKey"]
+
+        # Should now be quarantined
+        from app import fmu_storage
+        assert fmu_storage.is_quarantined("Broken.fmu")
+
+    def test_validate_no_cosim_support(self, client, _isolate_config, auth_headers):
+        fmu_root = _isolate_config
+        fmu_file = fmu_root / "NoCS.fmu"
+        fmu_file.write_bytes(b"PK\x03\x04dummy")
+
+        md = MagicMock()
+        md.coSimulation = None
+        md.guid = "{noCS}"
+
+        with patch("fmpy.read_model_description", return_value=md):
+            resp = client.post("/internal/fmu/validate/NoCS.fmu", headers=auth_headers)
+        body = resp.json()
+        assert body["valid"] is False
+        assert "Co-Simulation" in body["reason"]
+
+
+class TestQuarantine:
+    def test_quarantine_and_list(self, client, _isolate_config, auth_headers):
+        fmu_root = _isolate_config
+        (fmu_root / "Bad.fmu").write_bytes(b"PK")
+
+        # Quarantine
+        resp = client.post(
+            "/internal/fmu/quarantine/Bad.fmu?reason=manual-test",
+            headers=auth_headers,
+        )
+        assert resp.json()["quarantined"] is True
+
+        # List should include it
+        resp = client.get("/internal/fmu/quarantine", headers=auth_headers)
+        items = resp.json()["quarantined"]
+        keys = [i["accessKey"] for i in items]
+        assert "Bad.fmu" in keys
+
+        # Catalog should exclude it
+        from app import fmu_storage
+        assert "Bad.fmu" not in fmu_storage.list_fmus()
+        assert not fmu_storage.fmu_exists("Bad.fmu")
+
+    def test_unquarantine_restores(self, client, _isolate_config, auth_headers):
+        fmu_root = _isolate_config
+        (fmu_root / "Restore.fmu").write_bytes(b"PK")
+
+        # Quarantine then restore
+        client.post("/internal/fmu/quarantine/Restore.fmu?reason=test", headers=auth_headers)
+
+        from app import fmu_storage
+        assert fmu_storage.is_quarantined("Restore.fmu")
+
+        resp = client.delete("/internal/fmu/quarantine/Restore.fmu", headers=auth_headers)
+        assert resp.json()["restored"] is True
+        assert not fmu_storage.is_quarantined("Restore.fmu")
+
+    def test_health_includes_quarantine_count(self, client, _isolate_config, auth_headers):
+        fmu_root = _isolate_config
+        (fmu_root / "Q1.fmu").write_bytes(b"PK")
+
+        # Before quarantine
+        resp = client.get("/internal/health")
+        assert resp.json()["quarantinedCount"] == 0
+
+        client.post("/internal/fmu/quarantine/Q1.fmu?reason=test", headers=auth_headers)
+        resp = client.get("/internal/health")
+        assert resp.json()["quarantinedCount"] >= 1

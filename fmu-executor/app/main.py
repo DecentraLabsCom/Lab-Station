@@ -64,6 +64,7 @@ async def health():
     return {
         "status": "ok",
         "fmuCount": fmu_count,
+        "quarantinedCount": len(fmu_storage.list_quarantined()),
         "activeSessions": engine.active_session_count(),
         "maxSessions": config.MAX_CONCURRENT_SESSIONS,
         "timestamp": time.time(),
@@ -91,6 +92,37 @@ async def describe(access_key: str):
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
     return fmu_storage.describe(access_key)
+
+
+# ── Validate / Quarantine ────────────────────────────────────────
+
+@app.post("/internal/fmu/validate/{access_key:path}", dependencies=[Depends(_check_token)])
+async def validate_fmu(access_key: str, auto_quarantine: bool = Query(False)):
+    """Validate an FMU and optionally quarantine it if broken."""
+    ok, reason = fmu_storage.validate_fmu(access_key)
+    if not ok and auto_quarantine:
+        fmu_storage.quarantine(access_key, reason)
+    return {"accessKey": access_key, "valid": ok, "reason": reason}
+
+
+@app.post("/internal/fmu/quarantine/{access_key:path}", dependencies=[Depends(_check_token)])
+async def quarantine_fmu(access_key: str, reason: str = Query("manual")):
+    """Quarantine an FMU explicitly."""
+    fmu_storage.quarantine(access_key, reason)
+    return {"accessKey": access_key, "quarantined": True, "reason": reason}
+
+
+@app.delete("/internal/fmu/quarantine/{access_key:path}", dependencies=[Depends(_check_token)])
+async def unquarantine_fmu(access_key: str):
+    """Restore a quarantined FMU."""
+    restored = fmu_storage.unquarantine(access_key)
+    return {"accessKey": access_key, "restored": restored}
+
+
+@app.get("/internal/fmu/quarantine", dependencies=[Depends(_check_token)])
+async def list_quarantined():
+    """List all quarantined FMUs."""
+    return {"quarantined": fmu_storage.list_quarantined()}
 
 
 # ── Simulation run ───────────────────────────────────────────────
