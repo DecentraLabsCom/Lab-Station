@@ -69,7 +69,7 @@ class TestHealth:
         resp = client.get("/internal/health")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "ok"
+        assert body["status"] == "UP"
         assert "fmuCount" in body
         assert "activeSessions" in body
 
@@ -194,7 +194,7 @@ class TestDescribeWithFmu:
         assert resp.status_code == 200
         body = resp.json()
         assert body["accessKey"] == "TestModel.fmu"
-        assert "TestModel.fmu" in body["files"]
+        assert any(f["filename"] == "TestModel.fmu" for f in body["fmus"])
         assert body["describe"]["modelName"] == "TestModel"
 
 
@@ -631,7 +631,7 @@ class TestSessionAttach:
                 # Terminate
                 ws.send_text(json.dumps({"type": "session.terminate", "requestId": "t"}))
                 resp = json.loads(ws.receive_text())
-                assert resp["type"] == "session.terminated"
+                assert resp["type"] == "session.closed"
                 assert resp["sessionId"] == sid
 
 

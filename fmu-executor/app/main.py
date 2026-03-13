@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import time
 from typing import Any
 
@@ -62,7 +63,7 @@ async def _check_token(request: Request) -> None:
 async def health():
     fmu_count = len(fmu_storage.list_fmus())
     return {
-        "status": "ok",
+        "status": "UP",
         "fmuCount": fmu_count,
         "quarantinedCount": len(fmu_storage.list_quarantined()),
         "activeSessions": engine.active_session_count(),
@@ -80,7 +81,7 @@ async def catalog(access_key: str):
     desc = fmu_storage.describe(access_key)
     return {
         "accessKey": access_key,
-        "files": [access_key],
+        "fmus": [{"filename": access_key, "path": access_key, "source": "station"}],
         "describe": desc,
     }
 
@@ -206,9 +207,9 @@ async def stream_simulation(access_key: str, body: SimulationBody):
 
 @app.websocket("/internal/fmu/sessions")
 async def ws_sessions(ws: WebSocket):
-    # Validate internal token from headers
-    token = ws.headers.get("x-internal-session-token")
-    if config.INTERNAL_TOKEN and token != config.INTERNAL_TOKEN:
+    # Validate internal token from headers (timing-safe comparison)
+    token = ws.headers.get("x-internal-session-token") or ""
+    if config.INTERNAL_TOKEN and not secrets.compare_digest(token, config.INTERNAL_TOKEN):
         await ws.close(code=4001, reason="UNAUTHORIZED")
         return
 
@@ -255,12 +256,15 @@ async def ws_sessions(ws: WebSocket):
                 await ws.send_text(json.dumps(response, default=str))
 
             except HTTPException as exc:
-                err = {"type": "error", "code": exc.detail}
+                detail = exc.detail or ""
+                # Extract short code from detail strings like "INVALID_COMMAND – ..."
+                code = detail.split(" \u2013 ")[0].split(" - ")[0].strip() if detail else "ERROR"
+                err = {"type": "error", "code": code, "message": detail, "retryable": False}
                 if request_id:
                     err["requestId"] = request_id
                 await ws.send_text(json.dumps(err))
             except Exception as exc:
-                err = {"type": "error", "code": "INTERNAL_ERROR", "message": str(exc)}
+                err = {"type": "error", "code": "INTERNAL_ERROR", "message": str(exc), "retryable": False}
                 if request_id:
                     err["requestId"] = request_id
                 await ws.send_text(json.dumps(err))
@@ -418,6 +422,6 @@ def _handle_ws_message(
 
     if msg_type == "session.terminate":
         session.terminate()
-        return {"type": "session.terminated", "sessionId": session.session_id}
+        return {"type": "session.closed", "sessionId": session.session_id}
 
     raise HTTPException(400, f"INVALID_COMMAND – unknown type {msg_type!r}")

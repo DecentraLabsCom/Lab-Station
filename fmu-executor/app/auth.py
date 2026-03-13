@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 
 from fastapi import HTTPException, Request
@@ -18,8 +19,8 @@ def validate_internal_token(request: Request) -> None:
     if not expected:
         # No token configured – allow (development mode).
         return
-    provided = request.headers.get("X-Internal-Session-Token")
-    if not provided or provided != expected:
+    provided = request.headers.get("X-Internal-Session-Token") or ""
+    if not secrets.compare_digest(provided, expected):
         logger.warning("Rejected request: invalid internal token")
         raise HTTPException(status_code=401, detail="UNAUTHORIZED")
 
