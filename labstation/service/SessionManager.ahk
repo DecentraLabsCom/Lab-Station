@@ -16,6 +16,7 @@ class LS_SessionManager {
         ok := true
         ok := this.RunSessionGuard(options) && ok
         ok := this.CloseControllerProcesses() && ok
+        ok := this.CleanFmuExecutorState() && ok
         user := options.Has("user") ? options["user"] : ""
         ok := this.ClearLabUserWorkingDirs(user) && ok
         ok := this.ResetControllerLogs() && ok
@@ -62,6 +63,7 @@ class LS_SessionManager {
         started := A_TickCount
         ok := true
         ok := this.CloseControllerProcesses() && ok
+        ok := this.CleanFmuExecutorState() && ok
         user := options.Has("user") ? options["user"] : ""
         ok := this.LogoffLabUser(user) && ok
         if (options.Has("reboot") && options["reboot"]) {
@@ -130,6 +132,18 @@ class LS_SessionManager {
             return true
         } catch as e {
             LS_LogWarning("Unable to reset controller log: " . e.Message)
+            return false
+        }
+    }
+
+    static CleanFmuExecutorState() {
+        try {
+            LS_FmuExecutor.TerminateAllSessions()
+            LS_FmuExecutor.CleanTempState()
+            LS_LogInfo("FMU executor state cleaned")
+            return true
+        } catch as e {
+            LS_LogWarning("Unable to clean FMU executor state: " . e.Message)
             return false
         }
     }

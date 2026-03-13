@@ -25,6 +25,7 @@ class LS_Status {
         rights := this.GetSecurityRights()
         data["policy"] := this.GetPolicyInformation(data["identity"], rights)
         data["sessions"] := this.GetSessionInformation(data["identity"])
+        data["fmuExecutor"] := this.GetFmuExecutorStatus()
         data["summary"] := this.BuildSummary(data)
         ops := LS_ServiceState.GetOperationsSummary()
         data["operations"] := ops
@@ -388,6 +389,10 @@ class LS_Status {
 
     static IsLocalModeEnabled() {
         return FileExist(LAB_STATION_LOCAL_MODE_FLAG) ? true : false
+    }
+
+    static GetFmuExecutorStatus() {
+        return LS_FmuExecutor.GetHealthSummary()
     }
 
     static BuildSummary(data) {

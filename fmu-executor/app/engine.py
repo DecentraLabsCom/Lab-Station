@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 import tempfile
+import time as _time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Optional
 
 import fmpy
 from fmpy import extract as fmpy_extract, read_model_description
@@ -16,6 +19,26 @@ from fmpy.fmi2 import FMU2Slave
 from . import config
 
 logger = logging.getLogger(__name__)
+
+
+# ── subscription model ───────────────────────────────────────────
+
+@dataclass
+class OutputSubscription:
+    """Tracks a sim.subscribeOutputs request."""
+    variables: Optional[list[str]] = None
+    period_ms: int = 100
+    max_batch_size: int = 64
+    max_hz: Optional[float] = None
+    last_emit_monotonic: float = 0.0
+    rate_dropped: int = 0
+
+    def min_interval_seconds(self) -> float:
+        period_interval = max(1, self.period_ms) / 1000.0
+        hz_interval = 0.0
+        if self.max_hz is not None and self.max_hz > 0:
+            hz_interval = 1.0 / self.max_hz
+        return max(period_interval, hz_interval)
 
 
 class FmuSession:
@@ -31,6 +54,11 @@ class FmuSession:
         self._step_size: float = 0.001
         self._initialised: bool = False
         self._terminated: bool = False
+        # Subscription state
+        self.subscription: OutputSubscription | None = None
+        self.seq: int = 0
+        self._pending_samples: list[dict[str, Any]] = []
+        self._pending_queue_drops: int = 0
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -128,6 +156,57 @@ class FmuSession:
     def get_outputs(self, refs: list[int] | None = None) -> dict[str, Any]:
         self._ensure_live()
         return {"time": self._time, "outputs": self._read_outputs(refs)}
+
+    def sample_subscription(self) -> dict[str, Any] | None:
+        """Collect a subscription sample.  Returns an output-event dict ready
+        to send, or ``None`` if the subscription rate-limit has not elapsed."""
+        if not self.subscription:
+            return None
+
+        # Resolve variable name filter → valueReference filter
+        var_refs: list[int] | None = None
+        if self.subscription.variables is not None and self._md:
+            name_set = set(self.subscription.variables)
+            var_refs = [
+                v.valueReference
+                for v in self._md.modelVariables
+                if v.name in name_set and v.causality == "output"
+            ]
+
+        sample = self._read_outputs(var_refs)
+        self._pending_samples.append(sample)
+
+        # Enforce max batch size
+        if len(self._pending_samples) > self.subscription.max_batch_size:
+            excess = len(self._pending_samples) - self.subscription.max_batch_size
+            self._pending_samples = self._pending_samples[excess:]
+            self.subscription.rate_dropped += excess
+
+        now = _time.monotonic()
+        min_interval = self.subscription.min_interval_seconds()
+        if (now - self.subscription.last_emit_monotonic) < min_interval:
+            self.subscription.rate_dropped += 1
+            return None
+
+        self.subscription.last_emit_monotonic = now
+        values = self._pending_samples[-1]
+        batch_size = len(self._pending_samples)
+        self._pending_samples.clear()
+        dropped = self.subscription.rate_dropped + self._pending_queue_drops
+        self.subscription.rate_dropped = 0
+        self._pending_queue_drops = 0
+
+        payload = {
+            "type": "sim.outputs",
+            "sessionId": self.session_id,
+            "seq": self.seq,
+            "dropped": dropped,
+            "batchSize": batch_size,
+            "simTime": self._time,
+            "values": values,
+        }
+        self.seq += 1
+        return payload
 
     def terminate(self) -> None:
         if self._terminated:

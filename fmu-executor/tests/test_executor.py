@@ -330,3 +330,164 @@ class TestFmuListing:
         from app import fmu_storage
         keys = fmu_storage.list_fmus()
         assert "my-model" in keys
+
+
+# ---------------------------------------------------------------------------
+# Engine - OutputSubscription
+# ---------------------------------------------------------------------------
+
+class TestOutputSubscription:
+    def test_subscription_default_values(self):
+        from app.engine import OutputSubscription
+        sub = OutputSubscription()
+        assert sub.period_ms == 100
+        assert sub.max_batch_size == 64
+        assert sub.max_hz is None
+        assert sub.min_interval_seconds() == 0.1
+
+    def test_subscription_with_max_hz(self):
+        from app.engine import OutputSubscription
+        sub = OutputSubscription(max_hz=10.0)
+        # period_ms=100 → 0.1s, max_hz=10 → 0.1s, max wins
+        assert sub.min_interval_seconds() == 0.1
+
+    def test_subscription_hz_dominates(self):
+        from app.engine import OutputSubscription
+        sub = OutputSubscription(period_ms=10, max_hz=2.0)
+        # period_ms=10 → 0.01s, max_hz=2 → 0.5s, 0.5 wins
+        assert sub.min_interval_seconds() == 0.5
+
+
+# ---------------------------------------------------------------------------
+# WebSocket – subscribe/unsubscribe
+# ---------------------------------------------------------------------------
+
+class TestWebSocketSubscription:
+    def test_subscribe_requires_session(self, client):
+        with client.websocket_connect(
+            "/internal/fmu/sessions",
+            headers={"X-Internal-Session-Token": "test-secret"},
+        ) as ws:
+            ws.send_text(json.dumps({
+                "type": "sim.subscribeOutputs",
+                "requestId": "req-sub",
+                "variables": ["x"],
+            }))
+            resp = json.loads(ws.receive_text())
+            assert resp["type"] == "error"
+            assert resp["requestId"] == "req-sub"
+
+    def test_unsubscribe_requires_session(self, client):
+        with client.websocket_connect(
+            "/internal/fmu/sessions",
+            headers={"X-Internal-Session-Token": "test-secret"},
+        ) as ws:
+            ws.send_text(json.dumps({
+                "type": "sim.unsubscribeOutputs",
+                "requestId": "req-unsub",
+            }))
+            resp = json.loads(ws.receive_text())
+            assert resp["type"] == "error"
+            assert resp["requestId"] == "req-unsub"
+
+    def test_subscribe_validates_variables_type(self, client, _isolate_config):
+        """variables must be a list or None, not a string."""
+        fmu_root = _isolate_config
+        dummy_fmu = fmu_root / "Test.fmu"
+        dummy_fmu.write_bytes(b"PK\x03\x04dummy")
+
+        md = MagicMock()
+        md.modelName = "Test"
+        md.guid = "{g}"
+        md.fmiVersion = "2.0"
+        md.coSimulation = MagicMock()
+        md.coSimulation.modelIdentifier = "Test"
+        md.modelExchange = None
+        md.defaultExperiment = MagicMock()
+        md.defaultExperiment.startTime = "0"
+        md.defaultExperiment.stopTime = "1"
+        md.defaultExperiment.stepSize = "0.1"
+        md.modelVariables = []
+
+        with patch("app.engine.read_model_description", return_value=md), \
+             patch("app.engine.fmpy_extract", return_value=str(fmu_root)), \
+             patch("fmpy.read_model_description", return_value=md):
+            with client.websocket_connect(
+                "/internal/fmu/sessions",
+                headers={"X-Internal-Session-Token": "test-secret"},
+            ) as ws:
+                ws.send_text(json.dumps({
+                    "type": "session.create",
+                    "requestId": "req-create",
+                    "gatewayContext": {
+                        "mode": "station",
+                        "accessKey": "Test.fmu",
+                        "claims": {},
+                    },
+                }))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "session.created"
+
+                # Send subscribe with invalid variables (string instead of list)
+                ws.send_text(json.dumps({
+                    "type": "sim.subscribeOutputs",
+                    "requestId": "req-bad-sub",
+                    "variables": "not-a-list",
+                }))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "error"
+                assert resp["requestId"] == "req-bad-sub"
+
+
+# ---------------------------------------------------------------------------
+# Auth - gateway context validation
+# ---------------------------------------------------------------------------
+
+class TestGatewayContextValidation:
+    def test_expired_claims_rejected(self):
+        import time
+        from fastapi import HTTPException
+        from app.auth import validate_gateway_context
+        ctx = {
+            "accessKey": "test.fmu",
+            "claims": {"exp": time.time() - 100},
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            validate_gateway_context(ctx, "test.fmu")
+        assert "RESERVATION_NOT_ACTIVE" in exc_info.value.detail
+
+    def test_nbf_in_future_rejected(self):
+        import time
+        from fastapi import HTTPException
+        from app.auth import validate_gateway_context
+        ctx = {
+            "accessKey": "test.fmu",
+            "claims": {"nbf": time.time() + 3600},
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            validate_gateway_context(ctx, "test.fmu")
+        assert "RESERVATION_NOT_ACTIVE" in exc_info.value.detail
+
+    def test_access_key_mismatch_rejected(self):
+        from fastapi import HTTPException
+        from app.auth import validate_gateway_context
+        ctx = {
+            "accessKey": "other.fmu",
+            "claims": {},
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            validate_gateway_context(ctx, "test.fmu")
+        assert exc_info.value.status_code == 403
+
+    def test_valid_context_passes(self):
+        import time
+        from app.auth import validate_gateway_context
+        ctx = {
+            "accessKey": "test.fmu",
+            "claims": {
+                "exp": time.time() + 3600,
+                "nbf": time.time() - 60,
+            },
+        }
+        # Should not raise
+        validate_gateway_context(ctx, "test.fmu")

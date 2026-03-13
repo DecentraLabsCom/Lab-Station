@@ -6,6 +6,7 @@ consumed by Lab Gateway's fmu-runner in ``station`` backend mode.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -181,6 +182,21 @@ async def ws_sessions(ws: WebSocket):
 
     await ws.accept()
     session: engine.FmuSession | None = None
+    _emitter_task: asyncio.Task | None = None
+
+    async def _output_emitter():
+        """Background task that streams subscribed outputs to the WS client."""
+        try:
+            while True:
+                if session and session.subscription and session._initialised and not session._terminated:
+                    payload = session.sample_subscription()
+                    if payload:
+                        await ws.send_text(json.dumps(payload, default=str))
+                await asyncio.sleep(0.01)  # 10 ms polling resolution
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            pass
+        except Exception:
+            logger.debug("Output emitter stopped", exc_info=True)
 
     try:
         while True:
@@ -194,6 +210,9 @@ async def ws_sessions(ws: WebSocket):
                 response = _handle_ws_message(msg_type, msg, gateway_ctx, session)
                 if msg_type == "session.create":
                     session = response.pop("_session", None)
+                    # Start emitter task on session creation
+                    if _emitter_task is None:
+                        _emitter_task = asyncio.create_task(_output_emitter())
                 elif msg_type == "session.terminate":
                     if session:
                         engine.remove_session(session.session_id)
@@ -217,6 +236,12 @@ async def ws_sessions(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
+        if _emitter_task:
+            _emitter_task.cancel()
+            try:
+                await _emitter_task
+            except asyncio.CancelledError:
+                pass
         if session:
             engine.remove_session(session.session_id)
 
@@ -319,6 +344,33 @@ def _handle_ws_message(
         refs = msg.get("valueReferences")
         result = session.get_outputs(refs)
         return {"type": "sim.outputs", **result}
+
+    if msg_type == "sim.subscribeOutputs":
+        variables = msg.get("variables")
+        if variables is not None and not isinstance(variables, list):
+            raise HTTPException(400, "sim.subscribeOutputs requires 'variables' as array")
+        subscription = engine.OutputSubscription(
+            variables=variables,
+            period_ms=max(1, int(msg.get("periodMs", 100))),
+            max_batch_size=max(1, int(msg.get("maxBatchSize", 64))),
+            max_hz=float(msg["maxHz"]) if msg.get("maxHz") is not None else None,
+        )
+        session.subscription = subscription
+        return {
+            "type": "sim.subscribed",
+            "sessionId": session.session_id,
+            "periodMs": subscription.period_ms,
+            "maxBatchSize": subscription.max_batch_size,
+            "maxHz": subscription.max_hz,
+        }
+
+    if msg_type == "sim.unsubscribeOutputs":
+        session.subscription = None
+        session._pending_samples.clear()
+        return {
+            "type": "sim.unsubscribed",
+            "sessionId": session.session_id,
+        }
 
     if msg_type == "sim.getState":
         return {
