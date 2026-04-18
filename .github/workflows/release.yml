@@ -13,6 +13,10 @@ on:
 permissions:
   contents: write
 
+env:
+  AHK_VERSION: "2.0.23"
+  AHK2EXE_VERSION: "Ahk2Exe1.1.37.02a2"
+
 jobs:
   build-and-release:
     runs-on: windows-latest
@@ -51,30 +55,22 @@ jobs:
         run: |
           $headers = @{ 'User-Agent' = 'Lab-App-Control-Release' }
           
-          # Download AutoHotkey v2 portable
-          $ahkRelease = Invoke-RestMethod -Uri 'https://api.github.com/repos/AutoHotkey/AutoHotkey/releases/latest' -Headers $headers
-          $ahkAsset = $ahkRelease.assets | Where-Object { $_.name -like 'AutoHotkey_*.zip' } | Select-Object -First 1
-          if (-not $ahkAsset) {
-            throw 'Could not locate AutoHotkey portable zip'
-          }
-          
+          # Download AutoHotkey v2 portable (pinned version)
+          $ahkVersion = $Env:AHK_VERSION
+          $ahkUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$ahkVersion/AutoHotkey_${ahkVersion}.zip"
           $ahkZip = 'AutoHotkey.zip'
           $ahkDir = 'AutoHotkey'
-          Write-Host "Downloading AutoHotkey from $($ahkAsset.browser_download_url)"
-          Invoke-WebRequest -Uri $ahkAsset.browser_download_url -OutFile $ahkZip -Headers $headers
+          Write-Host "Downloading AutoHotkey v$ahkVersion from $ahkUrl"
+          Invoke-WebRequest -Uri $ahkUrl -OutFile $ahkZip -Headers $headers
           Expand-Archive -Path $ahkZip -DestinationPath $ahkDir -Force
           
-          # Download Ahk2Exe
-          $compilerRelease = Invoke-RestMethod -Uri 'https://api.github.com/repos/AutoHotkey/Ahk2Exe/releases/latest' -Headers $headers
-          $compilerAsset = $compilerRelease.assets | Where-Object { $_.name -like 'Ahk2Exe*.zip' } | Select-Object -First 1
-          if (-not $compilerAsset) {
-            throw 'Could not locate Ahk2Exe zip'
-          }
-          
+          # Download Ahk2Exe (pinned version)
+          $ahk2ExeVersion = $Env:AHK2EXE_VERSION
+          $compilerUrl = "https://github.com/AutoHotkey/Ahk2Exe/releases/download/$ahk2ExeVersion/${ahk2ExeVersion}.zip"
           $compilerZip = 'Ahk2Exe.zip'
           $compilerDir = 'Ahk2Exe'
-          Write-Host "Downloading Ahk2Exe from $($compilerAsset.browser_download_url)"
-          Invoke-WebRequest -Uri $compilerAsset.browser_download_url -OutFile $compilerZip -Headers $headers
+          Write-Host "Downloading Ahk2Exe $ahk2ExeVersion from $compilerUrl"
+          Invoke-WebRequest -Uri $compilerUrl -OutFile $compilerZip -Headers $headers
           Expand-Archive -Path $compilerZip -DestinationPath $compilerDir -Force
           
           # Locate compiler and base
