@@ -45,7 +45,7 @@ jobs:
           "tag=$tag" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ steps.release_meta.outputs.ref }}
 
