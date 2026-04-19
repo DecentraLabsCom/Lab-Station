@@ -1,0 +1,110 @@
+name: Check AutoHotkey Updates
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-updates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for new AutoHotkey / Ahk2Exe releases
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Read currently pinned versions from release.yml
+          PINNED_AHK=$(grep 'AHK_VERSION:' .github/workflows/release.yml | head -1 | grep -oP '"\K[^"]+')
+          PINNED_AHK2EXE=$(grep 'AHK2EXE_VERSION:' .github/workflows/release.yml | head -1 | grep -oP '"\K[^"]+')
+
+          echo "Pinned AHK:       $PINNED_AHK"
+          echo "Pinned Ahk2Exe:   $PINNED_AHK2EXE"
+
+          # Fetch latest releases
+          LATEST_AHK=$(gh api repos/AutoHotkey/AutoHotkey/releases/latest --jq '.tag_name' | sed 's/^v//')
+          LATEST_AHK2EXE=$(gh api repos/AutoHotkey/Ahk2Exe/releases/latest --jq '.tag_name')
+
+          echo "Latest AHK:       $LATEST_AHK"
+          echo "Latest Ahk2Exe:   $LATEST_AHK2EXE"
+
+          # Determine if updates are needed
+          UPDATES_NEEDED=false
+
+          if [ "$PINNED_AHK" != "$LATEST_AHK" ]; then
+            echo "AHK update available: $PINNED_AHK → $LATEST_AHK"
+            UPDATES_NEEDED=true
+          fi
+
+          if [ "$PINNED_AHK2EXE" != "$LATEST_AHK2EXE" ]; then
+            echo "Ahk2Exe update available: $PINNED_AHK2EXE → $LATEST_AHK2EXE"
+            UPDATES_NEEDED=true
+          fi
+
+          echo "updates_needed=$UPDATES_NEEDED" >> "$GITHUB_OUTPUT"
+          echo "pinned_ahk=$PINNED_AHK" >> "$GITHUB_OUTPUT"
+          echo "pinned_ahk2exe=$PINNED_AHK2EXE" >> "$GITHUB_OUTPUT"
+          echo "latest_ahk=$LATEST_AHK" >> "$GITHUB_OUTPUT"
+          echo "latest_ahk2exe=$LATEST_AHK2EXE" >> "$GITHUB_OUTPUT"
+
+      - name: Apply version bumps
+        if: steps.check.outputs.updates_needed == 'true'
+        run: |
+          PINNED_AHK="${{ steps.check.outputs.pinned_ahk }}"
+          LATEST_AHK="${{ steps.check.outputs.latest_ahk }}"
+          PINNED_AHK2EXE="${{ steps.check.outputs.pinned_ahk2exe }}"
+          LATEST_AHK2EXE="${{ steps.check.outputs.latest_ahk2exe }}"
+
+          if [ "$PINNED_AHK" != "$LATEST_AHK" ]; then
+            sed -i "s/AHK_VERSION: \"$PINNED_AHK\"/AHK_VERSION: \"$LATEST_AHK\"/g" \
+              .github/workflows/release.yml \
+              .github/workflows/tests.yml
+          fi
+
+          if [ "$PINNED_AHK2EXE" != "$LATEST_AHK2EXE" ]; then
+            sed -i "s/AHK2EXE_VERSION: \"$PINNED_AHK2EXE\"/AHK2EXE_VERSION: \"$LATEST_AHK2EXE\"/g" \
+              .github/workflows/release.yml
+          fi
+
+      - name: Build PR body
+        if: steps.check.outputs.updates_needed == 'true'
+        id: pr_body
+        run: |
+          PINNED_AHK="${{ steps.check.outputs.pinned_ahk }}"
+          LATEST_AHK="${{ steps.check.outputs.latest_ahk }}"
+          PINNED_AHK2EXE="${{ steps.check.outputs.pinned_ahk2exe }}"
+          LATEST_AHK2EXE="${{ steps.check.outputs.latest_ahk2exe }}"
+
+          BODY="Automated weekly check found new AutoHotkey toolchain versions."$'\n\n'
+
+          if [ "$PINNED_AHK" != "$LATEST_AHK" ]; then
+            BODY+="- **AutoHotkey**: \`$PINNED_AHK\` → \`$LATEST_AHK\` ([release notes](https://github.com/AutoHotkey/AutoHotkey/releases/tag/v$LATEST_AHK))"$'\n'
+          fi
+
+          if [ "$PINNED_AHK2EXE" != "$LATEST_AHK2EXE" ]; then
+            BODY+="- **Ahk2Exe**: \`$PINNED_AHK2EXE\` → \`$LATEST_AHK2EXE\` ([release notes](https://github.com/AutoHotkey/Ahk2Exe/releases/tag/$LATEST_AHK2EXE))"$'\n'
+          fi
+
+          BODY+=$'\n'"Please review the release notes before merging."
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        if: steps.check.outputs.updates_needed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ github.token }}
+          branch: "ci/ahk-update-${{ steps.check.outputs.latest_ahk }}"
+          commit-message: "ci: bump AutoHotkey toolchain versions"
+          title: "ci: bump AutoHotkey toolchain to v${{ steps.check.outputs.latest_ahk }}"
+          body: ${{ steps.pr_body.outputs.body }}
+          labels: dependencies
+          delete-branch: true
