@@ -1,10 +1,10 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 
-; Argument parsing regression tests for dLabAppControl
+; Argument parsing regression tests for AppControl
 
 global ROOT_DIR := A_ScriptDir "\.."
-global DLAB_APP := ROOT_DIR "\dLabAppControl.ahk"
+global DLAB_APP := ROOT_DIR "\AppControl.ahk"
 global AHK_EXE := A_AhkPath
 global OUTPUT_DIR := A_ScriptDir "\argdump"
 global TEST_FAILURES := 0

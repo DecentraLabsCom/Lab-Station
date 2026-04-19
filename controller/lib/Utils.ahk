@@ -15,12 +15,12 @@ Log(msg, level := "INFO") {
         return
     }
     
-    logFile := A_ScriptDir "\dLabAppControl.log"
+    logFile := A_ScriptDir "\AppControl.log"
     timestamp := FormatTime(A_Now, "yyyyMMddHHmmss")
     prefix := (level != "INFO") ? "[" . level . "] " : ""
     logEntry := timestamp . " - " . prefix . msg . "`n"
     FileAppend(logEntry, logFile, "UTF-8")
-    OutputDebug(timestamp . " - dLabAppControl: " . prefix . msg)
+    OutputDebug(timestamp . " - AppControl: " . prefix . msg)
 }
 
 WaitUntil(conditionCallback, timeoutMs := 0, intervalMs := 0) {

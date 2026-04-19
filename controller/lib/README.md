@@ -1,17 +1,18 @@
-# dLabAppControl - Modular Structure
+# AppControl - Modular Structure
 
 ## 📁 File Organization
 
 ```
 Lab App Control/
-├── dLabAppControl.ahk             # Main entry point (~140 lines)
-└── lib/                           # Library modules
-    ├── Config.ahk                 # Configuration and constants
-    ├── Utils.ahk                  # Utility functions
-    ├── WindowClosing.ahk          # Window closing logic
-    ├── RdpMonitoring.ahk          # RDP event monitoring
-    ├── SingleAppMode.ahk          # Single app mode implementation
-    └── DualAppMode.ahk            # Dual app container mode implementation
+└── controller/
+    ├── AppControl.ahk         # Main entry point (~140 lines)
+    └── lib/                       # Library modules
+        ├── Config.ahk             # Configuration and constants
+        ├── Utils.ahk              # Utility functions
+        ├── WindowClosing.ahk      # Window closing logic
+        ├── RdpMonitoring.ahk      # RDP event monitoring
+        ├── SingleAppMode.ahk      # Single app mode implementation
+        └── DualAppMode.ahk        # Dual app container mode implementation
 ```
 
 ## 📦 Module Descriptions
@@ -67,16 +68,16 @@ Lab App Control/
 
 ```powershell
 # Single app mode
-dLabAppControl.ahk "Notepad" "notepad.exe"
+AppControl.ahk "Notepad" "notepad.exe"
 
 # Single app mode with custom close
-dLabAppControl.ahk "LVWindow" "myVI.exe" --close-coords="330,484"
+AppControl.ahk "LVWindow" "myVI.exe" --close-coords="330,484"
 
 # Dual app mode
-dLabAppControl.ahk --dual "Class1" "App1.exe" "Class2" "App2.exe"
+AppControl.ahk --dual "Class1" "App1.exe" "Class2" "App2.exe"
 
 # Dual app mode with custom tabs
-dLabAppControl.ahk --dual "Class1" "App1.exe" "Class2" "App2.exe" --tab1="Camera" --tab2="Viewer"
+AppControl.ahk --dual "Class1" "App1.exe" "Class2" "App2.exe" --tab1="Camera" --tab2="Viewer"
 ```
 
 ## 📝 Development Notes

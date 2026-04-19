@@ -1,7 +1,7 @@
 ; ============================================================================
 ; Config.ahk - Configuration and Constants
 ; ============================================================================
-; Centralized configuration for dLabAppControl
+; Centralized configuration for AppControl
 ; ============================================================================
 
 ; Configuration constants

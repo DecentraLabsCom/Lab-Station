@@ -1,5 +1,16 @@
-dLabAppControl.exe
-dLabAppControl.log
+AppControl.exe
+AppControl.log
 
+LabStationPanel.exe
+LabStation.exe
+LabStation.log
+
+build.ps1
+
+controller/AppControl.exe
+controller/tests/argdump/
+labstation/data
+
+/data
+/dev
 /UIA-v2-1.1.1
-tests/argdump/

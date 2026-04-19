@@ -49,7 +49,7 @@ BuildFakeAppCommand(path, className, title, color, message, lifetimeSec := 0) {
 
 ResetSmokeLog() {
     global SMOKE_LOG
-    SMOKE_LOG := A_ScriptDir "\dLabAppControl.log"
+    SMOKE_LOG := A_ScriptDir "\AppControl.log"
     try FileDelete(SMOKE_LOG)
 }
 

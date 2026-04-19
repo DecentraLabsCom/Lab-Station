@@ -53,7 +53,9 @@ jobs:
         id: setup-tools
         shell: powershell
         run: |
-          $headers = @{ 'User-Agent' = 'Lab-App-Control-Release' }
+          $headers = @{
+            'User-Agent' = 'Lab-App-Control-Release'
+          }
           
           # Download AutoHotkey v2 portable (pinned version)
           $ahkVersion = $Env:AHK_VERSION
@@ -94,8 +96,12 @@ jobs:
           Write-Host "Base: $base"
           "compiler=$compiler" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
           "autohotkey_base=$base" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
+          
+          # List compiler directory contents for debugging
+          Write-Host "Compiler directory contents:"
+          Get-ChildItem -Path (Split-Path -Parent $compiler) | Format-Table Name, Length
 
-      - name: Compile dLabAppControl
+      - name: Compile AppControl
         shell: powershell
         run: |
           $compiler = "${{ steps.setup-tools.outputs.compiler }}"
@@ -106,21 +112,73 @@ jobs:
           if (-not $base -or -not (Test-Path $base)) {
             throw "AutoHotkey base path missing: $base"
           }
-          $scriptPath = (Resolve-Path 'dLabAppControl.ahk').Path
+          $compilerDir = Split-Path -Parent $compiler
+          Copy-Item -Path (Join-Path (Split-Path -Parent $base) 'AutoHotkey32.exe') -Destination (Join-Path $compilerDir 'Unicode 32-bit.bin') -Force
+          Copy-Item -Path $base -Destination (Join-Path $compilerDir 'Unicode 64-bit.bin') -Force
+          $binPath = Join-Path $compilerDir 'Unicode 64-bit.bin'
+
+          $scriptPath = (Resolve-Path 'controller/AppControl.ahk').Path
           $outDir = Join-Path $PWD 'dist'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          $outFile = Join-Path $outDir 'dLabAppControl.exe'
+          $outFile = Join-Path $outDir 'AppControl.exe'
+          $iconPath = (Resolve-Path 'img/favicon.ico').Path
           Write-Host "Compiler: $compiler"
           Write-Host "Base: $base"
+          Write-Host "Bin: $binPath"
+          Write-Host "Icon: $iconPath"
           Write-Host "Script: $scriptPath"
           Write-Host "Output: $outFile"
           
-          $arguments = @('/in', $scriptPath, '/out', $outFile, '/base', $base)
-          $output = & $compiler @arguments 2>&1
+          # Verify script exists and is readable
+          if (-not (Test-Path $scriptPath)) {
+            throw "Script not found: $scriptPath"
+          }
+          Write-Host "Script verified, size: $((Get-Item $scriptPath).Length) bytes"
+          
+          # Verify include files exist for LabStation
+          if ($scriptPath -like "*LabStation.ahk") {
+            Write-Host "Checking LabStation includes..."
+            $scriptDir = Split-Path -Parent $scriptPath
+            $includes = @(
+              "core\Config.ahk", "core\Logger.ahk", "core\Admin.ahk", "core\Shell.ahk", "core\Json.ahk",
+              "system\RegistryManager.ahk", "system\WakeOnLan.ahk", "system\Autostart.ahk",
+              "system\AccountManager.ahk", "system\EnergyAudit.ahk", "system\PowerManager.ahk",
+              "system\ServiceManager.ahk", "service\SessionManager.ahk", "service\SessionGuard.ahk",
+              "service\Telemetry.ahk", "service\Recovery.ahk", "diagnostics\Status.ahk",
+              "service\CommandQueue.ahk", "setup\Wizard.ahk", "ui\Tray.ahk"
+            )
+            foreach ($inc in $includes) {
+              $incPath = Join-Path $scriptDir $inc
+              if (-not (Test-Path $incPath)) {
+                throw "Missing include file: $incPath"
+              }
+            }
+            Write-Host "All include files verified"
+          }
+          
+          # Change to script directory for compilation (required for relative includes)
+          $scriptDir = Split-Path -Parent $scriptPath
+          $scriptName = Split-Path -Leaf $scriptPath
+          Push-Location $scriptDir
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Files in current directory:"
+          Get-ChildItem | Select-Object -First 10 | Format-Table Name
+          
+          # Use absolute paths for compilation
+          $absScript = Join-Path $scriptDir $scriptName
+          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath)
+          Write-Host "Running from: $scriptDir"
+          Write-Host "Running: $compiler $($arguments -join ' ')"
+          
+          # Simple invocation without stream redirection to avoid hanging
+          $output = & $compiler @arguments 2>&1 | Out-String
           $exitCode = $LASTEXITCODE
+          
+          Pop-Location
           
           Write-Host "Compiler output:"
           Write-Host $output
+          Write-Host "Exit code: $exitCode"
           
           if ($null -eq $exitCode) {
             $exitCode = 0
@@ -142,16 +200,212 @@ jobs:
           $fileInfo = Get-Item $outFile
           Write-Host "Size: $($fileInfo.Length) bytes"
 
-      - name: Upload artifact
+      - name: Compile LabStation
+        shell: powershell
+        run: |
+          $compiler = "${{ steps.setup-tools.outputs.compiler }}"
+          if (-not $compiler -or -not (Test-Path $compiler)) {
+            throw "Ahk2Exe compiler path missing: $compiler"
+          }
+          $base = "${{ steps.setup-tools.outputs.autohotkey_base }}"
+          if (-not $base -or -not (Test-Path $base)) {
+            throw "AutoHotkey base path missing: $base"
+          }
+          $compilerDir = Split-Path -Parent $compiler
+          Copy-Item -Path (Join-Path (Split-Path -Parent $base) 'AutoHotkey32.exe') -Destination (Join-Path $compilerDir 'Unicode 32-bit.bin') -Force
+          Copy-Item -Path $base -Destination (Join-Path $compilerDir 'Unicode 64-bit.bin') -Force
+          $binPath = Join-Path $compilerDir 'Unicode 64-bit.bin'
+
+          $scriptPath = (Resolve-Path 'labstation/LabStation.ahk').Path
+          $outDir = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $outFile = Join-Path $outDir 'LabStation.exe'
+          $iconPath = (Resolve-Path 'img/favicon.ico').Path
+          Write-Host "Compiler: $compiler"
+          Write-Host "Base: $base"
+          Write-Host "Bin: $binPath"
+          Write-Host "Icon: $iconPath"
+          Write-Host "Script: $scriptPath"
+          Write-Host "Output: $outFile"
+
+          # Verify script exists and is readable
+          if (-not (Test-Path $scriptPath)) {
+            throw "Script not found: $scriptPath"
+          }
+          Write-Host "Script verified, size: $((Get-Item $scriptPath).Length) bytes"
+
+          # Change to script directory for compilation (required for relative includes)
+          $scriptDir = Split-Path -Parent $scriptPath
+          $scriptName = Split-Path -Leaf $scriptPath
+          Push-Location $scriptDir
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Files in current directory:"
+          Get-ChildItem | Select-Object -First 10 | Format-Table Name
+          
+          # Use absolute paths for compilation
+          $absScript = Join-Path $scriptDir $scriptName
+          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath)
+          Write-Host "Running from: $scriptDir"
+          Write-Host "Running: $compiler $($arguments -join ' ')"
+          
+          # Simple invocation without stream redirection to avoid hanging
+          $output = & $compiler @arguments 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          
+          Pop-Location
+          
+          Write-Host "Compiler output:"
+          Write-Host $output
+          Write-Host "Exit code: $exitCode"
+
+          if ($null -eq $exitCode) {
+            $exitCode = 0
+          }
+          if ($exitCode -ne 0) {
+            throw "Ahk2Exe exited with code $exitCode"
+          }
+
+          Start-Sleep -Seconds 2
+
+          if (-not (Test-Path $outFile)) {
+            Write-Host "Listing dist directory:"
+            Get-ChildItem $outDir -Recurse
+            throw "Expected output missing: $outFile"
+          }
+
+          Write-Host "Successfully created: $outFile"
+          $fileInfo = Get-Item $outFile
+          Write-Host "Size: $($fileInfo.Length) bytes"
+
+      - name: Compile LabStation Panel
+        shell: powershell
+        run: |
+          $compiler = "${{ steps.setup-tools.outputs.compiler }}"
+          if (-not $compiler -or -not (Test-Path $compiler)) {
+            throw "Ahk2Exe compiler path missing: $compiler"
+          }
+          $base = "${{ steps.setup-tools.outputs.autohotkey_base }}"
+          if (-not $base -or -not (Test-Path $base)) {
+            throw "AutoHotkey base path missing: $base"
+          }
+          $compilerDir = Split-Path -Parent $compiler
+          Copy-Item -Path (Join-Path (Split-Path -Parent $base) 'AutoHotkey32.exe') -Destination (Join-Path $compilerDir 'Unicode 32-bit.bin') -Force
+          Copy-Item -Path $base -Destination (Join-Path $compilerDir 'Unicode 64-bit.bin') -Force
+          $binPath = Join-Path $compilerDir 'Unicode 64-bit.bin'
+
+          $scriptPath = (Resolve-Path 'LabStationPanel.ahk').Path
+          $outDir = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $outFile = Join-Path $outDir 'LabStationPanel.exe'
+          $iconPath = (Resolve-Path 'img/favicon.ico').Path
+          Write-Host "Compiler: $compiler"
+          Write-Host "Base: $base"
+          Write-Host "Bin: $binPath"
+          Write-Host "Icon: $iconPath"
+          Write-Host "Script: $scriptPath"
+          Write-Host "Output: $outFile"
+          
+          # Verify script exists and is readable
+          if (-not (Test-Path $scriptPath)) {
+            throw "Script not found: $scriptPath"
+          }
+          Write-Host "Script verified, size: $((Get-Item $scriptPath).Length) bytes"
+          
+          # Use absolute paths for compilation
+          $arguments = @('/in', $scriptPath, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath)
+          Write-Host "Running: $compiler $($arguments -join ' ')"
+          
+          # Simple invocation without stream redirection to avoid hanging
+          $output = & $compiler @arguments 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          
+          Write-Host "Compiler output:"
+          Write-Host $output
+          Write-Host "Exit code: $exitCode"
+
+          if ($null -eq $exitCode) {
+            $exitCode = 0
+          }
+          if ($exitCode -ne 0) {
+            throw "Ahk2Exe exited with code $exitCode"
+          }
+
+          Start-Sleep -Seconds 2
+
+          if (-not (Test-Path $outFile)) {
+            Write-Host "Listing dist directory:"
+            Get-ChildItem $outDir -Recurse
+            throw "Expected output missing: $outFile"
+          }
+
+          Write-Host "Successfully created: $outFile"
+          $fileInfo = Get-Item $outFile
+          Write-Host "Size: $($fileInfo.Length) bytes"
+
+      - name: Stage WindowSpy helper
+        shell: powershell
+        run: |
+          $source = Join-Path $PWD 'WindowSpy.exe'
+          if (-not (Test-Path $source)) {
+            throw "WindowSpy.exe not found at $source"
+          }
+          $destDir = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          $destFile = Join-Path $destDir 'WindowSpy.exe'
+          Copy-Item -Path $source -Destination $destFile -Force
+
+      - name: Stage assets (logo)
+        shell: powershell
+        run: |
+          $destDir = Join-Path $PWD 'dist'
+          $logoDir = Join-Path $destDir 'img'
+          New-Item -ItemType Directory -Force -Path $logoDir | Out-Null
+          $logo = Join-Path $PWD 'img/DecentraLabs.png'
+          if (Test-Path $logo) {
+            Copy-Item -Path $logo -Destination (Join-Path $logoDir 'DecentraLabs.png') -Force
+          } else {
+            Write-Host "Logo not found at $logo; continuing without it."
+          }
+
+      - name: Upload AppControl artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dLabAppControl
-          path: dist/dLabAppControl.exe
+          name: AppControl
+          path: dist/AppControl.exe
+
+      - name: Upload LabStation executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabStation-exe
+          path: dist/LabStation.exe
+
+      - name: Upload LabStation Panel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabStationPanel
+          path: dist/LabStationPanel.exe
+
+      - name: Upload assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: LabStation-assets
+          path: dist/img/DecentraLabs.png
+
+      - name: Upload WindowSpy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowSpy
+          path: dist/WindowSpy.exe
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/dLabAppControl.exe
+          files: |
+            dist/AppControl.exe
+            dist/LabStation.exe
+            dist/LabStationPanel.exe
+            dist/WindowSpy.exe
+            dist/img/DecentraLabs.png
           tag_name: ${{ steps.release_meta.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
