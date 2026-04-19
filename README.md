@@ -4,9 +4,9 @@ description: Windows Lab Station assistant (RemoteApp, WOL, diagnostics) with bu
 
 # Lab Station
 
-[![Tests](https://github.com/DecentraLabsCom/Lab-App-Control/actions/workflows/tests.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-App-Control/actions/workflows/tests.yml)
-[![Security Scan](https://github.com/DecentraLabsCom/Lab-App-Control/actions/workflows/codeql.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-App-Control/actions/workflows/codeql.yml)
-[![Release](https://github.com/DecentraLabsCom/Lab-App-Control/actions/workflows/release.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-App-Control/actions/workflows/release.yml)
+[![Tests](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/tests.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/tests.yml)
+[![Security Scan](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/codeql.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/codeql.yml)
+[![Release](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/release.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/release.yml)
 
 The project is split into two first-class components:
 
@@ -466,7 +466,7 @@ Chrome_WidgetWin_1 "C:\Program Files\Google\Chrome\Application\chrome.exe" --app
 Lab Station is now the primary artifact and the legacy controller lives inside `controller/`:
 
 ```
-Lab App Control/
+Lab Station/
 ├── labstation/                     # Lab Station CLI, services, diagnostics
 ├── controller/
 │   ├── AppControl.ahk          # Controller entry point

@@ -1,6 +1,6 @@
 # Table of contents
 
-* [Lab App Control](README.md)
+* [Lab Station](README.md)
 
 ## REMOTE APP
 

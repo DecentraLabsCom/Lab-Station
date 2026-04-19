@@ -54,7 +54,7 @@ jobs:
         shell: powershell
         run: |
           $headers = @{
-            'User-Agent' = 'Lab-App-Control-Release'
+            'User-Agent' = 'Lab-Station-Release'
           }
           
           # Download AutoHotkey v2 portable (pinned version)
