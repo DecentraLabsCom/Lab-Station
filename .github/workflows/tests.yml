@@ -11,33 +11,33 @@ permissions:
 jobs:
   smoke-tests:
     runs-on: windows-latest
+    env:
+      AHK_VERSION: "2.0.23"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install AutoHotkey
+        id: install-ahk
         shell: powershell
-        run: choco install autohotkey.portable --no-progress --yes
+        run: |
+          $headers = @{ 'User-Agent' = 'Lab-App-Control-CI' }
+          $ahkUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$Env:AHK_VERSION/AutoHotkey_$($Env:AHK_VERSION).zip"
+          Write-Host "Downloading AutoHotkey v$Env:AHK_VERSION from $ahkUrl"
+          Invoke-WebRequest -Uri $ahkUrl -OutFile 'AutoHotkey.zip' -Headers $headers
+          Expand-Archive -Path 'AutoHotkey.zip' -DestinationPath 'AutoHotkey' -Force
+          $ahkExe = (Resolve-Path 'AutoHotkey/AutoHotkey64.exe').Path
+          "AHK_EXE=$ahkExe" | Out-File -FilePath $Env:GITHUB_ENV -Append
 
       - name: Run DualAppMode smoke test
         shell: powershell
         run: |
-          $libPath = Join-Path $Env:ChocolateyInstall 'lib'
-          $ahk = Get-ChildItem -Path $libPath -Recurse -Filter AutoHotkey*.exe -File -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $ahk) {
-            throw "AutoHotkey executable not found after installation"
-          }
-          & $ahk.FullName controller\tests\SmokeTest_DualAppMode.ahk
+          & $Env:AHK_EXE tests\SmokeTest_DualAppMode.ahk
 
       - name: Run argument parsing matrix
         shell: powershell
         run: |
-          $libPath = Join-Path $Env:ChocolateyInstall 'lib'
-          $ahk = Get-ChildItem -Path $libPath -Recurse -Filter AutoHotkey*.exe -File -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $ahk) {
-            throw "AutoHotkey executable not found after installation"
-          }
-          & $ahk.FullName controller\tests\ArgumentParsingTests.ahk
+          & $Env:AHK_EXE tests\ArgumentParsingTests.ahk
 
       - name: Upload smoke test log
         if: always()
