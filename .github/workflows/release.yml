@@ -368,31 +368,31 @@ jobs:
           }
 
       - name: Upload AppControl artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: AppControl
           path: dist/AppControl.exe
 
       - name: Upload LabStation executable artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LabStation-exe
           path: dist/LabStation.exe
 
       - name: Upload LabStation Panel artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LabStationPanel
           path: dist/LabStationPanel.exe
 
       - name: Upload assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LabStation-assets
           path: dist/img/DecentraLabs.png
 
       - name: Upload WindowSpy artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: WindowSpy
           path: dist/WindowSpy.exe
