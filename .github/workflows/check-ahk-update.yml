@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  workflows: write
 
 jobs:
   check-updates:
@@ -101,7 +102,7 @@ jobs:
         if: steps.check.outputs.updates_needed == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.BOT_PR_TOKEN }}
+          token: ${{ github.token }}
           branch: "ci/ahk-update-${{ steps.check.outputs.latest_ahk }}"
           commit-message: "ci: bump AutoHotkey toolchain versions"
           title: "ci: bump AutoHotkey toolchain to v${{ steps.check.outputs.latest_ahk }}"
