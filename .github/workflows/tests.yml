@@ -21,7 +21,7 @@ jobs:
         id: install-ahk
         shell: powershell
         run: |
-          $headers = @{ 'User-Agent' = 'Lab-App-Control-CI' }
+          $headers = @{ 'User-Agent' = 'Lab-Station-CI' }
           $ahkUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$Env:AHK_VERSION/AutoHotkey_$($Env:AHK_VERSION).zip"
           Write-Host "Downloading AutoHotkey v$Env:AHK_VERSION from $ahkUrl"
           Invoke-WebRequest -Uri $ahkUrl -OutFile 'AutoHotkey.zip' -Headers $headers

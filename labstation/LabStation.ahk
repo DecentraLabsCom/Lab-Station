@@ -24,6 +24,7 @@
 #Include service\SessionGuard.ahk
 #Include service\Telemetry.ahk
 #Include service\Recovery.ahk
+#Include service\FmuExecutor.ahk
 #Include diagnostics\Status.ahk
 #Include service\CommandQueue.ahk
 #Include setup\Wizard.ahk
@@ -96,6 +97,8 @@ LabStationMain(args) {
             LS_HandleServiceCommand(remaining)
         case "recovery":
             LS_HandleRecoveryCommand(remaining)
+        case "fmu-executor":
+            LS_HandleFmuExecutorCommand(remaining)
         case "service-loop":
             LS_ServiceLoop()
         default:
@@ -123,6 +126,7 @@ LS_ShowHelp() {
         "  LabStation.exe release-session [--user=LABUSER] [--reboot]" . "`n" .
         "  LabStation.exe power [shutdown|hibernate] [--delay=0] [--reason=txt]" . "`n" .
         "  LabStation.exe recovery reboot-if-needed [--force] [--timeout=20]" . "`n" .
+        "  LabStation.exe fmu-executor [start|stop|restart|status]" . "`n" .
         "  LabStation.exe energy audit [--json=path]" . "`n"
     MsgBox text, "Lab Station", "OK"
 }
@@ -439,6 +443,36 @@ LS_ParseRecoveryOptions(args) {
     return opts
 }
 
+LS_HandleFmuExecutorCommand(args) {
+    action := args.Length >= 1 ? StrLower(args[1]) : "status"
+    switch action {
+        case "start":
+            if (LS_FmuExecutor.Start()) {
+                MsgBox "FMU executor started", "Lab Station", "OK Iconi"
+            } else {
+                MsgBox "FMU executor could not be started", "Lab Station", "OK Iconx"
+            }
+        case "stop":
+            LS_FmuExecutor.Stop()
+            MsgBox "FMU executor stopped", "Lab Station", "OK Iconi"
+        case "restart":
+            if (LS_FmuExecutor.Restart()) {
+                MsgBox "FMU executor restarted", "Lab Station", "OK Iconi"
+            } else {
+                MsgBox "FMU executor could not be restarted", "Lab Station", "OK Iconx"
+            }
+        case "status":
+            summary := LS_FmuExecutor.GetHealthSummary()
+            text := "Available: " . (summary["available"] ? "yes" : "no") . "`n"
+            text .= "Running: " . (summary["running"] ? "yes" : "no") . "`n"
+            text .= "PID: " . summary["pid"] . "`n"
+            text .= "Port: " . summary["port"] . "`n"
+            MsgBox text, "Lab Station – FMU Executor"
+        default:
+            MsgBox "Usage: LabStation.exe fmu-executor [start|stop|restart|status]", "Lab Station", "OK Iconi"
+    }
+}
+
 global LS_SERVICE_LOOP_ACTIVE := true
 
 LS_ServiceLoop() {
@@ -461,8 +495,14 @@ LS_ServiceLoop() {
         } catch as e {
             LS_LogError("Command loop error: " . e.Message)
         }
+        try {
+            LS_FmuExecutor.Tick()
+        } catch as e {
+            LS_LogError("FMU executor tick error: " . e.Message)
+        }
         Sleep sleepInterval
     }
+    LS_FmuExecutor.Stop()
     LS_LogInfo("Background loop exiting")
 }
 

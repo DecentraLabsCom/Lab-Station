@@ -3,7 +3,7 @@
 ## 📁 File Organization
 
 ```
-Lab App Control/
+Lab Station/
 └── controller/
     ├── AppControl.ahk         # Main entry point (~140 lines)
     └── lib/                       # Library modules
