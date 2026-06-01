@@ -12,7 +12,7 @@ jobs:
   smoke-tests:
     runs-on: windows-latest
     env:
-      AHK_VERSION: "2.0.23"
+      AHK_VERSION: "2.0.26"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
