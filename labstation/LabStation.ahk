@@ -32,10 +32,17 @@
 #Include ui\MainGui.ahk
 #Include ui\Tray.ahk
 
-; Entry point - call main function
+; Entry point - call main function.
+;@Ahk2Exe-IgnoreBegin
 if (A_Args.Length > 0 || !A_IsCompiled) {
     LabStationMain(A_Args)
 }
+;@Ahk2Exe-IgnoreEnd
+/*@Ahk2Exe-Keep
+if (A_Args.Length > 0) {
+    LabStationMain(A_Args)
+}
+*/
 
 LabStationMain(args) {
     if (args.Length = 0) {
