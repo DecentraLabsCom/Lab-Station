@@ -11,7 +11,7 @@ class LS_RegistryManager {
         if (!LS_EnsureAdmin()) {
             return false
         }
-        basePath := "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services"
+        basePath := "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
         try {
             RegWrite(1, "REG_DWORD", basePath, "fAllowUnlistedRemotePrograms")
             LS_LogInfo("RemoteApp policy 'fAllowUnlistedRemotePrograms' set to 1")
@@ -26,7 +26,7 @@ class LS_RegistryManager {
         if (!LS_EnsureAdmin()) {
             return false
         }
-        basePath := "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+        basePath := "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         try {
             RegWrite(command, "REG_SZ", basePath, valueName)
             LS_LogInfo("Run entry '" . valueName . "' configured")

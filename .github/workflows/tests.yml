@@ -39,6 +39,13 @@ jobs:
             throw 'AHK v1 API guard failed.'
           }
 
+          $registryDoubleSlash = $ahkFiles | Select-String -Pattern '"HK(LM|CU)\\\\'
+          if ($registryDoubleSlash) {
+            Write-Host 'Invalid registry key literal found (double backslash):' -ForegroundColor Red
+            $registryDoubleSlash | ForEach-Object { Write-Host ("{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
+            throw 'Registry path guard failed.'
+          }
+
           Write-Host 'AHK v2 migration guardrails passed.' -ForegroundColor Green
 
       - name: Install AutoHotkey

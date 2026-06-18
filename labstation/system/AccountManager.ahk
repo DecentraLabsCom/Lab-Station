@@ -75,7 +75,7 @@ try {{ Remove-LocalGroupMember -Group 'Administrators' -Member `$User -ErrorActi
             LS_LogError("Password required to configure Autologon")
             return false
         }
-        key := "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
         try {
             RegWrite("1", "REG_SZ", key, "AutoAdminLogon")
             RegWrite(user, "REG_SZ", key, "DefaultUserName")
@@ -213,13 +213,13 @@ if (`$code -ne 0) { throw `"secedit failed with exit code `$code`" }
             return false
         }
         domain := ""
-        key := "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
         try domain := RegRead(key, "DefaultDomainName")
         return this.ConfigureAutologon(user, password, domain)
     }
 
     static GetStoredAutologonPassword() {
-        key := "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
         try {
             return RegRead(key, "DefaultPassword")
         } catch {

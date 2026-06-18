@@ -75,7 +75,7 @@ class LS_Status {
     }
 
     static CheckRemoteAppPolicy() {
-        basePath := "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services"
+        basePath := "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
         try {
             value := RegRead(basePath, "fAllowUnlistedRemotePrograms")
             return value = 1
@@ -85,7 +85,7 @@ class LS_Status {
     }
 
     static CheckRunEntry() {
-        basePath := "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
+        basePath := "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         try {
             command := RegRead(basePath, "LabStationAppControl")
             return command != ""
@@ -166,7 +166,7 @@ class LS_Status {
 
     static GetAutologonState(targetUser) {
         state := Map("enabled", false, "user", "", "passwordSet", false, "userMatches", false)
-        key := "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
         try {
             value := RegRead(key, "AutoAdminLogon")
             state["enabled"] := (value = 1 || value = "1")
