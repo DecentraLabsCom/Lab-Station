@@ -464,7 +464,7 @@ LS_HandleFmuExecutorCommand(args) {
             text .= "Running: " . (summary["running"] ? "yes" : "no") . "`n"
             text .= "PID: " . summary["pid"] . "`n"
             text .= "Port: " . summary["port"] . "`n"
-            MsgBox text, "Lab Station - FMU Executor"
+            MsgBox text, "Lab Station – FMU Executor"
         default:
             MsgBox "Usage: LabStation.exe fmu-executor [start|stop|restart|status]", "Lab Station", "OK Iconi"
     }

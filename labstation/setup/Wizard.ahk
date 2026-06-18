@@ -43,7 +43,7 @@ LS_WizardSelectMode() {
     profileGui.SetFont("s10", "Segoe UI")
 
     profileGui.SetFont("s14 Bold cFFFFFF", "Segoe UI Variable Display")
-    profileGui.AddText("x20 y14", "Select station profile")
+    profileGui.AddText("x20 y14", "⚙️ Select station profile")
     profileGui.SetFont("s9 c9CA3AF")
     profileGui.AddText("x20 yp+30", "Choose the operating mode for this lab station.")
 
