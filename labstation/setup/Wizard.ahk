@@ -71,21 +71,21 @@ LS_WizardSelectMode() {
 
 LS_WizardServerSteps() {
     return [
-        Map("label", "Create/configure LABUSER + Autologon", "action", Func("LS_WizardAccountServer")),
+        Map("label", "Create/configure LABUSER + Autologon", "action", (*) => LS_WizardAccountServer()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
-        Map("label", "Register AppControl autostart", "action", Func("LS_WizardAutostartServer")),
-        Map("label", "Export diagnostics report", "action", Func("LS_WizardDiagnostics"))
+        Map("label", "Register AppControl autostart", "action", (*) => LS_WizardAutostartServer()),
+        Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
 }
 
 LS_WizardHybridSteps() {
     return [
-        Map("label", "Create/update LABUSER (no autologon)", "action", Func("LS_WizardAccountHybrid")),
+        Map("label", "Create/update LABUSER (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
-        Map("label", "Register autostart only for LABUSER", "action", Func("LS_WizardAutostartHybrid")),
-        Map("label", "Export diagnostics report", "action", Func("LS_WizardDiagnostics"))
+        Map("label", "Register autostart only for LABUSER", "action", (*) => LS_WizardAutostartHybrid()),
+        Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
 }
 
