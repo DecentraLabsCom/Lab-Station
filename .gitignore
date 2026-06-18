@@ -14,3 +14,13 @@ labstation/data
 /data
 /dev
 /UIA-v2-1.1.1
+
+# Test output artifacts (current and future runs)
+*.out.txt
+*.err.txt
+*.stdout.txt
+*.stderr.txt
+*.test-output.txt
+
+# Temporary test/result folders created during local validation
+.tmp-*/

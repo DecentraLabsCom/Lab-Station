@@ -15,6 +15,7 @@ permissions:
 
 env:
   AHK_VERSION: "2.0.26"
+  AHK2EXE_VERSION: "Ahk2Exe1.1.37.02a2"
 
 jobs:
   build-and-release:
@@ -48,7 +49,7 @@ jobs:
         with:
           ref: ${{ steps.release_meta.outputs.ref }}
 
-      - name: Install AutoHotkey v2 (includes Ahk2Exe)
+      - name: Setup portable AutoHotkey v2 + Ahk2Exe
         id: setup-tools
         shell: powershell
         run: |
@@ -56,25 +57,28 @@ jobs:
             'User-Agent' = 'Lab-Station-Release'
           }
 
-          # Install AutoHotkey v2 from the official setup package.
-          # This provides a compiler/toolchain layout identical to local installs.
+          # Use portable toolchain to avoid installer hangs on GitHub runners.
           $ahkVersion = $Env:AHK_VERSION
-          $setupUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$ahkVersion/AutoHotkey_${ahkVersion}_setup.exe"
-          $setupExe = 'AutoHotkeySetup.exe'
-          Write-Host "Downloading AutoHotkey setup v$ahkVersion from $setupUrl"
-          Invoke-WebRequest -Uri $setupUrl -OutFile $setupExe -Headers $headers
+          $ahk2ExeVersion = $Env:AHK2EXE_VERSION
+          $ahkZip = 'AutoHotkey.zip'
+          $ahkDir = 'AutoHotkey'
+          $ahkUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$ahkVersion/AutoHotkey_${ahkVersion}.zip"
+          Write-Host "Downloading AutoHotkey v$ahkVersion from $ahkUrl"
+          Invoke-WebRequest -Uri $ahkUrl -OutFile $ahkZip -Headers $headers
+          Expand-Archive -Path $ahkZip -DestinationPath $ahkDir -Force
 
-          Write-Host "Installing AutoHotkey silently..."
-          $installer = Start-Process -FilePath $setupExe -ArgumentList '/S' -Wait -PassThru
-          if ($installer.ExitCode -ne 0) {
-            throw "AutoHotkey installer failed with exit code $($installer.ExitCode)"
-          }
+          $compilerZip = 'Ahk2Exe.zip'
+          $compilerDir = 'Ahk2Exe'
+          $compilerUrl = "https://github.com/AutoHotkey/Ahk2Exe/releases/download/$ahk2ExeVersion/${ahk2ExeVersion}.zip"
+          Write-Host "Downloading Ahk2Exe $ahk2ExeVersion from $compilerUrl"
+          Invoke-WebRequest -Uri $compilerUrl -OutFile $compilerZip -Headers $headers
+          Expand-Archive -Path $compilerZip -DestinationPath $compilerDir -Force
 
-          $compiler = 'C:\Program Files\AutoHotkey\Compiler\Ahk2Exe.exe'
-          $base = 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe'
+          $compiler = Get-ChildItem -Path $compilerDir -Filter 'Ahk2Exe.exe' -Recurse -File | Select-Object -ExpandProperty FullName -First 1
+          $base = (Resolve-Path (Join-Path $ahkDir 'AutoHotkey64.exe')).Path
 
-          if (-not (Test-Path $compiler)) {
-            throw "Ahk2Exe compiler not found at $compiler"
+          if (-not $compiler -or -not (Test-Path $compiler)) {
+            throw "Ahk2Exe compiler not found in $compilerDir"
           }
 
           if (-not (Test-Path $base)) {
