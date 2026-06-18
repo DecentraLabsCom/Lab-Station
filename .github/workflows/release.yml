@@ -166,7 +166,7 @@ jobs:
           
           # Use absolute paths for compilation
           $absScript = Join-Path $scriptDir $scriptName
-          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath)
+          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath, '/silent', 'verbose')
           Write-Host "Running from: $scriptDir"
           Write-Host "Running: $compiler $($arguments -join ' ')"
           
@@ -244,7 +244,7 @@ jobs:
           
           # Use absolute paths for compilation
           $absScript = Join-Path $scriptDir $scriptName
-          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath)
+          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath, '/silent', 'verbose')
           Write-Host "Running from: $scriptDir"
           Write-Host "Running: $compiler $($arguments -join ' ')"
           
@@ -312,7 +312,7 @@ jobs:
           Write-Host "Script verified, size: $((Get-Item $scriptPath).Length) bytes"
           
           # Use absolute paths for compilation
-          $arguments = @('/in', $scriptPath, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath)
+          $arguments = @('/in', $scriptPath, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath, '/silent', 'verbose')
           Write-Host "Running: $compiler $($arguments -join ' ')"
           
           # Simple invocation without stream redirection to avoid hanging

@@ -16,10 +16,6 @@
 #Include system\EnergyAudit.ahk
 #Include system\PowerManager.ahk
 #Include system\ServiceManager.ahk
-#Include system\AccountManager.ahk
-#Include system\EnergyAudit.ahk
-#Include system\PowerManager.ahk
-#Include system\ServiceManager.ahk
 #Include service\SessionManager.ahk
 #Include service\SessionGuard.ahk
 #Include service\Telemetry.ahk
@@ -30,7 +26,6 @@
 #Include setup\Wizard.ahk
 #Include ui\Tray.ahk
 #Include ui\MainGui.ahk
-#Include ui\Tray.ahk
 
 ; Entry point - call main function
 if (A_Args.Length > 0) {
