@@ -30,7 +30,7 @@ class LS_FmuExecutor {
     static _maxFailures := 3
     static _lastHealthResult := Map()
 
-    ; ── lifecycle ────────────────────────────────────────────
+    ; lifecycle
 
     static IsAvailable() {
         return DirExist(LAB_STATION_FMU_EXECUTOR_DIR) && FileExist(LAB_STATION_FMU_EXECUTOR_DIR "\app\main.py")
@@ -68,7 +68,7 @@ class LS_FmuExecutor {
             LS_LogInfo(Format("FMU executor: started (PID={1})", pid))
             return true
         } catch as e {
-            LS_LogError("FMU executor: unable to start – " . e.Message)
+            LS_LogError("FMU executor: unable to start - " . e.Message)
             return false
         }
     }
@@ -93,7 +93,7 @@ class LS_FmuExecutor {
         return this.Start()
     }
 
-    ; ── health probing ──────────────────────────────────────
+    ; health probing
 
     static CheckHealth() {
         url := Format("http://127.0.0.1:{1}/internal/health", LAB_STATION_FMU_EXECUTOR_PORT)
@@ -136,7 +136,7 @@ try {{
         return summary
     }
 
-    ; ── service-loop tick ───────────────────────────────────
+    ; service-loop tick
 
     static Tick() {
         if (!this.IsAvailable())
@@ -154,7 +154,7 @@ try {{
             healthy := this.CheckHealth()
             if (!healthy && this._consecutiveFailures >= this._maxFailures) {
                 LS_LogWarning(Format(
-                    "FMU executor: {1} consecutive health failures – restarting",
+                    "FMU executor: {1} consecutive health failures - restarting",
                     this._consecutiveFailures
                 ))
                 this.Restart()
@@ -162,7 +162,7 @@ try {{
         }
     }
 
-    ; ── session cleanup ─────────────────────────────────────
+    ; session cleanup
 
     static TerminateAllSessions() {
         if (!this.IsRunning())
@@ -188,7 +188,7 @@ if (Test-Path `$Path) {{
         return exitCode = 0
     }
 
-    ; ── private ─────────────────────────────────────────────
+    ; private
 
     static _FindPython() {
         candidates := ["python", "python3"]

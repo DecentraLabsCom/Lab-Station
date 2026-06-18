@@ -36,7 +36,7 @@ LS_BuildGui() {
 
     ; Header
     myGui.SetFont("s17 Bold cFFFFFF", "Bahnschrift")
-    myGui.AddText("x24 y16", "🖥️ Lab Station")
+    myGui.AddText("x24 y16", "Lab Station")
     myGui.SetFont("s9 c9CA3AF")
     myGui.AddText("x24 yp+28", "Workstation management console")
     logoPaths := [
@@ -53,7 +53,7 @@ LS_BuildGui() {
 
     ; Status section
     myGui.SetFont("s11 Bold cFFFFFF")
-    myGui.AddText("x24 y82", "📊 System Status")
+    myGui.AddText("x24 y82", "System Status")
 
     myGui.SetFont("s8 cC08A2B")
     myGui.SetupChip := myGui.AddText("x150 y85 w200", "(checking)")
@@ -64,45 +64,45 @@ LS_BuildGui() {
 
     ; Status action buttons
     myGui.SetFont("s9 cFFFFFF")
-    refreshBtn := myGui.AddButton("x24 y300 w130 h32", "🔄 Refresh")
+    refreshBtn := myGui.AddButton("x24 y300 w130 h32", "Refresh")
     refreshBtn.OnEvent("Click", LS_GuiRefreshStatus_Handler)
 
-    exportBtn := myGui.AddButton("x164 y300 w150 h32", "💾 Export JSON")
+    exportBtn := myGui.AddButton("x164 y300 w150 h32", "Export JSON")
     exportBtn.OnEvent("Click", LS_GuiExportStatus_Handler)
 
-    logBtn := myGui.AddButton("x324 y300 w120 h32", "📄 Open Log")
+    logBtn := myGui.AddButton("x324 y300 w120 h32", "Open Log")
     logBtn.OnEvent("Click", LS_GuiOpenLog_Handler)
 
     ; Separator
     myGui.SetFont("s1 c374151")
-    myGui.AddText("x470 y16 w2 h370", "│")
+    myGui.AddText("x470 y16 w2 h370", "|")
 
     ; Actions
     myGui.SetFont("s11 Bold cFFFFFF")
-    myGui.AddText("x485 y65", "⚡ Quick Actions")
+    myGui.AddText("x485 y65", "Quick Actions")
 
     myGui.SetFont("s8 cC08A2B")
-    myGui.AddText("x495 y85 w230", "⚠️ Actions require admin privileges")
+    myGui.AddText("x495 y85 w230", "Actions require admin privileges")
 
     myGui.SetFont("s9 Bold c9CA3AF")
     myGui.AddText("x490 y110", "Setup")
 
     myGui.SetFont("s9 cFFFFFF")
-    myGui.SetupButton := myGui.AddButton("x490 y130 w220 h34", "🛠️ Run Setup Wizard")
+    myGui.SetupButton := myGui.AddButton("x490 y130 w220 h34", "Run Setup Wizard")
     myGui.SetupButton.OnEvent("Click", LS_GuiRunSetup_Handler)
 
     myGui.SetFont("s9 Bold c9CA3AF")
     myGui.AddText("x490 y180", "Local mode (on-site)")
 
     myGui.SetFont("s9 cFFFFFF")
-    myGui.LocalModeButton := myGui.AddButton("x490 y200 w220 h34", "🔒 Enable local mode")
+    myGui.LocalModeButton := myGui.AddButton("x490 y200 w220 h34", "Enable local mode")
     myGui.LocalModeButton.OnEvent("Click", LS_GuiToggleLocalMode_Handler)
 
     myGui.SetFont("s9 cE5E7EB")
     myGui.ServiceStatusText := myGui.AddText("x490 y240 w220", "(checking)")
 
     myGui.SetFont("s9 cFFFFFF")
-    myGui.ServiceRestartButton := myGui.AddButton("x490 y260 w220 h34", "⟳ Restart service")
+    myGui.ServiceRestartButton := myGui.AddButton("x490 y260 w220 h34", "Restart service")
     myGui.ServiceRestartButton.OnEvent("Click", LS_GuiRestartService_Handler)
 
     myGui.SetFont("s9 Bold c9CA3AF")
@@ -110,7 +110,7 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.0")
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs (c) 2025 - Lab Station v3.0.0")
     refreshBtn.Focus()
 
     myGui.OnEvent("Close", (*) => myGui.Destroy())
@@ -139,39 +139,39 @@ LS_GuiRefreshStatus(gui) {
     status := LS_Status.Collect()
     needsSetup := LS_GuiNeedsSetup(status)
     gui.SetupButton.Enabled := needsSetup
-    gui.SetupButton.Text := needsSetup ? "🛠️ Run Setup Wizard" : "🛠️ Setup already applied"
+    gui.SetupButton.Text := needsSetup ? "Run Setup Wizard" : "Setup already applied"
     gui.SetupChip.Text := needsSetup ? "(Needs action)" : "(OK)"
     gui.SetupChip.Opt("c" . (needsSetup ? "FFB020" : "9CA3AF"))
 
     summary := []
-    summary.Push("═══════════════════════════════════════")
+    summary.Push("---------------------------------------")
     summary.Push("  SYSTEM STATUS REPORT")
-    summary.Push("═══════════════════════════════════════")
+    summary.Push("---------------------------------------")
     summary.Push("")
-    summary.Push("🖥️  Host: " . (status.Has("host") ? status["host"] : A_ComputerName))
+    summary.Push("Host: " . (status.Has("host") ? status["host"] : A_ComputerName))
     summary.Push("")
     ready := (status.Has("summary") && status["summary"].Has("ready")) ? status["summary"]["ready"] : false
-    readyIcon := ready ? "✅" : "⚠️"
+    readyIcon := ready ? "OK" : "WARN"
     summary.Push(readyIcon . "  Ready: " . (ready ? "Yes" : "Needs attention"))
     summary.Push("")
     localMode := status.Has("localModeEnabled") ? status["localModeEnabled"] : false
-    localIcon := localMode ? "🔒" : "🌐"
+    localIcon := localMode ? "LOCAL" : "REMOTE"
     summary.Push(localIcon . "  Local mode: " . (localMode ? "Enabled" : "Disabled"))
     if (gui.HasProp("LocalModeButton") && gui.LocalModeButton) {
-        gui.LocalModeButton.Text := localMode ? "🌐 Disable local mode" : "🔒 Enable local mode"
+        gui.LocalModeButton.Text := localMode ? "Disable local mode" : "Enable local mode"
     }
     summary.Push("")
     hasUsers := status.Has("sessions") && status["sessions"].Has("hasOtherUsers") && status["sessions"]["hasOtherUsers"]
-    userIcon := hasUsers ? "👤" : "○"
+    userIcon := hasUsers ? "USER" : "NONE"
     summary.Push(userIcon . "  Active sessions: " . (hasUsers ? "Present" : "None"))
     summary.Push("")
     if (status.Has("summary") && status["summary"].Has("issues") && status["summary"]["issues"].Length > 0) {
-        summary.Push("⚠️  ISSUES DETECTED:")
+        summary.Push("ISSUES DETECTED:")
         for issue in status["summary"]["issues"] {
-            summary.Push("   • " . issue)
+            summary.Push("   - " . issue)
         }
     } else {
-        summary.Push("✓  No issues detected")
+        summary.Push("OK - No issues detected")
     }
     summary.Push("")
     summary.Push("Last refresh: " . FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss"))
