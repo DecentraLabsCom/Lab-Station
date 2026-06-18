@@ -15,7 +15,6 @@ permissions:
 
 env:
   AHK_VERSION: "2.0.26"
-  AHK2EXE_VERSION: "Ahk2Exe1.1.37.02a2"
 
 jobs:
   build-and-release:
@@ -49,57 +48,43 @@ jobs:
         with:
           ref: ${{ steps.release_meta.outputs.ref }}
 
-      - name: Download and setup AutoHotkey v2 + Ahk2Exe
+      - name: Install AutoHotkey v2 (includes Ahk2Exe)
         id: setup-tools
         shell: powershell
         run: |
           $headers = @{
             'User-Agent' = 'Lab-Station-Release'
           }
-          
-          # Download AutoHotkey v2 portable (pinned version)
+
+          # Install AutoHotkey v2 from the official setup package.
+          # This provides a compiler/toolchain layout identical to local installs.
           $ahkVersion = $Env:AHK_VERSION
-          $ahkUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$ahkVersion/AutoHotkey_${ahkVersion}.zip"
-          $ahkZip = 'AutoHotkey.zip'
-          $ahkDir = 'AutoHotkey'
-          Write-Host "Downloading AutoHotkey v$ahkVersion from $ahkUrl"
-          Invoke-WebRequest -Uri $ahkUrl -OutFile $ahkZip -Headers $headers
-          Expand-Archive -Path $ahkZip -DestinationPath $ahkDir -Force
-          
-          # Download Ahk2Exe (pinned version)
-          $ahk2ExeVersion = $Env:AHK2EXE_VERSION
-          $compilerUrl = "https://github.com/AutoHotkey/Ahk2Exe/releases/download/$ahk2ExeVersion/${ahk2ExeVersion}.zip"
-          $compilerZip = 'Ahk2Exe.zip'
-          $compilerDir = 'Ahk2Exe'
-          Write-Host "Downloading Ahk2Exe $ahk2ExeVersion from $compilerUrl"
-          Invoke-WebRequest -Uri $compilerUrl -OutFile $compilerZip -Headers $headers
-          Expand-Archive -Path $compilerZip -DestinationPath $compilerDir -Force
-          
-          # Locate compiler and base
-          $compiler = Get-ChildItem -Path $compilerDir -Filter 'Ahk2Exe.exe' -Recurse -File | Select-Object -ExpandProperty FullName -First 1
-          $base = (Resolve-Path (Join-Path $ahkDir 'AutoHotkey64.exe')).Path
-          
-          if (-not $compiler -or -not (Test-Path $compiler)) {
-            throw "Ahk2Exe.exe not found in $compilerDir"
+          $setupUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/v$ahkVersion/AutoHotkey_${ahkVersion}_setup.exe"
+          $setupExe = 'AutoHotkeySetup.exe'
+          Write-Host "Downloading AutoHotkey setup v$ahkVersion from $setupUrl"
+          Invoke-WebRequest -Uri $setupUrl -OutFile $setupExe -Headers $headers
+
+          Write-Host "Installing AutoHotkey silently..."
+          $installer = Start-Process -FilePath $setupExe -ArgumentList '/S' -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "AutoHotkey installer failed with exit code $($installer.ExitCode)"
           }
-          
+
+          $compiler = 'C:\Program Files\AutoHotkey\Compiler\Ahk2Exe.exe'
+          $base = 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe'
+
+          if (-not (Test-Path $compiler)) {
+            throw "Ahk2Exe compiler not found at $compiler"
+          }
+
           if (-not (Test-Path $base)) {
             throw "AutoHotkey64.exe not found at $base"
           }
-          
-          # Copy Ahk2Exe dependencies from AutoHotkey
-          $compilerBinDir = Split-Path -Parent $compiler
-          Copy-Item -Path (Join-Path $ahkDir 'AutoHotkey32.exe') -Destination (Join-Path $compilerBinDir 'Unicode 32-bit.bin') -Force
-          Copy-Item -Path (Join-Path $ahkDir 'AutoHotkey64.exe') -Destination (Join-Path $compilerBinDir 'Unicode 64-bit.bin') -Force
           
           Write-Host "Compiler: $compiler"
           Write-Host "Base: $base"
           "compiler=$compiler" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
           "autohotkey_base=$base" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
-          
-          # List compiler directory contents for debugging
-          Write-Host "Compiler directory contents:"
-          Get-ChildItem -Path (Split-Path -Parent $compiler) | Format-Table Name, Length
 
       - name: Compile AppControl
         shell: powershell
@@ -112,10 +97,6 @@ jobs:
           if (-not $base -or -not (Test-Path $base)) {
             throw "AutoHotkey base path missing: $base"
           }
-          $compilerDir = Split-Path -Parent $compiler
-          Copy-Item -Path (Join-Path (Split-Path -Parent $base) 'AutoHotkey32.exe') -Destination (Join-Path $compilerDir 'Unicode 32-bit.bin') -Force
-          Copy-Item -Path $base -Destination (Join-Path $compilerDir 'Unicode 64-bit.bin') -Force
-          $binPath = Join-Path $compilerDir 'Unicode 64-bit.bin'
 
           $scriptPath = (Resolve-Path 'controller/AppControl.ahk').Path
           $outDir = Join-Path $PWD 'dist'
@@ -124,7 +105,6 @@ jobs:
           $iconPath = (Resolve-Path 'img/favicon.ico').Path
           Write-Host "Compiler: $compiler"
           Write-Host "Base: $base"
-          Write-Host "Bin: $binPath"
           Write-Host "Icon: $iconPath"
           Write-Host "Script: $scriptPath"
           Write-Host "Output: $outFile"
@@ -166,7 +146,7 @@ jobs:
           
           # Use absolute paths for compilation
           $absScript = Join-Path $scriptDir $scriptName
-          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath, '/silent', 'verbose')
+          $arguments = @('/in', $absScript, '/out', $outFile, '/base', $base, '/ahk', $base, '/icon', $iconPath, '/silent')
           Write-Host "Running from: $scriptDir"
           Write-Host "Running: $compiler $($arguments -join ' ')"
           
@@ -211,10 +191,6 @@ jobs:
           if (-not $base -or -not (Test-Path $base)) {
             throw "AutoHotkey base path missing: $base"
           }
-          $compilerDir = Split-Path -Parent $compiler
-          Copy-Item -Path (Join-Path (Split-Path -Parent $base) 'AutoHotkey32.exe') -Destination (Join-Path $compilerDir 'Unicode 32-bit.bin') -Force
-          Copy-Item -Path $base -Destination (Join-Path $compilerDir 'Unicode 64-bit.bin') -Force
-          $binPath = Join-Path $compilerDir 'Unicode 64-bit.bin'
 
           $scriptPath = (Resolve-Path 'labstation/LabStation.ahk').Path
           $outDir = Join-Path $PWD 'dist'
@@ -223,7 +199,6 @@ jobs:
           $iconPath = (Resolve-Path 'img/favicon.ico').Path
           Write-Host "Compiler: $compiler"
           Write-Host "Base: $base"
-          Write-Host "Bin: $binPath"
           Write-Host "Icon: $iconPath"
           Write-Host "Script: $scriptPath"
           Write-Host "Output: $outFile"
@@ -244,7 +219,7 @@ jobs:
           
           # Use absolute paths for compilation
           $absScript = Join-Path $scriptDir $scriptName
-          $arguments = @('/in', $absScript, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath, '/silent', 'verbose')
+          $arguments = @('/in', $absScript, '/out', $outFile, '/base', $base, '/ahk', $base, '/icon', $iconPath, '/silent')
           Write-Host "Running from: $scriptDir"
           Write-Host "Running: $compiler $($arguments -join ' ')"
           
@@ -288,10 +263,6 @@ jobs:
           if (-not $base -or -not (Test-Path $base)) {
             throw "AutoHotkey base path missing: $base"
           }
-          $compilerDir = Split-Path -Parent $compiler
-          Copy-Item -Path (Join-Path (Split-Path -Parent $base) 'AutoHotkey32.exe') -Destination (Join-Path $compilerDir 'Unicode 32-bit.bin') -Force
-          Copy-Item -Path $base -Destination (Join-Path $compilerDir 'Unicode 64-bit.bin') -Force
-          $binPath = Join-Path $compilerDir 'Unicode 64-bit.bin'
 
           $scriptPath = (Resolve-Path 'LabStationPanel.ahk').Path
           $outDir = Join-Path $PWD 'dist'
@@ -300,7 +271,6 @@ jobs:
           $iconPath = (Resolve-Path 'img/favicon.ico').Path
           Write-Host "Compiler: $compiler"
           Write-Host "Base: $base"
-          Write-Host "Bin: $binPath"
           Write-Host "Icon: $iconPath"
           Write-Host "Script: $scriptPath"
           Write-Host "Output: $outFile"
@@ -312,7 +282,7 @@ jobs:
           Write-Host "Script verified, size: $((Get-Item $scriptPath).Length) bytes"
           
           # Use absolute paths for compilation
-          $arguments = @('/in', $scriptPath, '/out', $outFile, '/bin', $binPath, '/icon', $iconPath, '/silent', 'verbose')
+          $arguments = @('/in', $scriptPath, '/out', $outFile, '/base', $base, '/ahk', $base, '/icon', $iconPath, '/silent')
           Write-Host "Running: $compiler $($arguments -join ' ')"
           
           # Simple invocation without stream redirection to avoid hanging
@@ -366,6 +336,42 @@ jobs:
           } else {
             Write-Host "Logo not found at $logo; continuing without it."
           }
+
+      - name: Validate embedded scripts in release executables
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Assert-EmbeddedScript($exePath) {
+            if (-not (Test-Path $exePath)) {
+              throw "Executable missing: $exePath"
+            }
+
+            $name = Split-Path $exePath -Leaf
+            $stdoutPath = "$exePath.stdout.txt"
+            $stderrPath = "$exePath.stderr.txt"
+            if (Test-Path $stdoutPath) { Remove-Item $stdoutPath -Force }
+            if (Test-Path $stderrPath) { Remove-Item $stderrPath -Force }
+
+            $proc = Start-Process -FilePath $exePath -ArgumentList '/ErrorStdOut' -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            try {
+              Wait-Process -Id $proc.Id -Timeout 8 -ErrorAction Stop
+            } catch {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+
+            $stderr = ''
+            if (Test-Path $stderrPath) {
+              $stderr = Get-Content $stderrPath -Raw
+            }
+
+            if ($stderr -match 'Script file not found') {
+              throw "${name} is missing embedded script payload. STDERR: $stderr"
+            }
+          }
+
+          Assert-EmbeddedScript (Join-Path $PWD 'dist/LabStation.exe')
+          Assert-EmbeddedScript (Join-Path $PWD 'dist/LabStationPanel.exe')
 
       - name: Upload AppControl artifact
         uses: actions/upload-artifact@v7
