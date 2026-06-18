@@ -17,6 +17,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Validate AHK v2 migration guardrails
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $ahkFiles = Get-ChildItem -Recurse -File -Filter *.ahk |
+            Where-Object { $_.FullName -notmatch '\\.release-tools\\|\\.tmp-|\\UIA-v2-1\.1\.1\\|\\AutoHotkey\\' }
+
+          $classMethodFunc = $ahkFiles | Select-String -Pattern 'Func\("[A-Za-z0-9_]+\.[A-Za-z0-9_]+'
+          if ($classMethodFunc) {
+            Write-Host 'Invalid callback pattern found (Func("Class.Method")):' -ForegroundColor Red
+            $classMethodFunc | ForEach-Object { Write-Host ("{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
+            throw 'AHK v2 callback guard failed.'
+          }
+
+          $legacyApis = $ahkFiles | Select-String -Pattern '\b(ComObjCreate|ComObjGet|ObjInsert|ObjRemove|ObjRawSet|ObjRawGet|StringTrimLeft|StringTrimRight|StringGetPos|StringLeft|StringRight|StringMid)\b'
+          if ($legacyApis) {
+            Write-Host 'Potential AHK v1 APIs found:' -ForegroundColor Red
+            $legacyApis | ForEach-Object { Write-Host ("{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
+            throw 'AHK v1 API guard failed.'
+          }
+
+          Write-Host 'AHK v2 migration guardrails passed.' -ForegroundColor Green
+
       - name: Install AutoHotkey
         id: install-ahk
         shell: powershell
