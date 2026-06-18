@@ -35,7 +35,7 @@
 ; Entry point - call main function
 if (A_Args.Length > 0) {
     LabStationMain(A_Args)
-} else if (!A_IsCompiled) {
+} else {
     ExitApp
 }
 
