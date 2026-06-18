@@ -18,7 +18,7 @@ class LS_AccountManager {
             user := this.DefaultUser
         }
         localPass := password
-        if (!this.EnsureAccount(user, localPass)) {
+        if (!this.EnsureAccount(user, &localPass)) {
             return false
         }
         if (!this.ConfigureAutologon(user, localPass)) {

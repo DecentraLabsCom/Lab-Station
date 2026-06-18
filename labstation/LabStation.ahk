@@ -189,7 +189,7 @@ LS_HandleAccountCommand(args) {
     switch action {
         case "create":
             pass := password
-            if (LS_AccountManager.EnsureAccount(user, pass)) {
+            if (LS_AccountManager.EnsureAccount(user, &pass)) {
                 MsgBox Format("Account ready: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi"
             } else {
                 MsgBox "Account could not be created/updated", "Lab Station", "OK Iconx"
@@ -208,7 +208,7 @@ LS_HandleAccountCommand(args) {
             }
         case "setup":
             pass := password
-            if (LS_AccountManager.Setup(user, pass)) {
+            if (LS_AccountManager.Setup(user, &pass)) {
                 MsgBox Format("Account + Autologon ready. User: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi"
             } else {
                 MsgBox "Account setup failed", "Lab Station", "OK Iconx"

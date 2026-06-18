@@ -100,7 +100,7 @@ LS_WizardDiagnostics() {
 
 LS_WizardAccountServer() {
     pass := ""
-    if (LS_AccountManager.Setup("", pass)) {
+    if (LS_AccountManager.Setup("", &pass)) {
         LS_WizardShowAccountInfo(pass, true)
         return true
     }
@@ -109,7 +109,7 @@ LS_WizardAccountServer() {
 
 LS_WizardAccountHybrid() {
     pass := ""
-    if (LS_AccountManager.EnsureAccount("", pass)) {
+    if (LS_AccountManager.EnsureAccount("", &pass)) {
         LS_WizardShowAccountInfo(pass, false)
         return true
     }
