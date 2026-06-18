@@ -15,7 +15,7 @@ if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {
 if (!IsSet(LAB_STATION_ROOT)) {
     ; LabStation scripts live inside the labstation/ folder. Project root is one level up.
     global LAB_STATION_ROOT := A_ScriptDir
-    global LAB_STATION_PROJECT_ROOT := NormalizePath(A_ScriptDir "\..")
+    global LAB_STATION_PROJECT_ROOT := A_IsCompiled ? A_ScriptDir : NormalizePath(A_ScriptDir "\..")
 }
 
 if (!IsSet(LAB_STATION_PROJECT_ROOT)) {
@@ -27,9 +27,16 @@ if (!IsSet(LAB_STATION_CONTROLLER_DIR)) {
 }
 
 if (!DirExist(LAB_STATION_CONTROLLER_DIR)) {
-    potential := LAB_STATION_PROJECT_ROOT
-    if (FileExist(potential "\AppControl.exe")) {
-        LAB_STATION_CONTROLLER_DIR := potential
+    candidates := [
+        LAB_STATION_PROJECT_ROOT,
+        LAB_STATION_ROOT,
+        LAB_STATION_PROJECT_ROOT "\dist"
+    ]
+    for candidate in candidates {
+        if (FileExist(candidate "\AppControl.exe") || FileExist(candidate "\AppControl.ahk")) {
+            LAB_STATION_CONTROLLER_DIR := candidate
+            break
+        }
     }
 }
 
