@@ -4,7 +4,7 @@
 #Requires AutoHotkey v2.0
 
 if (!IsSet(LAB_STATION_VERSION)) {
-    global LAB_STATION_VERSION := "3.0.6"
+    global LAB_STATION_VERSION := "3.0.7"
 }
 
 if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {

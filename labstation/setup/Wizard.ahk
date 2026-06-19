@@ -16,25 +16,42 @@ LS_RunSetupWizard() {
     if (!LS_EnsureAdmin()) {
         return false
     }
+    LS_LogInfo("Setup wizard started")
     mode := LS_WizardSelectMode()
     if (mode = "") {
+        LS_LogInfo("Setup wizard cancelled before profile selection")
         return false
     }
     LS_WizardSaveProfile(mode)
+    LS_LogInfo("Setup wizard profile selected: " . mode)
     steps := mode = "server" ? LS_WizardServerSteps() : LS_WizardHybridSteps()
 
     for step in steps {
-        response := MsgBox(step["label"] . "?", "Lab Station Setup", "YesNo Iconi")
+        label := step["label"]
+        LS_LogInfo("Setup wizard prompting step: " . label)
+        response := MsgBox(label . "?", "Lab Station Setup", "YesNo Iconi")
         if (response = "Yes") {
-            success := step["action"].Call()
-            if (success) {
-                MsgBox "Completed: " . step["label"], "Lab Station", "OK Iconi"
-            } else {
-                MsgBox "There was an issue executing: " . step["label"], "Lab Station", "OK Iconx"
+            LS_LogInfo("Setup wizard running step: " . label)
+            success := false
+            try {
+                success := step["action"].Call()
+            } catch as e {
+                LS_LogError("Setup wizard step threw: " . label . " - " . e.Message)
+                success := false
             }
+            if (success) {
+                LS_LogInfo("Setup wizard completed step: " . label)
+                MsgBox "Completed: " . label, "Lab Station", "OK Iconi"
+            } else {
+                LS_LogError("Setup wizard failed step: " . label)
+                MsgBox "There was an issue executing: " . label . "`n`nCheck " . LAB_STATION_LOG . " for details.", "Lab Station", "OK Iconx"
+            }
+        } else {
+            LS_LogInfo("Setup wizard skipped step: " . label)
         }
     }
 
+    LS_LogInfo("Setup wizard finished")
     MsgBox "Setup completed. Check labstation.log for details.", "Lab Station", "OK Iconi"
     return true
 }
@@ -86,10 +103,10 @@ LS_WizardSaveProfile(mode) {
 LS_WizardServerSteps() {
     return [
         Map("label", "Create/configure LABUSER + Autologon", "action", (*) => LS_WizardAccountServer()),
-        Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
-        Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
-        Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Register AppControl autostart", "action", (*) => LS_WizardAutostartServer()),
+        Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
+        Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
+        Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
         Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
 }
@@ -97,10 +114,10 @@ LS_WizardServerSteps() {
 LS_WizardHybridSteps() {
     return [
         Map("label", "Create/update LABUSER (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
-        Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
-        Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
-        Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Register autostart only for LABUSER", "action", (*) => LS_WizardAutostartHybrid()),
+        Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
+        Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
+        Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
         Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
 }

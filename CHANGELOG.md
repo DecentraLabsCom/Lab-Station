@@ -2,6 +2,14 @@
 
 # Changelog
 
+## [3.0.7] - 2026-06-19
+
+### Changed
+- Setup wizard now runs account setup before autostart, followed by RemoteApp, WinRM, Wake-on-LAN, and diagnostics.
+
+### Fixed
+- Setup wizard now logs each step, skipped action, failure, and thrown exception, and failure dialogs point to `labstation.log`.
+
 ## [3.0.6] - 2026-06-19
 
 ### Fixed
