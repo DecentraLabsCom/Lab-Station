@@ -19,6 +19,7 @@ LS_StartMainGui() {
     if (IsSet(LS_GUI) && IsObject(LS_GUI)) {
         try {
             LS_GUI.Show()
+            LS_GuiQueueStatusRefresh()
             return
         } catch {
             LS_GUI := ""
@@ -26,6 +27,7 @@ LS_StartMainGui() {
     }
     LS_GUI := LS_BuildGui()
     LS_GUI.Show()
+    LS_GuiQueueStatusRefresh()
 }
 
 LS_BuildGui() {
@@ -121,8 +123,19 @@ LS_BuildGui() {
 
     myGui.OnEvent("Close", LS_GuiClose_Handler)
     myGui.OnEvent("Size", LS_GuiSize_Handler)
-    LS_GuiRefreshStatus(myGui)
     return myGui
+}
+
+LS_GuiQueueStatusRefresh() {
+    SetTimer(LS_GuiRefreshStatus_Timer, 0)
+    SetTimer(LS_GuiRefreshStatus_Timer, -50)
+}
+
+LS_GuiRefreshStatus_Timer(*) {
+    global LS_GUI
+    if (IsSet(LS_GUI) && IsObject(LS_GUI)) {
+        try LS_GuiRefreshStatus(LS_GUI)
+    }
 }
 
 LS_GuiNeedsSetup(status) {
@@ -352,7 +365,6 @@ LS_EnsureTrayMenu() {
     static trayReady := false
     A_IconHidden := false
     A_IconTip := "Lab Station"
-    LS_SetPanelTrayIcon()
     if (trayReady)
         return
     A_TrayMenu.Delete()
@@ -362,35 +374,24 @@ LS_EnsureTrayMenu() {
     trayReady := true
 }
 
-LS_SetPanelTrayIcon() {
-    possible := [
-        LAB_STATION_PROJECT_ROOT "\img\favicon.ico",
-        A_ScriptDir "\img\favicon.ico",
-        A_ScriptDir "\favicon.ico"
-    ]
-    for p in possible {
-        if (FileExist(p)) {
-            TraySetIcon(p)
-            return true
-        }
-    }
-    return false
-}
-
 LS_TrayShowMainGui_Handler(*) {
     LS_StartMainGui()
 }
 
 LS_GuiExit_Handler(*) {
-    ExitApp
+    LS_GuiShutdown()
 }
 
 ; Event handlers
 LS_GuiClose_Handler(guiObj) {
+    LS_GuiShutdown()
+}
+
+LS_GuiShutdown(*) {
     global LS_GUI
-    guiObj.Destroy()
+    SetTimer(LS_GuiRefreshStatus_Timer, 0)
     LS_GUI := ""
-    ExitApp
+    ExitApp(0)
 }
 
 LS_GuiRefreshStatus_Handler(ctrl, info) {
