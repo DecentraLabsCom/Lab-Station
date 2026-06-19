@@ -63,9 +63,9 @@ if (-not $firewall) {
     } catch {}
 }
 $allowUnencrypted = $false
-$ntlmAuth = $false
+$negotiateAuth = $false
 try { $allowUnencrypted = [bool](Get-Item WSMan:\localhost\Service\AllowUnencrypted -ErrorAction SilentlyContinue).Value } catch {}
-try { $ntlmAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\NTLM -ErrorAction SilentlyContinue).Value } catch {}
+try { $negotiateAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\Negotiate -ErrorAction SilentlyContinue).Value } catch {}
 [pscustomobject]@{
     serviceInstalled = [bool]$svc
     serviceRunning = ($svc.Status -eq 'Running')
@@ -73,7 +73,8 @@ try { $ntlmAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\NTLM -ErrorActio
     httpListener = [bool]$listener
     firewallEnabled = [bool]$firewall
     allowUnencrypted = [bool]$allowUnencrypted
-    ntlmAuth = [bool]$ntlmAuth
+    negotiateAuth = [bool]$negotiateAuth
+    ntlmAuth = [bool]$negotiateAuth
 } | ConvertTo-Json -Compress
         )"
         capture := LS_RunPowerShellCapture(script, "Query WinRM status")
@@ -90,6 +91,7 @@ try { $ntlmAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\NTLM -ErrorActio
                 "httpListener", false,
                 "firewallEnabled", false,
                 "allowUnencrypted", false,
+                "negotiateAuth", false,
                 "ntlmAuth", false,
                 "ready", false
             )
@@ -101,7 +103,7 @@ try { $ntlmAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\NTLM -ErrorActio
                 && status["httpListener"]
                 && status["firewallEnabled"]
                 && status["allowUnencrypted"]
-                && status["ntlmAuth"]
+                && status["negotiateAuth"]
             )
             return status
         } catch as e {
@@ -129,12 +131,25 @@ try {
     throw ('Unable to set Public network profile(s) to Private for WinRM firewall rules: ' + $_.Exception.Message)
 }
 
+function Set-WinRMConfigBool([string]$Path, [bool]$Value, [string]$WinRMPath, [string]$Key) {
+    try {
+        if (Test-Path $Path) {
+            Set-Item -Path $Path -Value $Value -ErrorAction Stop
+            return
+        }
+    } catch {}
+    $textValue = if ($Value) { 'true' } else { 'false' }
+    & winrm set $WinRMPath "@{$Key=`"$textValue`"}" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw ('winrm set failed for ' + $WinRMPath + '/' + $Key + ' with exit code ' + $LASTEXITCODE) }
+}
+
 Set-Service -Name WinRM -StartupType Automatic
+Start-Service -Name WinRM
+& winrm quickconfig -quiet | Out-Null
 Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
-Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true
-Set-Item -Path WSMan:\localhost\Service\Auth\NTLM -Value $true
-Set-Item -Path WSMan:\localhost\Service\Auth\Negotiate -Value $true
-try { Set-Item -Path WSMan:\localhost\Service\Auth\Kerberos -Value $true } catch {}
+Set-WinRMConfigBool 'WSMan:\localhost\Service\AllowUnencrypted' $true 'winrm/config/service' 'AllowUnencrypted'
+Set-WinRMConfigBool 'WSMan:\localhost\Service\Auth\Negotiate' $true 'winrm/config/service/auth' 'Negotiate'
+try { Set-WinRMConfigBool 'WSMan:\localhost\Service\Auth\Kerberos' $true 'winrm/config/service/auth' 'Kerberos' } catch {}
 try {
     Enable-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction Stop
 } catch {

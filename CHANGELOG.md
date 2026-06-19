@@ -2,6 +2,13 @@
 
 # Changelog
 
+## [3.1.0] - 2026-06-19
+
+### Fixed
+- WinRM setup now avoids the missing `WSMan:\localhost\Service\Auth\NTLM` path on Windows 11 and configures service auth through supported settings.
+- Remote Desktop Users cleanup now preserves the local `LABUSER` account even when Windows reports it as `COMPUTER\LABUSER`.
+- The System Status checking indicator is cleared if diagnostics stop before a final status chip is written.
+
 ## [3.0.9] - 2026-06-19
 
 ### Changed

@@ -166,21 +166,52 @@ Remove-LocalGroupMemberCompat 'S-1-5-32-544' `$User
     }
 
     static EnsureRemoteDesktopRestrictions(user) {
-        script := Format("
+        escaped := this.EscapeForPSSingleQuote(user)
+        template := "
         (
-`$User = '{1}'
-`$group = 'Remote Desktop Users'
+`$ErrorActionPreference = 'Stop'
+`$User = '__LABUSER__'
+
+function Normalize-LocalName([string]`$Name) {
+    if (-not `$Name) { return '' }
+    return (`$Name.Split('\')[-1]).ToLowerInvariant()
+}
+
+function Get-LocalGroupNameCompat([string]`$GroupSid, [string]`$Fallback) {
+    try { return (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name } catch {}
+    try {
+        `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
+        return `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+    } catch {
+        return `$Fallback
+    }
+}
+
+function Add-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
+    try {
+        Add-LocalGroupMember -Group `$Group -Member `$Member -ErrorAction SilentlyContinue
+        return
+    } catch {}
+    & net localgroup `$Group `$Member /add | Out-Null
+}
+
+`$group = Get-LocalGroupNameCompat 'S-1-5-32-555' 'Remote Desktop Users'
+`$targetLower = Normalize-LocalName `$User
+Add-LocalGroupMemberCompat `$group `$User
 `$members = Get-LocalGroupMember -Group `$group -ErrorAction SilentlyContinue
-foreach (`$member in `$members) {{
-    if (`$member.ObjectClass -eq 'User' -and `$member.Name -ne `$User) {{
-        try {{ Remove-LocalGroupMember -Group `$group -Member `$member.Name -ErrorAction SilentlyContinue }} catch {{}}
-    }}
-}}
-try {{
+foreach (`$member in `$members) {
+    `$memberLower = Normalize-LocalName `$member.Name
+    if (`$member.ObjectClass -eq 'User' -and `$memberLower -ne `$targetLower) {
+        try { Remove-LocalGroupMember -Group `$group -Member `$member.Name -ErrorAction SilentlyContinue } catch {}
+    }
+}
+Add-LocalGroupMemberCompat `$group `$User
+try {
     Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name 'fDenyTSConnections' -Value 0
     New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name 'DisableLockWorkstation' -Value 1 -PropertyType DWORD -Force | Out-Null
-}} catch {{}}
-        )", user)
+} catch {}
+        )"
+        script := StrReplace(template, "__LABUSER__", escaped)
         exitCode := LS_RunPowerShell(script, "Restrict Remote Desktop users")
         if (exitCode != 0) {
             LS_LogError("Unable to adjust Remote Desktop Users membership (exit=" . exitCode . ")")
