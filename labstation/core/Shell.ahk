@@ -59,9 +59,20 @@ LS_RunCommandCapture(command, description := "command") {
     LS_LogInfo("Capturing command output - " . description)
     stdoutPath := A_Temp "\LabStation-" . A_TickCount . "-stdout.txt"
     stderrPath := A_Temp "\LabStation-" . A_TickCount . "-stderr.txt"
+    batchPath := A_Temp "\LabStation-" . A_TickCount . "-capture.cmd"
     try FileDelete(stdoutPath)
     try FileDelete(stderrPath)
-    wrapped := Format('cmd /c "{1} > \"{2}\" 2> \"{3}\""', command, stdoutPath, stderrPath)
+    try FileDelete(batchPath)
+    try {
+        batch := "@echo off`r`n"
+            . command . " > " . LS_CmdQuote(stdoutPath) . " 2> " . LS_CmdQuote(stderrPath) . "`r`n"
+            . "exit /b %ERRORLEVEL%`r`n"
+        FileAppend(batch, batchPath, "CP0")
+    } catch as e {
+        LS_LogError("Cannot write temporary command wrapper: " . e.Message)
+        return Map("exitCode", -1, "stdout", "", "stderr", e.Message)
+    }
+    wrapped := Format('"{1}" /d /s /c ""{2}""', A_ComSpec, batchPath)
     exitCode := RunWait(wrapped, , "Hide")
     stdout := ""
     stderr := ""
@@ -73,5 +84,10 @@ LS_RunCommandCapture(command, description := "command") {
         stderr := ""
     try FileDelete(stdoutPath)
     try FileDelete(stderrPath)
+    try FileDelete(batchPath)
     return Map("exitCode", exitCode, "stdout", stdout, "stderr", stderr)
+}
+
+LS_CmdQuote(value) {
+    return '"' . StrReplace(value, '"', '""') . '"'
 }

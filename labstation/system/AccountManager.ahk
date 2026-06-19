@@ -36,38 +36,86 @@ class LS_AccountManager {
             user := this.DefaultUser
         }
         localPassword := password && password != "" ? password : this.GeneratePassword()
-        script := Format("
+        escapedUser := this.EscapeForPSSingleQuote(user)
+        escapedPassword := this.EscapeForPSSingleQuote(localPassword)
+        script := "
         (
 `$ErrorActionPreference = 'Stop'
-`$User = '{1}'
-`$Password = '{2}'
-`$secure = ConvertTo-SecureString `$Password -AsPlainText -Force
-`$description = 'DecentraLabs Lab Station service account'
-if (-not (Get-LocalUser -Name `$User -ErrorAction SilentlyContinue)) {{
-    New-LocalUser -Name `$User -Password `$secure -PasswordNeverExpires `$true -AccountNeverExpires `$true -Description `$description -UserMayNotChangePassword `$true | Out-Null
-}} else {{
-    Set-LocalUser -Name `$User -Password `$secure -PasswordNeverExpires `$true -UserMayNotChangePassword `$true -AccountNeverExpires `$true -Description `$description
-    Enable-LocalUser -Name `$User -ErrorAction SilentlyContinue | Out-Null
-}}
-`$groupSids = @('S-1-5-32-545', 'S-1-5-32-555')
-foreach (`$sid in `$groupSids) {{
-    try {{
-        `$groupName = (Get-LocalGroup -SID `$sid -ErrorAction Stop).Name
-        Add-LocalGroupMember -Group `$groupName -Member `$User -ErrorAction SilentlyContinue
-    }} catch {{}}
-}}
-try {{ Remove-LocalGroupMember -Group 'Administrators' -Member `$User -ErrorAction SilentlyContinue }} catch {{}}
-if (-not (Get-LocalUser -Name `$User -ErrorAction SilentlyContinue)) {{
-    throw `"Local user `$User was not created`"
-}}
-        )", user, localPassword)
-        exitCode := LS_RunPowerShell(script, "Configure lab service account")
+`$User = '__LABUSER__'
+`$Password = '__LABUSER_PASSWORD__'
+
+function Test-LocalUserCompat([string]`$Name) {
+    try { return [bool](Get-LocalUser -Name `$Name -ErrorAction Stop) } catch {}
+    & net user `$Name *> `$null
+    return `$LASTEXITCODE -eq 0
+}
+
+function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
+    `$secure = ConvertTo-SecureString `$PlainPassword -AsPlainText -Force
+    if (-not (Test-LocalUserCompat `$Name)) {
+        try {
+            New-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -AccountNeverExpires `$true -Description 'DecentraLabs Lab Station service account' -UserMayNotChangePassword `$true | Out-Null
+        } catch {
+            & net user `$Name `$PlainPassword /add /expires:never /passwordchg:no | Out-Null
+            if (`$LASTEXITCODE -ne 0) { throw ('net user add failed with exit code ' + `$LASTEXITCODE) }
+        }
+    } else {
+        try {
+            Set-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -Description 'DecentraLabs Lab Station service account'
+            Enable-LocalUser -Name `$Name -ErrorAction SilentlyContinue | Out-Null
+        } catch {
+            & net user `$Name `$PlainPassword /active:yes /expires:never /passwordchg:no | Out-Null
+            if (`$LASTEXITCODE -ne 0) { throw ('net user update failed with exit code ' + `$LASTEXITCODE) }
+        }
+    }
+    if (-not (Test-LocalUserCompat `$Name)) { throw ('Local user ' + `$Name + ' was not created') }
+}
+
+function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
+    try {
+        `$groupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
+        Add-LocalGroupMember -Group `$groupName -Member `$Member -ErrorAction SilentlyContinue
+        return
+    } catch {}
+    try {
+        `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
+        `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+        & net localgroup `$groupName `$Member /add | Out-Null
+    } catch {}
+}
+
+function Remove-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
+    try {
+        `$groupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
+        Remove-LocalGroupMember -Group `$groupName -Member `$Member -ErrorAction SilentlyContinue
+        return
+    } catch {}
+    try {
+        `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
+        `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+        & net localgroup `$groupName `$Member /delete | Out-Null
+    } catch {}
+}
+
+Ensure-LocalUserCompat `$User `$Password
+Add-LocalGroupMemberCompat 'S-1-5-32-545' `$User
+Add-LocalGroupMemberCompat 'S-1-5-32-555' `$User
+Remove-LocalGroupMemberCompat 'S-1-5-32-544' `$User
+        )"
+        script := StrReplace(script, "__LABUSER__", escapedUser)
+        script := StrReplace(script, "__LABUSER_PASSWORD__", escapedPassword)
+        capture := LS_RunPowerShellCapture(script, "Configure lab service account")
+        exitCode := capture["exitCode"]
         if (exitCode = 0 && this.AccountExists(user)) {
             password := localPassword
             LS_LogInfo(Format("Account {1} created/updated", user))
             return true
         }
-        LS_LogError(Format("Unable to create/configure account {1} (exit={2})", user, exitCode))
+        detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
+        if (detail != "")
+            LS_LogError(Format("Unable to create/configure account {1} (exit={2}): {3}", user, exitCode, detail))
+        else
+            LS_LogError(Format("Unable to create/configure account {1} (exit={2})", user, exitCode))
         return false
     }
 
@@ -238,7 +286,11 @@ if (`$code -ne 0) { throw `"secedit failed with exit code `$code`" }
         escaped := this.EscapeForPSSingleQuote(user)
         script := Format("
         (
-if (Get-LocalUser -Name '{1}' -ErrorAction SilentlyContinue) {{ '1' }}
+try {{
+    if (Get-LocalUser -Name '{1}' -ErrorAction Stop) {{ '1'; exit 0 }}
+}} catch {{}}
+& net user '{1}' *> `$null
+if (`$LASTEXITCODE -eq 0) {{ '1' }}
         )", escaped)
         capture := LS_RunPowerShellCapture(script, "Verify local account")
         return capture["exitCode"] = 0 && InStr(capture["stdout"], "1") > 0

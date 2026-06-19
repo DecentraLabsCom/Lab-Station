@@ -2,6 +2,12 @@
 
 # Changelog
 
+## [3.0.6] - 2026-06-19
+
+### Fixed
+- PowerShell command capture now uses a temporary command wrapper with correct Windows quoting, so setup verification can see real stdout/stderr.
+- Hybrid setup validates `LABUSER` with `net user` fallback and logs concrete account/WinRM setup errors.
+
 ## [3.0.5] - 2026-06-19
 
 ### Fixed

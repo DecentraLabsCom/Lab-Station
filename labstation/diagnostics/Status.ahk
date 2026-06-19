@@ -345,10 +345,14 @@ class LS_Status {
         escaped := StrReplace(user, "'", "''")
         script := Format("
         (
-        if (Get-LocalUser -Name '{1}' -ErrorAction SilentlyContinue) {{ '1' }}
+try {{
+    if (Get-LocalUser -Name '{1}' -ErrorAction Stop) {{ '1'; exit 0 }}
+}} catch {{}}
+& net user '{1}' *> `$null
+if (`$LASTEXITCODE -eq 0) {{ '1' }}
         )", escaped)
         capture := LS_RunPowerShellCapture(script, "Check local user")
-        return InStr(capture["stdout"], "1") > 0
+        return capture["exitCode"] = 0 && InStr(capture["stdout"], "1") > 0
     }
 
     static GetSessionInformation(identity) {

@@ -20,14 +20,19 @@ class LS_WinRM {
         }
         localPassword := password && password != "" ? password : this.GeneratePassword()
         script := this.BuildConfigureScript(user, localPassword)
-        exitCode := LS_RunPowerShell(script, "Configure WinRM for Lab Gateway")
+        capture := LS_RunPowerShellCapture(script, "Configure WinRM for Lab Gateway")
+        exitCode := capture["exitCode"]
         status := exitCode = 0 ? this.GetStatus() : Map("ready", false)
         if (exitCode = 0 && status.Has("ready") && status["ready"]) {
             password := localPassword
             LS_LogInfo("WinRM configured for Lab Gateway user " . user)
             return true
         }
-        LS_LogError("WinRM configuration failed or not ready (exit=" . exitCode . ")")
+        detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
+        if (detail != "")
+            LS_LogError("WinRM configuration failed or not ready (exit=" . exitCode . "): " . detail)
+        else
+            LS_LogError("WinRM configuration failed or not ready (exit=" . exitCode . ")")
         return false
     }
 
@@ -73,7 +78,11 @@ try { $ntlmAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\NTLM -ErrorActio
         )"
         capture := LS_RunPowerShellCapture(script, "Query WinRM status")
         if (capture["exitCode"] != 0 || Trim(capture["stdout"]) = "") {
-            LS_LogWarning("Unable to query WinRM status")
+            detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
+            if (detail != "")
+                LS_LogWarning("Unable to query WinRM status: " . detail)
+            else
+                LS_LogWarning("Unable to query WinRM status")
             return Map(
                 "serviceInstalled", false,
                 "serviceRunning", false,
