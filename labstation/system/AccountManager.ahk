@@ -85,6 +85,50 @@ function Get-AdsiLocalGroupBySid([string]`$GroupSid) {
     return `$null
 }
 
+function Get-CimLocalGroupBySid([string]`$GroupSid) {
+    try { return Get-CimInstance Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    try { return Get-WmiObject Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    return `$null
+}
+
+function Get-CimLocalUser([string]`$Name) {
+    `$safeName = `$Name.Replace("'", "''")
+    try { return Get-CimInstance Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    try { return Get-WmiObject Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    return `$null
+}
+
+function Add-LocalGroupMemberBySidCim([string]`$GroupSid, [string]`$Member) {
+    `$group = Get-CimLocalGroupBySid `$GroupSid
+    `$user = Get-CimLocalUser `$Member
+    if (-not `$group -or -not `$user) { return `$false }
+    try {
+        `$groupPath = 'WinNT://' + `$group.Domain + '/' + `$group.Name + ',group'
+        `$userPath = 'WinNT://' + `$user.Domain + '/' + `$user.Name + ',user'
+        `$adsiGroup = [ADSI]`$groupPath
+        try {
+            if (`$adsiGroup.psbase.Invoke('IsMember', `$userPath)) { return `$true }
+        } catch {}
+        `$adsiGroup.Add(`$userPath)
+        return `$true
+    } catch {
+        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return `$true }
+    }
+    return `$false
+}
+
+function Test-LocalGroupMemberBySidCim([string]`$GroupSid, [string]`$Member) {
+    `$group = Get-CimLocalGroupBySid `$GroupSid
+    `$user = Get-CimLocalUser `$Member
+    if (-not `$group -or -not `$user) { return `$false }
+    try {
+        `$groupPath = 'WinNT://' + `$group.Domain + '/' + `$group.Name + ',group'
+        `$userPath = 'WinNT://' + `$user.Domain + '/' + `$user.Name + ',user'
+        return [bool]([ADSI]`$groupPath).psbase.Invoke('IsMember', `$userPath)
+    } catch {}
+    return `$false
+}
+
 function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
     `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
     `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
@@ -118,6 +162,7 @@ function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
         `$group.Add('WinNT://./' + `$Member + ',user')
         return
     } catch {}
+    if (Add-LocalGroupMemberBySidCim `$GroupSid `$Member) { return }
     throw ('Unable to add ' + `$Member + ' to ' + `$groupName)
 }
 
@@ -154,6 +199,7 @@ function Test-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
         `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
         if (`$group.psbase.Invoke('IsMember', ('WinNT://./' + `$Member + ',user'))) { return `$true }
     } catch {}
+    if (Test-LocalGroupMemberBySidCim `$GroupSid `$Member) { return `$true }
     `$netLines = & net localgroup `$groupName
     `$netText = (`$netLines | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
     return (`$netText -match ('(^|\s|\\)' + [regex]::Escape(`$Member) + '(\s|$)'))
@@ -257,6 +303,8 @@ function Normalize-LocalName([string]`$Name) {
 }
 
 function Get-LocalGroupNameCompat([string]`$GroupSid, [string]`$Fallback) {
+    try { return (Get-CimInstance Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1).Name } catch {}
+    try { return (Get-WmiObject Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1).Name } catch {}
     try { return (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name } catch {}
     try {
         `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
@@ -264,6 +312,50 @@ function Get-LocalGroupNameCompat([string]`$GroupSid, [string]`$Fallback) {
     } catch {
         return `$Fallback
     }
+}
+
+function Get-CimLocalGroupBySid([string]`$GroupSid) {
+    try { return Get-CimInstance Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    try { return Get-WmiObject Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    return `$null
+}
+
+function Get-CimLocalUser([string]`$Name) {
+    `$safeName = `$Name.Replace("'", "''")
+    try { return Get-CimInstance Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    try { return Get-WmiObject Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    return `$null
+}
+
+function Add-LocalGroupMemberBySidCim([string]`$GroupSid, [string]`$Member) {
+    `$group = Get-CimLocalGroupBySid `$GroupSid
+    `$user = Get-CimLocalUser `$Member
+    if (-not `$group -or -not `$user) { return `$false }
+    try {
+        `$groupPath = 'WinNT://' + `$group.Domain + '/' + `$group.Name + ',group'
+        `$userPath = 'WinNT://' + `$user.Domain + '/' + `$user.Name + ',user'
+        `$adsiGroup = [ADSI]`$groupPath
+        try {
+            if (`$adsiGroup.psbase.Invoke('IsMember', `$userPath)) { return `$true }
+        } catch {}
+        `$adsiGroup.Add(`$userPath)
+        return `$true
+    } catch {
+        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return `$true }
+    }
+    return `$false
+}
+
+function Test-LocalGroupMemberBySidCim([string]`$GroupSid, [string]`$Member) {
+    `$group = Get-CimLocalGroupBySid `$GroupSid
+    `$user = Get-CimLocalUser `$Member
+    if (-not `$group -or -not `$user) { return `$false }
+    try {
+        `$groupPath = 'WinNT://' + `$group.Domain + '/' + `$group.Name + ',group'
+        `$userPath = 'WinNT://' + `$user.Domain + '/' + `$user.Name + ',user'
+        return [bool]([ADSI]`$groupPath).psbase.Invoke('IsMember', `$userPath)
+    } catch {}
+    return `$false
 }
 
 function Add-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
@@ -287,6 +379,7 @@ function Add-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
         `$adsiGroup.Add('WinNT://./' + `$Member + ',user')
         return
     } catch {}
+    if (Add-LocalGroupMemberBySidCim 'S-1-5-32-555' `$Member) { return }
     throw ('Unable to add ' + `$Member + ' to ' + `$Group)
 }
 
@@ -304,6 +397,7 @@ function Test-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
         `$adsiGroup = [ADSI]('WinNT://./' + `$Group + ',group')
         if (`$adsiGroup.psbase.Invoke('IsMember', ('WinNT://./' + `$Member + ',user'))) { return `$true }
     } catch {}
+    if (Test-LocalGroupMemberBySidCim 'S-1-5-32-555' `$Member) { return `$true }
     `$netLines = & net localgroup `$Group
     `$netText = (`$netLines | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
     return (`$netText -match ('(^|\s|\\)' + [regex]::Escape(`$Member) + '(\s|$)'))

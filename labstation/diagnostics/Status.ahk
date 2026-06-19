@@ -225,6 +225,17 @@ try { `$targetSid = (Get-LocalUser -Name `$targetUser -ErrorAction Stop).SID.Val
 function Get-SidValue(`$Value) {
     try { return (New-Object System.Security.Principal.SecurityIdentifier(`$Value, 0)).Value } catch { return '' }
 }
+function Get-CimLocalGroupBySid([string]`$GroupSid) {
+    try { return Get-CimInstance Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    try { return Get-WmiObject Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    return `$null
+}
+function Get-CimLocalUser([string]`$Name) {
+    `$safeName = `$Name.Replace("'", "''")
+    try { return Get-CimInstance Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    try { return Get-WmiObject Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
+    return `$null
+}
 try {
     Get-LocalGroupMember -Group `$groupName -ErrorAction Stop |
         Where-Object { `$_.ObjectClass -eq 'User' } |
@@ -246,6 +257,27 @@ try {
                 if (`$name) { [void]`$names.Add([string]`$name) }
             }
         } catch {}
+    }
+} catch {}
+try {
+    `$cimGroup = Get-CimLocalGroupBySid 'S-1-5-32-555'
+    `$cimUser = Get-CimLocalUser `$targetUser
+    if (`$cimGroup) {
+        `$groupPath = 'WinNT://' + `$cimGroup.Domain + '/' + `$cimGroup.Name + ',group'
+        `$adsiGroup = [ADSI]`$groupPath
+        `$userPath = ''
+        if (`$cimUser) { `$userPath = 'WinNT://' + `$cimUser.Domain + '/' + `$cimUser.Name + ',user' }
+        if (`$userPath) {
+            try {
+                if (`$adsiGroup.psbase.Invoke('IsMember', `$userPath)) { `$targetIsMember = `$true }
+            } catch {}
+        }
+        `$adsiGroup.psbase.Invoke('Members') | ForEach-Object {
+            `$name = `$_.GetType().InvokeMember('Name', 'GetProperty', `$null, `$_, `$null)
+            `$sid = Get-SidValue `$_.GetType().InvokeMember('objectSid', 'GetProperty', `$null, `$_, `$null)
+            if (`$targetSid -and `$sid -eq `$targetSid) { `$targetIsMember = `$true }
+            if (`$name) { [void]`$names.Add([string]`$name) }
+        }
     }
 } catch {}
 try {
