@@ -220,10 +220,15 @@ try {
 }
 `$names = New-Object System.Collections.Generic.List[string]
 `$targetIsMember = `$false
+`$targetSid = ''
+try { `$targetSid = (Get-LocalUser -Name `$targetUser -ErrorAction Stop).SID.Value } catch {}
 try {
     Get-LocalGroupMember -Group `$groupName -ErrorAction Stop |
         Where-Object { `$_.ObjectClass -eq 'User' } |
-        ForEach-Object { if (`$_.Name) { [void]`$names.Add([string]`$_.Name) } }
+        ForEach-Object {
+            if (`$targetSid -and `$_.SID -and `$_.SID.Value -eq `$targetSid) { `$targetIsMember = `$true }
+            if (`$_.Name) { [void]`$names.Add([string]`$_.Name) }
+        }
 } catch {}
 try {
     `$group = [ADSI]('WinNT://./' + `$groupName + ',group')

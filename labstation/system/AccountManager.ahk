@@ -72,21 +72,52 @@ function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
 }
 
 function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
+    `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
+    `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+    `$memberSid = ''
+    try { `$memberSid = (Get-LocalUser -Name `$Member -ErrorAction Stop).SID.Value } catch {}
+    `$memberCandidates = @(`$Member, ('.\' + `$Member), (`$env:COMPUTERNAME + '\' + `$Member))
+    if (`$memberSid) { `$memberCandidates += `$memberSid }
     try {
-        `$groupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
-        Add-LocalGroupMember -Group `$groupName -Member `$Member -ErrorAction Stop
+        `$localGroupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
+        foreach (`$candidate in `$memberCandidates) {
+            try { Add-LocalGroupMember -Group `$localGroupName -Member `$candidate -ErrorAction Stop; return } catch {
+                if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
+            }
+        }
+    } catch {}
+    foreach (`$candidate in `$memberCandidates) {
+        & net localgroup `$groupName `$candidate /add | Out-Null
+        if (`$LASTEXITCODE -eq 0) { return }
+    }
+    try {
+        `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
+        `$group.Add('WinNT://./' + `$Member + ',user')
         return
-    } catch {
-        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
-    }
+    } catch {}
+    throw ('Unable to add ' + `$Member + ' to ' + `$groupName)
+}
+
+function Test-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
+    `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
+    `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+    `$memberSid = ''
+    try { `$memberSid = (Get-LocalUser -Name `$Member -ErrorAction Stop).SID.Value } catch {}
     try {
-        `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
-        `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-        & net localgroup `$groupName `$Member /add | Out-Null
-        if (`$LASTEXITCODE -ne 0 -and `$LASTEXITCODE -ne 2) { throw ('net localgroup add failed with exit code ' + `$LASTEXITCODE) }
-    } catch {
-        throw
-    }
+        `$localGroupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
+        `$members = Get-LocalGroupMember -Group `$localGroupName -ErrorAction Stop
+        foreach (`$entry in `$members) {
+            if (`$memberSid -and `$entry.SID -and `$entry.SID.Value -eq `$memberSid) { return `$true }
+            if (`$entry.Name -and `$entry.Name.Split('\')[-1].ToLowerInvariant() -eq `$Member.ToLowerInvariant()) { return `$true }
+        }
+    } catch {}
+    try {
+        `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
+        if (`$group.psbase.Invoke('IsMember', ('WinNT://./' + `$Member + ',user'))) { return `$true }
+    } catch {}
+    `$netLines = & net localgroup `$groupName
+    `$netText = (`$netLines | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
+    return (`$netText -match ('(^|\s|\\)' + [regex]::Escape(`$Member) + '(\s|$)'))
 }
 
 function Remove-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
@@ -107,9 +138,7 @@ Add-LocalGroupMemberCompat 'S-1-5-32-545' `$User
 Add-LocalGroupMemberCompat 'S-1-5-32-555' `$User
 Remove-LocalGroupMemberCompat 'S-1-5-32-544' `$User
 `$rdpGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-555')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-`$rdpMembers = & net localgroup `$rdpGroup
-`$rdpMembersText = (`$rdpMembers | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
-if (`$rdpMembersText -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
+if (-not (Test-LocalGroupMemberCompat 'S-1-5-32-555' `$User)) {
     throw ('Local user ' + `$User + ' is not listed in ' + `$rdpGroup)
 }
         )"
@@ -199,14 +228,46 @@ function Get-LocalGroupNameCompat([string]`$GroupSid, [string]`$Fallback) {
 }
 
 function Add-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
+    `$memberSid = ''
+    try { `$memberSid = (Get-LocalUser -Name `$Member -ErrorAction Stop).SID.Value } catch {}
+    `$memberCandidates = @(`$Member, ('.\' + `$Member), (`$env:COMPUTERNAME + '\' + `$Member))
+    if (`$memberSid) { `$memberCandidates += `$memberSid }
     try {
-        Add-LocalGroupMember -Group `$Group -Member `$Member -ErrorAction Stop
-        return
-    } catch {
-        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
+        foreach (`$candidate in `$memberCandidates) {
+            try { Add-LocalGroupMember -Group `$Group -Member `$candidate -ErrorAction Stop; return } catch {
+                if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
+            }
+        }
+    } catch {}
+    foreach (`$candidate in `$memberCandidates) {
+        & net localgroup `$Group `$candidate /add | Out-Null
+        if (`$LASTEXITCODE -eq 0) { return }
     }
-    & net localgroup `$Group `$Member /add | Out-Null
-    if (`$LASTEXITCODE -ne 0 -and `$LASTEXITCODE -ne 2) { throw ('net localgroup add failed with exit code ' + `$LASTEXITCODE) }
+    try {
+        `$adsiGroup = [ADSI]('WinNT://./' + `$Group + ',group')
+        `$adsiGroup.Add('WinNT://./' + `$Member + ',user')
+        return
+    } catch {}
+    throw ('Unable to add ' + `$Member + ' to ' + `$Group)
+}
+
+function Test-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
+    `$memberSid = ''
+    try { `$memberSid = (Get-LocalUser -Name `$Member -ErrorAction Stop).SID.Value } catch {}
+    try {
+        `$members = Get-LocalGroupMember -Group `$Group -ErrorAction Stop
+        foreach (`$entry in `$members) {
+            if (`$memberSid -and `$entry.SID -and `$entry.SID.Value -eq `$memberSid) { return `$true }
+            if (`$entry.Name -and `$entry.Name.Split('\')[-1].ToLowerInvariant() -eq `$Member.ToLowerInvariant()) { return `$true }
+        }
+    } catch {}
+    try {
+        `$adsiGroup = [ADSI]('WinNT://./' + `$Group + ',group')
+        if (`$adsiGroup.psbase.Invoke('IsMember', ('WinNT://./' + `$Member + ',user'))) { return `$true }
+    } catch {}
+    `$netLines = & net localgroup `$Group
+    `$netText = (`$netLines | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
+    return (`$netText -match ('(^|\s|\\)' + [regex]::Escape(`$Member) + '(\s|$)'))
 }
 
 `$group = Get-LocalGroupNameCompat 'S-1-5-32-555' 'Remote Desktop Users'
@@ -221,8 +282,7 @@ foreach (`$member in `$members) {
 }
 Add-LocalGroupMemberCompat `$group `$User
 `$finalMembers = & net localgroup `$group
-`$finalMembersText = (`$finalMembers | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
-if (`$finalMembersText -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
+if (-not (Test-LocalGroupMemberCompat `$group `$User)) {
     throw ('Local user ' + `$User + ' is not listed in ' + `$group)
 }
 try {
