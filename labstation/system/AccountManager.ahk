@@ -71,6 +71,20 @@ function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
     if (-not (Test-LocalUserCompat `$Name)) { throw ('Local user ' + `$Name + ' was not created') }
 }
 
+function Get-AdsiLocalGroupBySid([string]`$GroupSid) {
+    try {
+        `$computer = [ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')
+        foreach (`$child in `$computer.Children) {
+            try {
+                if (`$child.SchemaClassName -ne 'Group') { continue }
+                `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$child.objectSid.Value, 0)
+                if (`$sid.Value -eq `$GroupSid) { return `$child }
+            } catch {}
+        }
+    } catch {}
+    return `$null
+}
+
 function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
     `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
     `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
@@ -91,6 +105,15 @@ function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
         if (`$LASTEXITCODE -eq 0) { return }
     }
     try {
+        `$group = Get-AdsiLocalGroupBySid `$GroupSid
+        if (`$group) {
+            `$group.Add('WinNT://' + `$env:COMPUTERNAME + '/' + `$Member + ',user')
+            return
+        }
+    } catch {
+        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
+    }
+    try {
         `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
         `$group.Add('WinNT://./' + `$Member + ',user')
         return
@@ -109,6 +132,22 @@ function Test-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
         foreach (`$entry in `$members) {
             if (`$memberSid -and `$entry.SID -and `$entry.SID.Value -eq `$memberSid) { return `$true }
             if (`$entry.Name -and `$entry.Name.Split('\')[-1].ToLowerInvariant() -eq `$Member.ToLowerInvariant()) { return `$true }
+        }
+    } catch {}
+    try {
+        `$group = Get-AdsiLocalGroupBySid `$GroupSid
+        if (`$group) {
+            `$members = `$group.psbase.Invoke('Members')
+            foreach (`$entry in `$members) {
+                try {
+                    `$entrySid = New-Object System.Security.Principal.SecurityIdentifier(`$entry.GetType().InvokeMember('objectSid', 'GetProperty', `$null, `$entry, `$null), 0)
+                    if (`$memberSid -and `$entrySid.Value -eq `$memberSid) { return `$true }
+                } catch {}
+                try {
+                    `$entryName = `$entry.GetType().InvokeMember('Name', 'GetProperty', `$null, `$entry, `$null)
+                    if (`$entryName -and `$entryName.ToLowerInvariant() -eq `$Member.ToLowerInvariant()) { return `$true }
+                } catch {}
+            }
         }
     } catch {}
     try {

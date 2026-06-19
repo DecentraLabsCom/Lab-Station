@@ -222,6 +222,9 @@ try {
 `$targetIsMember = `$false
 `$targetSid = ''
 try { `$targetSid = (Get-LocalUser -Name `$targetUser -ErrorAction Stop).SID.Value } catch {}
+function Get-SidValue(`$Value) {
+    try { return (New-Object System.Security.Principal.SecurityIdentifier(`$Value, 0)).Value } catch { return '' }
+}
 try {
     Get-LocalGroupMember -Group `$groupName -ErrorAction Stop |
         Where-Object { `$_.ObjectClass -eq 'User' } |
@@ -229,6 +232,21 @@ try {
             if (`$targetSid -and `$_.SID -and `$_.SID.Value -eq `$targetSid) { `$targetIsMember = `$true }
             if (`$_.Name) { [void]`$names.Add([string]`$_.Name) }
         }
+} catch {}
+try {
+    `$computer = [ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')
+    foreach (`$child in `$computer.Children) {
+        try {
+            if (`$child.SchemaClassName -ne 'Group') { continue }
+            if ((Get-SidValue `$child.objectSid.Value) -ne 'S-1-5-32-555') { continue }
+            `$child.psbase.Invoke('Members') | ForEach-Object {
+                `$name = `$_.GetType().InvokeMember('Name', 'GetProperty', `$null, `$_, `$null)
+                `$sid = Get-SidValue `$_.GetType().InvokeMember('objectSid', 'GetProperty', `$null, `$_, `$null)
+                if (`$targetSid -and `$sid -eq `$targetSid) { `$targetIsMember = `$true }
+                if (`$name) { [void]`$names.Add([string]`$name) }
+            }
+        } catch {}
+    }
 } catch {}
 try {
     `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
@@ -259,6 +277,8 @@ if (`$targetIsMember) { [void]`$names.Add(`$targetUser) }
         members := this.ParseLines(capture["stdout"])
         state["members"] := members
         state["labUserPresent"] := this.ContainsUser(members, targetUser)
+        state["queryExitCode"] := capture["exitCode"]
+        state["queryError"] := Trim(capture["stderr"])
         others := []
         for name in members {
             if (!this.EqualsUser(name, targetUser))
