@@ -6,6 +6,7 @@
 #Include ..\core\Logger.ahk
 #Include ..\core\Admin.ahk
 #Include ..\core\Shell.ahk
+#Include ..\core\Json.ahk
 
 class LS_ServiceManager {
     static TaskName := "LabStation\BackgroundService"
@@ -59,5 +60,44 @@ class LS_ServiceManager {
         cmd := Format('schtasks /query /TN "{1}" /FO LIST /V', this.TaskName)
         capture := LS_RunCommandCapture(cmd, "Query Lab Station task")
         return capture["stdout"] ? capture["stdout"] : capture["stderr"]
+    }
+
+    static GetStatus() {
+        script := "
+        (
+$taskPath = '\LabStation\'
+$taskName = 'BackgroundService'
+try {
+    $task = Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction Stop
+    [pscustomobject]@{
+        installed = $true
+        state = [string]$task.State
+        running = ([string]$task.State -eq 'Running')
+        restartable = $true
+    } | ConvertTo-Json -Compress
+} catch {
+    [pscustomobject]@{
+        installed = $false
+        state = 'Not installed'
+        running = $false
+        restartable = $false
+    } | ConvertTo-Json -Compress
+}
+        )"
+        capture := LS_RunPowerShellCapture(script, "Query Lab Station scheduled task")
+        if (capture["exitCode"] != 0 || Trim(capture["stdout"]) = "") {
+            return Map("installed", false, "state", "Unknown", "running", false, "restartable", false)
+        }
+        try {
+            parsed := LS_ParseJson(capture["stdout"])
+            return Map(
+                "installed", parsed.Has("installed") && parsed["installed"],
+                "state", parsed.Has("state") ? parsed["state"] : "Unknown",
+                "running", parsed.Has("running") && parsed["running"],
+                "restartable", parsed.Has("restartable") && parsed["restartable"]
+            )
+        } catch {
+            return Map("installed", false, "state", "Unknown", "running", false, "restartable", false)
+        }
     }
 }

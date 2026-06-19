@@ -359,35 +359,10 @@ LS_GuiPublishStatus(status := "") {
 }
 
 LS_GuiGetServiceStatus() {
-    result := Map("installed", false, "running", false, "label", "Not installed", "unknown", true, "restartable", false)
-    capture := LS_ServiceManager.StatusText()
-    label := Trim(capture)
-    lowerCapture := StrLower(label)
-    if (InStr(lowerCapture, "cannot find") > 0
-        || InStr(lowerCapture, "no puede encontrar") > 0
-        || InStr(lowerCapture, "no se encuentra") > 0) {
-        result["label"] := "Not installed"
-        result["unknown"] := false
-        return result
-    }
-    if (InStr(lowerCapture, "nombre de archivo") > 0
-        || InStr(lowerCapture, "filename") > 0
-        || InStr(lowerCapture, "syntax") > 0) {
-        result["label"] := "Not installed"
-        result["unknown"] := false
-        return result
-    }
-    hasStatusLine := RegExMatch(capture, "Status:\\s*([^\\r\\n]+)", &m)
-    label := hasStatusLine ? Trim(m[1]) : ""
-    lower := StrLower(label)
-    running := InStr(lower, "running") > 0
-    installed := hasStatusLine && label != ""
-    result["installed"] := installed
-    result["running"] := running
-    result["label"] := installed ? "Installed" : "Not installed"
-    result["unknown"] := false
-    result["restartable"] := installed
-    return result
+    status := LS_ServiceManager.GetStatus()
+    status["label"] := status["installed"] ? "Installed" : "Not installed"
+    status["unknown"] := false
+    return status
 }
 
 LS_GuiRefreshServiceState(gui) {

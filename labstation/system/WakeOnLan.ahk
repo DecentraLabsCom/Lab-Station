@@ -25,8 +25,12 @@ foreach (`$adapter in `$adapters) {
     } catch {
     }
     try {
+        Set-NetAdapterPowerManagement -Name `$adapter.Name -WakeOnMagicPacket Enabled -WakeOnPattern Disabled -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+    }
+    try {
         Set-NetAdapterAdvancedProperty -Name `$adapter.Name -DisplayName 'Wake on Magic Packet' -DisplayValue 'Enabled' -ErrorAction SilentlyContinue
-        Set-NetAdapterAdvancedProperty -Name `$adapter.Name -DisplayName 'Wake on pattern match' -DisplayValue 'Enabled' -ErrorAction SilentlyContinue
+        Set-NetAdapterAdvancedProperty -Name `$adapter.Name -DisplayName 'Wake on pattern match' -DisplayValue 'Disabled' -ErrorAction SilentlyContinue
     } catch {
     }
 }

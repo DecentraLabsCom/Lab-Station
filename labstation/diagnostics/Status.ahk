@@ -311,7 +311,7 @@ class LS_Status {
             return Known[cleaned]
         if (RegExMatch(cleaned, "^S-\d-"))
             return cleaned
-        if (InStr(cleaned, "\\"))
+        if (InStr(cleaned, "\"))
             return cleaned
         return normalized != "" ? normalized : cleaned
     }
@@ -336,7 +336,7 @@ class LS_Status {
             return ""
         if (SubStr(cleaned, 1, 1) = "*")
             cleaned := SubStr(cleaned, 2)
-        lastSlash := InStr(cleaned, "\\", , -1)
+        lastSlash := InStr(cleaned, "\", , -1)
         if (lastSlash > 0)
             cleaned := SubStr(cleaned, lastSlash + 1)
         return cleaned
