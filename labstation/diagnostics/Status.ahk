@@ -10,6 +10,7 @@
 #Include ..\system\AccountManager.ahk
 #Include ..\system\WinRM.ahk
 #Include ..\service\ServiceState.ahk
+#Include ..\service\FmuExecutor.ahk
 #Include ..\system\EnergyAudit.ahk
 
 class LS_Status {
