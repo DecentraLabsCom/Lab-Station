@@ -9,6 +9,7 @@
 #Include ..\system\WakeOnLan.ahk
 #Include ..\system\Autostart.ahk
 #Include ..\system\AccountManager.ahk
+#Include ..\system\WinRM.ahk
 #Include ..\diagnostics\Status.ahk
 
 LS_RunSetupWizard() {
@@ -74,6 +75,7 @@ LS_WizardServerSteps() {
         Map("label", "Create/configure LABUSER + Autologon", "action", (*) => LS_WizardAccountServer()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
+        Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Register AppControl autostart", "action", (*) => LS_WizardAutostartServer()),
         Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
@@ -84,6 +86,7 @@ LS_WizardHybridSteps() {
         Map("label", "Create/update LABUSER (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
+        Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Register autostart only for LABUSER", "action", (*) => LS_WizardAutostartHybrid()),
         Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
@@ -124,6 +127,19 @@ LS_WizardShowAccountInfo(password, autologon := false) {
         text .= "`nUse these credentials when Lab Gateway prepares remote sessions."
     }
     MsgBox text, "Lab Station", "OK Iconi"
+}
+
+LS_WizardWinRM() {
+    pass := ""
+    if (LS_WinRM.Configure("", &pass)) {
+        text := "WinRM is ready for Lab Gateway operations." . "`n`n"
+        text .= "User: .\" . LS_WinRM.DefaultGatewayUser . "`n"
+        text .= "Password: " . pass . "`n`n"
+        text .= "Store these in the Lab Gateway ops-worker environment as the host-specific WINRM_USER_* and WINRM_PASS_* values."
+        MsgBox text, "Lab Station", "OK Iconi"
+        return true
+    }
+    return false
 }
 
 LS_WizardAutostartServer() {

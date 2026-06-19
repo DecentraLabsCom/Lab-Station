@@ -45,8 +45,8 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 
 ### 🚀 Lab Station highlights
 
-- **Guided setup wizard**: Applies RemoteApp policy (`fAllowUnlistedRemotePrograms`), Wake-on-LAN tweaks, autostart entries, and verifies admin privileges.
-- **One-off commands**: Run `remoteapp`, `wol`, `autostart`, `launch-app-control`, or `diagnostics` individually from the CLI without stepping through the wizard.
+- **Guided setup wizard**: Applies RemoteApp policy (`fAllowUnlistedRemotePrograms`), Wake-on-LAN tweaks, WinRM for Lab Gateway operations, autostart entries, and verifies admin privileges.
+- **One-off commands**: Run `remoteapp`, `wol`, `winrm`, `autostart`, `launch-app-control`, or `diagnostics` individually from the CLI without stepping through the wizard.
 - **Diagnostics export**: `status`/`status-json` produce both a human summary and a JSON blob (`labstation/data/status.json`) with RemoteApp/WoL/autostart health, NIC power compliance (`wake.nicPower`), power-plan timeouts (`power.sleep`/`power.hibernate`), plus hybrid fields (`localSessionActive`, `localModeEnabled`, `lastForcedLogoff`).
 - **Tray UI**: Optional background tray icon showing live status, shortcuts to logs, wizard, and manual export.
 - **Background service**: `service install|start|stop|status` provisions a Windows Scheduled Task that keeps diagnostics fresh even when nobody is logged on.
@@ -67,9 +67,10 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 
 | Command | Description |
 | --- | --- |
-| `setup` | Guided wizard that chains RemoteApp policy, Wake-on-LAN tweaks, autostart registration, diagnostics export, and service prompt. |
+| `setup` | Guided wizard that chains RemoteApp policy, Wake-on-LAN tweaks, WinRM setup, autostart registration, diagnostics export, and service prompt. |
 | `remoteapp` | Sets `fAllowUnlistedRemotePrograms` and related HKLM keys for RemoteApp. |
 | `wol` | Configures adapters and power plan settings required for Wake-on-LAN. |
+| `winrm [configure|status]` | Enables WinRM HTTP for the lab VLAN pilot, opens Windows Remote Management firewall rules, creates/updates `.\LabGatewaySvc`, and reports readiness. |
 | `autostart [path]` | Registers AppControl (EXE or AHK) under HKLM\Run; optional custom path overrides bundle location. |
 | `launch-app-control [...]` | Pass-through launcher that proxies CLI args to the bundled controller. |
 | `account [create|autologon|lockdown|setup] [user] [password]` | Creates the lab account, refreshes autologon (DefaultUserName/Password), and `lockdown` now enforces `SeDenyInteractiveLogonRight` for every other local user. |
@@ -120,7 +121,7 @@ reboot-timeout=20
   ```
 - Processed instructions are archived to `labstation/data/commands/processed/` so the backend can audit what happened; results stay in `.../results/` for collection.
 
-This queue gives Lab Gateway two integration choices: fire `LabStation.exe ...` directly over WinRM for synchronous operations, or drop a command file (via SMB/WinRM copy) and let the service pick it up asynchronously.
+This queue gives Lab Gateway two integration choices: fire `LabStation.exe ...` directly over WinRM for synchronous operations, or drop a command file (via SMB/WinRM copy) and let the service pick it up asynchronously. The setup wizard and `winrm configure` command prepare the station-side WinRM listener and print the generated `LabGatewaySvc` credentials that must be stored in Lab Gateway ops-worker as `WINRM_USER_*` and `WINRM_PASS_*`.
 
 For hardware-specific BIOS guidance and WoL validation steps, see `labstation/docs/bios-wol-playbook.md`.
 

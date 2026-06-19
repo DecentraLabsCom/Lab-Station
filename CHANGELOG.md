@@ -2,6 +2,15 @@
 
 # Changelog
 
+## [3.0.3] - 2026-06-19
+
+### Added
+- Setup wizard now configures WinRM for dedicated and hybrid stations, including the station-side Lab Gateway service account and readiness diagnostics.
+- `LabStation.exe winrm configure|status` command for repeatable WinRM setup and inspection.
+
+### Changed
+- Lab Station and LabStationPanel build versions updated to 3.0.3.
+
 ## [3.0.0] - 2025-11-21
 
 ### Added

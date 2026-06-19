@@ -14,6 +14,8 @@
 ; Entry point for LabStation.exe gui
 LS_StartMainGui() {
     global LS_GUI
+    ; Keep process alive when the window is hidden to tray.
+    Persistent(True)
     if (IsSet(LS_GUI) && LS_GUI && LS_GUI.Visible) {
         LS_GUI.Show()
         return
@@ -110,7 +112,7 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.0")
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.3")
     refreshBtn.Focus()
 
     myGui.OnEvent("Close", (*) => myGui.Destroy())
@@ -343,6 +345,8 @@ LS_GuiToggleLocalMode(gui) {
 
 LS_EnsureTrayMenu() {
     static trayReady := false
+    A_IconHidden := false
+    A_IconTip := "Lab Station"
     if (trayReady)
         return
     ; Set tray icon if available

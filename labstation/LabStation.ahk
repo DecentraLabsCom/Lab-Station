@@ -13,6 +13,7 @@
 #Include system\WakeOnLan.ahk
 #Include system\Autostart.ahk
 #Include system\AccountManager.ahk
+#Include system\WinRM.ahk
 #Include system\EnergyAudit.ahk
 #Include system\PowerManager.ahk
 #Include system\ServiceManager.ahk
@@ -54,6 +55,8 @@ LabStationMain(args) {
             LS_RegistryManager.SetRemoteAppPolicy()
         case "wol":
             LS_WakeOnLan.Configure()
+        case "winrm":
+            LS_HandleWinRMCommand(remaining)
         case "autostart":
             target := remaining.Length >= 1 ? remaining[1] : ""
             if (target != "") {
@@ -110,6 +113,7 @@ LS_ShowHelp() {
         "  LabStation.exe setup                 # Interactive wizard" . "`n" .
         "  LabStation.exe remoteapp            # Configure fAllowUnlistedRemotePrograms" . "`n" .
         "  LabStation.exe wol                  # Configure Wake-on-LAN" . "`n" .
+        "  LabStation.exe winrm [configure|status] # Configure or inspect WinRM" . "`n" .
         "  LabStation.exe autostart [path]     # Register controller autostart" . "`n" .
         "  LabStation.exe status               # Quick summary" . "`n" .
         "  LabStation.exe status-json [path]   # Export diagnostics" . "`n" .
@@ -126,6 +130,28 @@ LS_ShowHelp() {
         "  LabStation.exe fmu-executor [start|stop|restart|status]" . "`n" .
         "  LabStation.exe energy audit [--json=path]" . "`n"
     MsgBox text, "Lab Station", "OK"
+}
+
+LS_HandleWinRMCommand(args) {
+    action := args.Length >= 1 ? StrLower(args[1]) : "status"
+    switch action {
+        case "configure":
+            pass := ""
+            if (LS_WinRM.Configure("", &pass)) {
+                MsgBox "WinRM configured.`nUser: .\" . LS_WinRM.DefaultGatewayUser . "`nPassword: " . pass, "Lab Station", "OK Iconi"
+            } else {
+                MsgBox "WinRM configuration failed", "Lab Station", "OK Iconx"
+            }
+        case "status":
+            status := LS_WinRM.GetStatus()
+            text := "Ready: " . (status.Has("ready") && status["ready"] ? "yes" : "no") . "`n"
+            text .= "Service running: " . (status.Has("serviceRunning") && status["serviceRunning"] ? "yes" : "no") . "`n"
+            text .= "HTTP listener: " . (status.Has("httpListener") && status["httpListener"] ? "yes" : "no") . "`n"
+            text .= "Firewall enabled: " . (status.Has("firewallEnabled") && status["firewallEnabled"] ? "yes" : "no")
+            MsgBox text, "Lab Station - WinRM"
+        default:
+            MsgBox "Usage: LabStation.exe winrm [configure|status]", "Lab Station", "OK Iconi"
+    }
 }
 
 LS_LaunchAppControl(args) {

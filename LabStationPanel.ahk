@@ -5,6 +5,10 @@
 #SingleInstance Force
 
 ;@Ahk2Exe-SetMainIcon img\favicon.ico
+;@Ahk2Exe-SetName LabStationPanel
+;@Ahk2Exe-SetVersion 3.0.3
+;@Ahk2Exe-SetFileVersion 3.0.3
+;@Ahk2Exe-SetProductVersion 3.0.3
 
 ; Embed logo for compiled builds so the GUI can find it.
 TryExtractLogo() {

@@ -8,6 +8,7 @@
 #Include ..\core\Json.ahk
 #Include ..\system\RegistryManager.ahk
 #Include ..\system\AccountManager.ahk
+#Include ..\system\WinRM.ahk
 #Include ..\service\ServiceState.ahk
 #Include ..\system\EnergyAudit.ahk
 
@@ -18,6 +19,7 @@ class LS_Status {
         data["timestamp"] := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
         data["identity"] := this.GetIdentityInformation()
         data["remoteAppEnabled"] := this.CheckRemoteAppPolicy()
+        data["winrm"] := LS_WinRM.GetStatus()
         data["autoStartConfigured"] := this.CheckRunEntry()
         data["wake"] := this.GetWakeInformation()
         data["power"] := this.GetPowerInformation()
@@ -57,6 +59,7 @@ class LS_Status {
             lines.Push("Issues: " . LS_StrJoin(data["summary"]["issues"], "; "))
         }
         lines.Push("RemoteApp: " . (data["remoteAppEnabled"] ? "OK" : "MISSING"))
+        lines.Push("WinRM: " . (data["winrm"]["ready"] ? "OK" : "MISSING"))
         lines.Push("Autostart: " . (data["autoStartConfigured"] ? "OK" : "MISSING"))
         lines.Push(Format("Wake-capable devices: {1}", data["wake"]["armedCount"]))
         lines.Push("Active power plan: " . data["power"]["activePlan"])
@@ -401,6 +404,8 @@ class LS_Status {
             issues.Push("Lab user not found")
         if (!data["remoteAppEnabled"])
             issues.Push("RemoteApp policy missing")
+        if (!data["winrm"]["ready"])
+            issues.Push("WinRM not ready for Lab Gateway")
         if (!data["autoStartConfigured"])
             issues.Push("Controller autostart missing")
         autoLogon := data["policy"]["autoLogon"]
