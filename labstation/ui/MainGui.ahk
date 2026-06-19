@@ -144,8 +144,9 @@ LS_GuiNeedsSetup(status) {
 LS_GuiRefreshStatus(gui) {
     status := LS_Status.Collect()
     needsSetup := LS_GuiNeedsSetup(status)
-    gui.SetupButton.Enabled := needsSetup
-    gui.SetupButton.Text := needsSetup ? "🛠️ Run Setup Wizard" : "🛠️ Setup already applied"
+    ; The wizard must always be available for reconfiguration or repair runs.
+    gui.SetupButton.Enabled := true
+    gui.SetupButton.Text := needsSetup ? "🛠️ Run Setup Wizard" : "🛠️ Run Setup Wizard again"
     gui.SetupChip.Text := needsSetup ? "(Needs action)" : "(OK)"
     gui.SetupChip.Opt("c" . (needsSetup ? "FFB020" : "9CA3AF"))
 
@@ -351,27 +352,37 @@ LS_EnsureTrayMenu() {
     static trayReady := false
     A_IconHidden := false
     A_IconTip := "Lab Station"
+    LS_SetPanelTrayIcon()
     if (trayReady)
         return
-    ; Set tray icon if available
-    logo := ""
+    A_TrayMenu.Delete()
+    A_TrayMenu.Add("Show Lab Station", LS_TrayShowMainGui_Handler)
+    A_TrayMenu.Add()
+    A_TrayMenu.Add("Exit", LS_GuiExit_Handler)
+    trayReady := true
+}
+
+LS_SetPanelTrayIcon() {
     possible := [
-        A_ScriptDir "\img\DecentraLabs.png",
-        A_ScriptDir "\DecentraLabs.png"
+        LAB_STATION_PROJECT_ROOT "\img\favicon.ico",
+        A_ScriptDir "\img\favicon.ico",
+        A_ScriptDir "\favicon.ico"
     ]
     for p in possible {
         if (FileExist(p)) {
-            logo := p
-            break
+            TraySetIcon(p)
+            return true
         }
     }
-    if (logo != "")
-        TraySetIcon(logo)
-    A_TrayMenu.Delete()
-    A_TrayMenu.Add("Show Lab Station", (*) => LS_StartMainGui())
-    A_TrayMenu.Add()
-    A_TrayMenu.Add("Exit", (*) => ExitApp)
-    trayReady := true
+    return false
+}
+
+LS_TrayShowMainGui_Handler(*) {
+    LS_StartMainGui()
+}
+
+LS_GuiExit_Handler(*) {
+    ExitApp
 }
 
 ; Event handlers
@@ -379,6 +390,7 @@ LS_GuiClose_Handler(guiObj) {
     global LS_GUI
     guiObj.Destroy()
     LS_GUI := ""
+    ExitApp
 }
 
 LS_GuiRefreshStatus_Handler(ctrl, info) {
