@@ -107,15 +107,15 @@ LS_BuildGui() {
     myGui.LocalModeButton := myGui.AddButton("x490 y200 w220 h34", "🔒 Enable local mode")
     myGui.LocalModeButton.OnEvent("Click", LS_GuiToggleLocalMode_Handler)
 
-    myGui.SetFont("s9 cE5E7EB")
-    myGui.ServiceStatusText := myGui.AddText("x490 y240 w220", "(checking)")
+    myGui.SetFont("s9 Bold c9CA3AF")
+    myGui.AddText("x490 y240 w80", "Service")
+
+    myGui.SetFont("s9 cC08A2B")
+    myGui.ServiceStatusText := myGui.AddText("x575 y240 w135 Right", "Checking...")
 
     myGui.SetFont("s9 cFFFFFF")
     myGui.ServiceRestartButton := myGui.AddButton("x490 y260 w220 h34", "⟳ Restart service")
     myGui.ServiceRestartButton.OnEvent("Click", LS_GuiRestartService_Handler)
-
-    myGui.SetFont("s9 Bold c9CA3AF")
-    myGui.AddText("x490 y305 w220 Center", "Background service")
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
@@ -168,16 +168,14 @@ LS_GuiRefreshStatus(gui) {
                 "Error: " . e.Message . "`r`n" .
                 "Last attempt: " . FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss")
         }
-        if (gui.HasProp("ServiceStatusText") && gui.ServiceStatusText) {
-            gui.ServiceStatusText.Text := "Status: refresh failed"
-            gui.ServiceStatusText.Opt("cEF4444")
-        }
+        if (gui.HasProp("ServiceStatusText") && gui.ServiceStatusText)
+            LS_GuiRefreshServiceState(gui)
         return
     }
     needsSetup := LS_GuiNeedsSetup(status)
     ; The wizard must always be available for reconfiguration or repair runs.
     gui.SetupButton.Enabled := true
-    gui.SetupButton.Text := needsSetup ? "🛠️ Run Setup Wizard" : "🛠️ Run Setup Wizard again"
+    gui.SetupButton.Text := "🛠️ Run Setup Wizard"
     gui.SetupChip.Text := needsSetup ? "(Needs action)" : "(OK)"
     gui.SetupChip.Opt("c" . (needsSetup ? "FFB020" : "9CA3AF"))
 
@@ -229,7 +227,7 @@ LS_GuiBeginRefresh(gui) {
         gui.SetupChip.Opt("cC08A2B")
     }
     if (gui.HasProp("ServiceStatusText") && gui.ServiceStatusText) {
-        gui.ServiceStatusText.Text := "Status: checking..."
+        gui.ServiceStatusText.Text := "Checking..."
         gui.ServiceStatusText.Opt("cC08A2B")
     }
     LS_GuiSpinnerStart(gui)
@@ -361,7 +359,7 @@ LS_GuiPublishStatus(status := "") {
 }
 
 LS_GuiGetServiceStatus() {
-    result := Map("running", false, "label", "Unknown", "unknown", true, "restartable", false)
+    result := Map("installed", false, "running", false, "label", "Not installed", "unknown", true, "restartable", false)
     capture := LS_ServiceManager.StatusText()
     label := Trim(capture)
     lowerCapture := StrLower(label)
@@ -369,23 +367,26 @@ LS_GuiGetServiceStatus() {
         || InStr(lowerCapture, "no puede encontrar") > 0
         || InStr(lowerCapture, "no se encuentra") > 0) {
         result["label"] := "Not installed"
+        result["unknown"] := false
         return result
     }
     if (InStr(lowerCapture, "nombre de archivo") > 0
         || InStr(lowerCapture, "filename") > 0
         || InStr(lowerCapture, "syntax") > 0) {
-        result["label"] := "Unavailable"
+        result["label"] := "Not installed"
+        result["unknown"] := false
         return result
     }
-    if (RegExMatch(capture, "Status:\\s*([^\\r\\n]+)", &m)) {
-        label := Trim(m[1])
-    }
+    hasStatusLine := RegExMatch(capture, "Status:\\s*([^\\r\\n]+)", &m)
+    label := hasStatusLine ? Trim(m[1]) : ""
     lower := StrLower(label)
     running := InStr(lower, "running") > 0
+    installed := hasStatusLine && label != ""
+    result["installed"] := installed
     result["running"] := running
-    result["label"] := label != "" ? label : "Unknown"
-    result["unknown"] := (label = "")
-    result["restartable"] := !result["unknown"]
+    result["label"] := installed ? "Installed" : "Not installed"
+    result["unknown"] := false
+    result["restartable"] := installed
     return result
 }
 
@@ -394,7 +395,7 @@ LS_GuiRefreshServiceState(gui) {
     color := status["running"] ? "22C55E" : "F97316"
     if (status["unknown"])
         color := "D1D5DB"
-    gui.ServiceStatusText.Text := "Status: " . status["label"]
+    gui.ServiceStatusText.Text := status["installed"] ? "Installed" : "Not installed"
     gui.ServiceStatusText.Opt("c" . color)
     if (gui.HasProp("ServiceRestartButton") && gui.ServiceRestartButton)
         gui.ServiceRestartButton.Enabled := status.Has("restartable") && status["restartable"]
