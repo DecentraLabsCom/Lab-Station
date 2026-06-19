@@ -38,6 +38,7 @@ class LS_AccountManager {
         localPassword := password && password != "" ? password : this.GeneratePassword()
         script := Format("
         (
+`$ErrorActionPreference = 'Stop'
 `$User = '{1}'
 `$Password = '{2}'
 `$secure = ConvertTo-SecureString `$Password -AsPlainText -Force
@@ -48,14 +49,20 @@ if (-not (Get-LocalUser -Name `$User -ErrorAction SilentlyContinue)) {{
     Set-LocalUser -Name `$User -Password `$secure -PasswordNeverExpires `$true -UserMayNotChangePassword `$true -AccountNeverExpires `$true -Description `$description
     Enable-LocalUser -Name `$User -ErrorAction SilentlyContinue | Out-Null
 }}
-`$groups = @('Users', 'Remote Desktop Users')
-foreach (`$group in `$groups) {{
-    try {{ Add-LocalGroupMember -Group `$group -Member `$User -ErrorAction SilentlyContinue }} catch {{}}
+`$groupSids = @('S-1-5-32-545', 'S-1-5-32-555')
+foreach (`$sid in `$groupSids) {{
+    try {{
+        `$groupName = (Get-LocalGroup -SID `$sid -ErrorAction Stop).Name
+        Add-LocalGroupMember -Group `$groupName -Member `$User -ErrorAction SilentlyContinue
+    }} catch {{}}
 }}
 try {{ Remove-LocalGroupMember -Group 'Administrators' -Member `$User -ErrorAction SilentlyContinue }} catch {{}}
+if (-not (Get-LocalUser -Name `$User -ErrorAction SilentlyContinue)) {{
+    throw `"Local user `$User was not created`"
+}}
         )", user, localPassword)
         exitCode := LS_RunPowerShell(script, "Configure lab service account")
-        if (exitCode = 0) {
+        if (exitCode = 0 && this.AccountExists(user)) {
             password := localPassword
             LS_LogInfo(Format("Account {1} created/updated", user))
             return true
@@ -225,6 +232,16 @@ if (`$code -ne 0) { throw `"secedit failed with exit code `$code`" }
         } catch {
             return ""
         }
+    }
+
+    static AccountExists(user) {
+        escaped := this.EscapeForPSSingleQuote(user)
+        script := Format("
+        (
+if (Get-LocalUser -Name '{1}' -ErrorAction SilentlyContinue) {{ '1' }}
+        )", escaped)
+        capture := LS_RunPowerShellCapture(script, "Verify local account")
+        return capture["exitCode"] = 0 && InStr(capture["stdout"], "1") > 0
     }
 
     static EscapeForPSSingleQuote(value) {

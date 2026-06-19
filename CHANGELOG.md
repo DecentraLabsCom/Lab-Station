@@ -2,6 +2,14 @@
 
 # Changelog
 
+## [3.0.4] - 2026-06-19
+
+### Fixed
+- WinRM setup now uses 64-bit PowerShell, fallback local-user/group commands, and post-configuration readiness validation before reporting success.
+- Hybrid autostart now fails clearly when `LABUSER` does not exist instead of writing a misleading conditional autostart entry.
+- Account setup now verifies `LABUSER` exists before showing generated credentials.
+- Diagnostics now resolve localized Remote Desktop Users membership by SID and track the selected station profile.
+
 ## [3.0.3] - 2026-06-19
 
 ### Added

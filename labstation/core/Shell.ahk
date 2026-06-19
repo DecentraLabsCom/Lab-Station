@@ -18,7 +18,7 @@ LS_RunPowerShell(script, description := "PowerShell command") {
         return -1
     }
 
-    command := Format('powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}"', tempScript)
+    command := Format('"{1}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{2}"', LS_GetPowerShellPath(), tempScript)
     LS_LogInfo("Executing PowerShell - " . description)
     exitCode := RunWait(command, , "Hide")
     try FileDelete(tempScript)
@@ -34,10 +34,20 @@ LS_RunPowerShellCapture(script, description := "PowerShell command") {
         LS_LogError("Cannot write temporary PowerShell script: " . e.Message)
         return Map("exitCode", -1, "stdout", "", "stderr", e.Message)
     }
-    command := Format('powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}"', tempScript)
+    command := Format('"{1}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{2}"', LS_GetPowerShellPath(), tempScript)
     capture := LS_RunCommandCapture(command, description)
     try FileDelete(tempScript)
     return capture
+}
+
+LS_GetPowerShellPath() {
+    sysnative := A_WinDir "\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    system32 := A_WinDir "\System32\WindowsPowerShell\v1.0\powershell.exe"
+    if (FileExist(sysnative))
+        return sysnative
+    if (FileExist(system32))
+        return system32
+    return "powershell.exe"
 }
 
 LS_RunCommand(command, description := "command") {

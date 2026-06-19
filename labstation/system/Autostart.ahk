@@ -5,10 +5,16 @@
 #Include ..\core\Config.ahk
 #Include ..\core\Logger.ahk
 #Include ..\core\Admin.ahk
+#Include ..\core\Shell.ahk
 #Include RegistryManager.ahk
 
 class LS_Autostart {
     static Configure(appPath := "", onlyUser := "") {
+        if (onlyUser && onlyUser != "" && !this.LocalUserExists(onlyUser)) {
+            LS_LogError("Autostart: target user does not exist: " . onlyUser)
+            return false
+        }
+
         if (!appPath || appPath = "") {
             candidates := [
                 LAB_STATION_CONTROLLER_DIR,
@@ -46,5 +52,15 @@ class LS_Autostart {
             command := Format('cmd /c if /i "%USERNAME%"=="{1}" ( {2} )', onlyUser, command)
         }
         return LS_RegistryManager.SetRunEntry("LabStationAppControl", command)
+    }
+
+    static LocalUserExists(user) {
+        escaped := StrReplace(user, "'", "''")
+        script := Format("
+        (
+if (Get-LocalUser -Name '{1}' -ErrorAction SilentlyContinue) {{ '1' }}
+        )", escaped)
+        capture := LS_RunPowerShellCapture(script, "Check autostart target user")
+        return capture["exitCode"] = 0 && InStr(capture["stdout"], "1") > 0
     }
 }

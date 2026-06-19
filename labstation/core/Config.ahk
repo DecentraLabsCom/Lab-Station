@@ -4,7 +4,7 @@
 #Requires AutoHotkey v2.0
 
 if (!IsSet(LAB_STATION_VERSION)) {
-    global LAB_STATION_VERSION := "3.0.3"
+    global LAB_STATION_VERSION := "3.0.4"
 }
 
 if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {
@@ -88,6 +88,10 @@ if (!IsSet(LAB_STATION_SERVICE_STATE_FILE)) {
 
 if (!IsSet(LAB_STATION_LOCAL_MODE_FLAG)) {
     global LAB_STATION_LOCAL_MODE_FLAG := LAB_STATION_DATA_DIR "\local-mode.flag"
+}
+
+if (!IsSet(LAB_STATION_PROFILE_FILE)) {
+    global LAB_STATION_PROFILE_FILE := LAB_STATION_DATA_DIR "\station-profile.ini"
 }
 
 if (!IsSet(LAB_STATION_SESSION_AUDIT_FILE)) {

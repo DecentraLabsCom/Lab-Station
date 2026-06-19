@@ -20,6 +20,7 @@ LS_RunSetupWizard() {
     if (mode = "") {
         return false
     }
+    LS_WizardSaveProfile(mode)
     steps := mode = "server" ? LS_WizardServerSteps() : LS_WizardHybridSteps()
 
     for step in steps {
@@ -68,6 +69,18 @@ LS_WizardSelectMode() {
         Sleep 50
     }
     return result = "cancel" ? "" : result
+}
+
+LS_WizardSaveProfile(mode) {
+    try {
+        EnsureDir(LAB_STATION_DATA_DIR)
+        IniWrite(mode, LAB_STATION_PROFILE_FILE, "Station", "Profile")
+        LS_LogInfo("Station profile saved: " . mode)
+        return true
+    } catch as e {
+        LS_LogWarning("Unable to save station profile: " . e.Message)
+        return false
+    }
 }
 
 LS_WizardServerSteps() {

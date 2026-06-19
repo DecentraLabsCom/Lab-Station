@@ -86,7 +86,7 @@ This document explains how Lab Gateway should ingest the telemetry Lab Station p
   "schemaVersion": "1.0.0",
   "timestamp": "2025-11-22T23:59:59Z",
   "host": "LAB-WS-07",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "remoteAppEnabled": true,
   "autoStartConfigured": true,
   "summary": { "state": "ready", "issues": [] },

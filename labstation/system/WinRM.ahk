@@ -21,33 +21,46 @@ class LS_WinRM {
         localPassword := password && password != "" ? password : this.GeneratePassword()
         script := this.BuildConfigureScript(user, localPassword)
         exitCode := LS_RunPowerShell(script, "Configure WinRM for Lab Gateway")
-        if (exitCode = 0) {
+        status := exitCode = 0 ? this.GetStatus() : Map("ready", false)
+        if (exitCode = 0 && status.Has("ready") && status["ready"]) {
             password := localPassword
             LS_LogInfo("WinRM configured for Lab Gateway user " . user)
             return true
         }
-        LS_LogError("WinRM configuration failed (exit=" . exitCode . ")")
+        LS_LogError("WinRM configuration failed or not ready (exit=" . exitCode . ")")
         return false
     }
 
     static GetStatus() {
         script := "
         (
-$ErrorActionPreference = 'SilentlyContinue'
-$svc = Get-Service -Name WinRM
-$listener = Get-ChildItem WSMan:\localhost\Listener | Where-Object {
-    $_.Keys -contains 'Transport=HTTP'
-} | Select-Object -First 1
-$firewall = Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*','LabStation-WinRM-HTTP' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } |
-    Select-Object -First 1
-if (-not $firewall) {
-    $firewall = Get-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction SilentlyContinue |
+$ErrorActionPreference = 'Continue'
+$svc = Get-Service -Name WinRM -ErrorAction SilentlyContinue
+$listenerText = ''
+try { $listenerText = (& winrm enumerate winrm/config/listener 2>$null) -join [Environment]::NewLine } catch {}
+$listener = $listenerText -match 'Transport\s*=\s*HTTP'
+$firewall = $false
+try {
+    $rule = Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*','LabStation-WinRM-HTTP' -ErrorAction SilentlyContinue |
         Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } |
         Select-Object -First 1
+    if (-not $rule) {
+        $rule = Get-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } |
+            Select-Object -First 1
+    }
+    $firewall = [bool]$rule
+} catch {}
+if (-not $firewall) {
+    try {
+        $netsh = (& netsh advfirewall firewall show rule name=all 2>$null) -join [Environment]::NewLine
+        $firewall = ($netsh -match '5985') -and ($netsh -match '(?i)(Enabled|Habilitada|Habilitado)\s*:\s*(Yes|S[ií])')
+    } catch {}
 }
-$allowUnencrypted = (Get-Item WSMan:\localhost\Service\AllowUnencrypted).Value
-$ntlmAuth = Get-Item WSMan:\localhost\Service\Auth\NTLM
+$allowUnencrypted = $false
+$ntlmAuth = $false
+try { $allowUnencrypted = [bool](Get-Item WSMan:\localhost\Service\AllowUnencrypted -ErrorAction SilentlyContinue).Value } catch {}
+try { $ntlmAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\NTLM -ErrorAction SilentlyContinue).Value } catch {}
 [pscustomobject]@{
     serviceInstalled = [bool]$svc
     serviceRunning = ($svc.Status -eq 'Running')
@@ -55,7 +68,7 @@ $ntlmAuth = Get-Item WSMan:\localhost\Service\Auth\NTLM
     httpListener = [bool]$listener
     firewallEnabled = [bool]$firewall
     allowUnencrypted = [bool]$allowUnencrypted
-    ntlmAuth = [bool]$ntlmAuth.Value
+    ntlmAuth = [bool]$ntlmAuth
 } | ConvertTo-Json -Compress
         )"
         capture := LS_RunPowerShellCapture(script, "Query WinRM status")
@@ -96,14 +109,6 @@ $ntlmAuth = Get-Item WSMan:\localhost\Service\Auth\NTLM
 $ErrorActionPreference = 'Stop'
 $User = '__WINRM_USER__'
 $Password = '__WINRM_PASSWORD__'
-$secure = ConvertTo-SecureString $Password -AsPlainText -Force
-if (-not (Get-LocalUser -Name $User -ErrorAction SilentlyContinue)) {
-    New-LocalUser -Name $User -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account' | Out-Null
-} else {
-    Set-LocalUser -Name $User -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account'
-    Enable-LocalUser -Name $User -ErrorAction SilentlyContinue | Out-Null
-}
-try { Add-LocalGroupMember -Group 'Administrators' -Member $User -ErrorAction SilentlyContinue } catch {}
 
 Set-Service -Name WinRM -StartupType Automatic
 Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
@@ -121,11 +126,66 @@ try {
 } catch {
     netsh advfirewall firewall set rule group='Windows Remote Management' new enable=yes | Out-Null
 }
+netsh advfirewall firewall add rule name='Lab Station WinRM HTTP' dir=in action=allow protocol=TCP localport=5985 profile=any | Out-Null
 Start-Service -Name WinRM
 
-$localUsers = Get-LocalUser -ErrorAction SilentlyContinue
-$targetSid = ''
-try { $targetSid = ($localUsers | Where-Object { $_.Name -eq $User } | Select-Object -First 1).SID.Value } catch {}
+function Test-LocalUserCompat([string]$Name) {
+    try { return [bool](Get-LocalUser -Name $Name -ErrorAction Stop) } catch {}
+    & net user $Name *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Get-LocalUserSidCompat([string]$Name) {
+    try {
+        $u = Get-LocalUser -Name $Name -ErrorAction Stop
+        if ($u -and $u.SID) { return $u.SID.Value }
+    } catch {}
+    try {
+        $account = New-Object System.Security.Principal.NTAccount($env:COMPUTERNAME, $Name)
+        return $account.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    } catch {
+        return ''
+    }
+}
+
+function Ensure-LocalUserCompat([string]$Name, [string]$PlainPassword) {
+    $secure = ConvertTo-SecureString $PlainPassword -AsPlainText -Force
+    if (-not (Test-LocalUserCompat $Name)) {
+        try {
+            New-LocalUser -Name $Name -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account' | Out-Null
+        } catch {
+            & net user $Name $PlainPassword /add /expires:never /passwordchg:no | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw ('net user add failed with exit code ' + $LASTEXITCODE) }
+        }
+    } else {
+        try {
+            Set-LocalUser -Name $Name -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account'
+            Enable-LocalUser -Name $Name -ErrorAction SilentlyContinue | Out-Null
+        } catch {
+            & net user $Name $PlainPassword /active:yes /expires:never /passwordchg:no | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw ('net user update failed with exit code ' + $LASTEXITCODE) }
+        }
+    }
+    if (-not (Test-LocalUserCompat $Name)) { throw ('Local user ' + $Name + ' was not created') }
+}
+
+function Add-LocalGroupMemberCompat([string]$GroupSid, [string]$Member) {
+    try {
+        $groupName = (Get-LocalGroup -SID $GroupSid -ErrorAction Stop).Name
+        Add-LocalGroupMember -Group $groupName -Member $Member -ErrorAction SilentlyContinue
+        return
+    } catch {}
+    try {
+        $sid = New-Object System.Security.Principal.SecurityIdentifier($GroupSid)
+        $groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+        & net localgroup $groupName $Member /add | Out-Null
+    } catch {}
+}
+
+Ensure-LocalUserCompat $User $Password
+Add-LocalGroupMemberCompat 'S-1-5-32-544' $User
+
+$targetSid = Get-LocalUserSidCompat $User
 if ($targetSid) {
     $denySids = New-Object System.Collections.Generic.List[string]
     $tempExport = Join-Path $env:TEMP ('ls-winrm-secexport-' + [guid]::NewGuid().Guid + '.inf')

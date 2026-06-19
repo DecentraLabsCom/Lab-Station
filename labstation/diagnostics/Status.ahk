@@ -17,6 +17,7 @@ class LS_Status {
         data := Map()
         data["schemaVersion"] := LAB_STATION_SCHEMA_VERSION
         data["timestamp"] := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
+        data["stationProfile"] := this.GetStationProfile()
         data["identity"] := this.GetIdentityInformation()
         data["remoteAppEnabled"] := this.CheckRemoteAppPolicy()
         data["winrm"] := LS_WinRM.GetStatus()
@@ -60,6 +61,7 @@ class LS_Status {
         }
         lines.Push("RemoteApp: " . (data["remoteAppEnabled"] ? "OK" : "MISSING"))
         lines.Push("WinRM: " . (data["winrm"]["ready"] ? "OK" : "MISSING"))
+        lines.Push("Profile: " . data["stationProfile"])
         lines.Push("Autostart: " . (data["autoStartConfigured"] ? "OK" : "MISSING"))
         lines.Push(Format("Wake-capable devices: {1}", data["wake"]["armedCount"]))
         lines.Push("Active power plan: " . data["power"]["activePlan"])
@@ -75,6 +77,15 @@ class LS_Status {
         profile := "C:\\Users\\" . user
         info["profilePath"] := DirExist(profile) ? profile : ""
         return info
+    }
+
+    static GetStationProfile() {
+        try {
+            profile := StrLower(Trim(IniRead(LAB_STATION_PROFILE_FILE, "Station", "Profile", "server")))
+            return profile = "hybrid" ? "hybrid" : "server"
+        } catch {
+            return "server"
+        }
     }
 
     static CheckRemoteAppPolicy() {
@@ -196,8 +207,12 @@ class LS_Status {
         state := Map()
         script := "
         (
+        `$groupName = 'Remote Desktop Users'
         try {
-            Get-LocalGroupMember -Group 'Remote Desktop Users' -ErrorAction Stop | Where-Object {`$_.ObjectClass -eq 'User'} | ForEach-Object {`$_.Name}
+            `$groupName = (Get-LocalGroup -SID 'S-1-5-32-555' -ErrorAction Stop).Name
+        } catch {}
+        try {
+            Get-LocalGroupMember -Group `$groupName -ErrorAction Stop | Where-Object {`$_.ObjectClass -eq 'User'} | ForEach-Object {`$_.Name}
         } catch {}
         )"
         capture := LS_RunPowerShellCapture(script, "Query Remote Desktop Users members")
@@ -400,6 +415,8 @@ class LS_Status {
 
     static BuildSummary(data) {
         issues := []
+        profile := data.Has("stationProfile") ? data["stationProfile"] : "server"
+        dedicated := profile != "hybrid"
         if (!data["identity"]["labUserExists"])
             issues.Push("Lab user not found")
         if (!data["remoteAppEnabled"])
@@ -409,19 +426,19 @@ class LS_Status {
         if (!data["autoStartConfigured"])
             issues.Push("Controller autostart missing")
         autoLogon := data["policy"]["autoLogon"]
-        if (!autoLogon["enabled"])
+        if (dedicated && !autoLogon["enabled"])
             issues.Push("AutoAdminLogon disabled")
-        if (!autoLogon["userMatches"])
+        if (dedicated && !autoLogon["userMatches"])
             issues.Push("Autologon user mismatch")
-        if (!autoLogon["passwordSet"])
+        if (dedicated && !autoLogon["passwordSet"])
             issues.Push("Autologon password not stored")
         rds := data["policy"]["remoteDesktopUsers"]
         if (!rds["labUserPresent"])
             issues.Push("Lab user missing from Remote Desktop Users")
-        if (rds["otherMembers"].Length > 0)
+        if (dedicated && rds["otherMembers"].Length > 0)
             issues.Push("Unexpected Remote Desktop Users members: " . LS_StrJoin(rds["otherMembers"], ", "))
         deny := data["policy"]["denyInteractive"]
-        if (!deny["configured"])
+        if (dedicated && !deny["configured"])
             issues.Push("SeDenyInteractiveLogonRight not configured")
         if (deny["labUserDenied"])
             issues.Push("Lab user denied interactive logon")
