@@ -14,7 +14,11 @@ class LS_ServiceManager {
         if (!LS_EnsureAdmin()) {
             return false
         }
-        exe := Format('"{1}" "{2}" service-loop', A_AhkPath, LAB_STATION_ROOT "\LabStation.ahk")
+        if (A_IsCompiled) {
+            exe := Format('"{1}" service-loop', A_ScriptFullPath)
+        } else {
+            exe := Format('"{1}" "{2}" service-loop', A_AhkPath, LAB_STATION_ROOT "\LabStation.ahk")
+        }
         cmd := Format('schtasks /create /TN "{1}" /TR "{2}" /SC ONSTART /RL HIGHEST /RU SYSTEM /F', this.TaskName, exe)
         result := LS_RunCommand(cmd, "Create Lab Station service task")
         if (result = 0) {

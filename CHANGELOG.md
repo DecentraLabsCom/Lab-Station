@@ -2,6 +2,16 @@
 
 # Changelog
 
+## [3.0.9] - 2026-06-19
+
+### Changed
+- Setup wizard now makes Remote Desktop Users membership explicit for `LABUSER` and offers an optional background service install/start step.
+- The control panel now shows an active refreshing state while diagnostics are running.
+
+### Fixed
+- WinRM setup now handles Public network profiles before enabling remoting firewall rules.
+- Compiled background service installation now registers the compiled `LabStation.exe service-loop` command.
+
 ## [3.0.8] - 2026-06-19
 
 ### Fixed

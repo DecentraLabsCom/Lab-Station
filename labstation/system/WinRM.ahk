@@ -119,6 +119,16 @@ $ErrorActionPreference = 'Stop'
 $User = '__WINRM_USER__'
 $Password = '__WINRM_PASSWORD__'
 
+try {
+    Get-NetConnectionProfile -ErrorAction Stop |
+        Where-Object { $_.NetworkCategory -eq 'Public' } |
+        ForEach-Object {
+            Set-NetConnectionProfile -InterfaceIndex $_.InterfaceIndex -NetworkCategory Private -ErrorAction Stop
+        }
+} catch {
+    throw ('Unable to set Public network profile(s) to Private for WinRM firewall rules: ' + $_.Exception.Message)
+}
+
 Set-Service -Name WinRM -StartupType Automatic
 Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
 Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true

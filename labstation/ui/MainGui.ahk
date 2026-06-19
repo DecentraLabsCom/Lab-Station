@@ -31,13 +31,14 @@ LS_StartMainGui() {
 }
 
 LS_BuildGui() {
-    myGui := Gui("+Resize", "Lab Station Control Panel")
+    myGui := Gui("-Resize -MaximizeBox", "Lab Station Control Panel")
     myGui.BackColor := "0F1419"
     myGui.SetFont("s10", "Segoe UI")
 
     myGui.StatusBox := ""
     myGui.SetupButton := ""
     myGui.SetupChip := ""
+    myGui.RefreshButton := ""
     myGui.LocalModeButton := ""
     myGui.ServiceStatusText := ""
     myGui.ServiceRestartButton := ""
@@ -72,8 +73,8 @@ LS_BuildGui() {
 
     ; Status action buttons
     myGui.SetFont("s9 cFFFFFF")
-    refreshBtn := myGui.AddButton("x24 y300 w130 h32", "🔄 Refresh")
-    refreshBtn.OnEvent("Click", LS_GuiRefreshStatus_Handler)
+    myGui.RefreshButton := myGui.AddButton("x24 y300 w130 h32", "Refresh")
+    myGui.RefreshButton.OnEvent("Click", LS_GuiRefreshStatus_Handler)
 
     exportBtn := myGui.AddButton("x164 y300 w150 h32", "💾 Export JSON")
     exportBtn.OnEvent("Click", LS_GuiExportStatus_Handler)
@@ -118,8 +119,8 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.8")
-    refreshBtn.Focus()
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.9")
+    myGui.RefreshButton.Focus()
 
     myGui.OnEvent("Close", LS_GuiClose_Handler)
     myGui.OnEvent("Size", LS_GuiSize_Handler)
@@ -152,9 +153,11 @@ LS_GuiNeedsSetup(status) {
 }
 
 LS_GuiRefreshStatus(gui) {
+    LS_GuiBeginRefresh(gui)
     try {
         status := LS_Status.Collect()
     } catch as e {
+        LS_GuiEndRefresh(gui)
         LS_LogError("GUI status refresh failed: " . e.Message)
         if (gui.HasProp("SetupChip") && gui.SetupChip) {
             gui.SetupChip.Text := "(Error)"
@@ -213,6 +216,60 @@ LS_GuiRefreshStatus(gui) {
     gui.StatusBox.Value := LS_StrJoin(summary, "`r`n")
     if (gui.HasProp("ServiceStatusText") && gui.ServiceStatusText)
         LS_GuiRefreshServiceState(gui)
+    LS_GuiEndRefresh(gui)
+}
+
+LS_GuiBeginRefresh(gui) {
+    if (gui.HasProp("RefreshButton") && gui.RefreshButton) {
+        gui.RefreshButton.Enabled := false
+        gui.RefreshButton.Text := "Refreshing"
+    }
+    if (gui.HasProp("SetupChip") && gui.SetupChip) {
+        gui.SetupChip.Text := "(checking)"
+        gui.SetupChip.Opt("cC08A2B")
+    }
+    if (gui.HasProp("ServiceStatusText") && gui.ServiceStatusText) {
+        gui.ServiceStatusText.Text := "Status: checking..."
+        gui.ServiceStatusText.Opt("cC08A2B")
+    }
+    LS_GuiSpinnerStart(gui)
+    Sleep 50
+}
+
+LS_GuiEndRefresh(gui) {
+    LS_GuiSpinnerStop()
+    if (gui.HasProp("RefreshButton") && gui.RefreshButton) {
+        gui.RefreshButton.Enabled := true
+        gui.RefreshButton.Text := "Refresh"
+    }
+}
+
+LS_GuiSpinnerStart(gui) {
+    global LS_GUI_SPINNER_TARGET, LS_GUI_SPINNER_TICK
+    LS_GUI_SPINNER_TARGET := gui
+    LS_GUI_SPINNER_TICK := 0
+    SetTimer(LS_GuiSpinnerTick, 250)
+    LS_GuiSpinnerTick()
+}
+
+LS_GuiSpinnerStop() {
+    global LS_GUI_SPINNER_TARGET
+    SetTimer(LS_GuiSpinnerTick, 0)
+    LS_GUI_SPINNER_TARGET := ""
+}
+
+LS_GuiSpinnerTick(*) {
+    global LS_GUI_SPINNER_TARGET, LS_GUI_SPINNER_TICK
+    if (!IsSet(LS_GUI_SPINNER_TARGET) || !IsObject(LS_GUI_SPINNER_TARGET))
+        return
+    LS_GUI_SPINNER_TICK := IsSet(LS_GUI_SPINNER_TICK) ? LS_GUI_SPINNER_TICK + 1 : 1
+    dots := SubStr("...", 1, Mod(LS_GUI_SPINNER_TICK, 4))
+    try {
+        if (LS_GUI_SPINNER_TARGET.HasProp("SetupChip") && LS_GUI_SPINNER_TARGET.SetupChip)
+            LS_GUI_SPINNER_TARGET.SetupChip.Text := "(checking" . dots . ")"
+        if (LS_GUI_SPINNER_TARGET.HasProp("RefreshButton") && LS_GUI_SPINNER_TARGET.RefreshButton)
+            LS_GUI_SPINNER_TARGET.RefreshButton.Text := "Refreshing" . dots
+    }
 }
 
 LS_GuiExportStatus(gui) {

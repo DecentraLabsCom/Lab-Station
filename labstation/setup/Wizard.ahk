@@ -10,6 +10,7 @@
 #Include ..\system\Autostart.ahk
 #Include ..\system\AccountManager.ahk
 #Include ..\system\WinRM.ahk
+#Include ..\system\ServiceManager.ahk
 #Include ..\diagnostics\Status.ahk
 
 LS_RunSetupWizard() {
@@ -102,24 +103,32 @@ LS_WizardSaveProfile(mode) {
 
 LS_WizardServerSteps() {
     return [
-        Map("label", "Create/configure LABUSER + Autologon", "action", (*) => LS_WizardAccountServer()),
+        Map("label", "Create/configure LABUSER + Remote Desktop Users + Autologon", "action", (*) => LS_WizardAccountServer()),
         Map("label", "Register AppControl autostart", "action", (*) => LS_WizardAutostartServer()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
+        Map("label", "Install/start background service", "action", (*) => LS_WizardService()),
         Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
 }
 
 LS_WizardHybridSteps() {
     return [
-        Map("label", "Create/update LABUSER (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
+        Map("label", "Create/update LABUSER + Remote Desktop Users (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
         Map("label", "Register autostart only for LABUSER", "action", (*) => LS_WizardAutostartHybrid()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
+        Map("label", "Install/start background service", "action", (*) => LS_WizardService()),
         Map("label", "Export diagnostics report", "action", (*) => LS_WizardDiagnostics())
     ]
+}
+
+LS_WizardService() {
+    if (!LS_ServiceManager.Install())
+        return false
+    return LS_ServiceManager.Start()
 }
 
 LS_WizardDiagnostics() {

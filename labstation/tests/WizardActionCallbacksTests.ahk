@@ -37,14 +37,14 @@ errors := []
 
 try {
     serverSteps := LS_WizardServerSteps()
-    CheckSteps("server", serverSteps, 6, &errors)
+    CheckSteps("server", serverSteps, 7, &errors)
 } catch as e {
     errors.Push("server: exception while building steps - " . e.Message)
 }
 
 try {
     hybridSteps := LS_WizardHybridSteps()
-    CheckSteps("hybrid", hybridSteps, 6, &errors)
+    CheckSteps("hybrid", hybridSteps, 7, &errors)
 } catch as e {
     errors.Push("hybrid: exception while building steps - " . e.Message)
 }
