@@ -9,7 +9,7 @@
 #Include ..\setup\Wizard.ahk
 
 LS_StartTrayUI() {
-    TraySetIcon("shell32.dll", 44)
+    LS_TraySetPanelIcon()
     A_IconTip := "Lab Station"
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Show status", LS_Tray_ShowStatus)
@@ -47,6 +47,22 @@ LS_Tray_OpenLog(*) {
 LS_Tray_UpdateTooltip(*) {
     summary := LS_Status.SummaryText()
     A_IconTip := "Lab Station`n" . summary
+}
+
+LS_TraySetPanelIcon() {
+    possible := [
+        LAB_STATION_PROJECT_ROOT "\img\favicon.ico",
+        A_ScriptDir "\img\favicon.ico",
+        A_ScriptDir "\favicon.ico"
+    ]
+    for p in possible {
+        if (FileExist(p)) {
+            TraySetIcon(p)
+            return true
+        }
+    }
+    TraySetIcon("shell32.dll", 44)
+    return false
 }
 
 LS_Tray_Exit(*) {
