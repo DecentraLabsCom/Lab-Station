@@ -16,9 +16,13 @@ LS_StartMainGui() {
     global LS_GUI
     ; Keep process alive when the window is hidden to tray.
     Persistent(True)
-    if (IsSet(LS_GUI) && LS_GUI && LS_GUI.Visible) {
-        LS_GUI.Show()
-        return
+    if (IsSet(LS_GUI) && IsObject(LS_GUI)) {
+        try {
+            LS_GUI.Show()
+            return
+        } catch {
+            LS_GUI := ""
+        }
     }
     LS_GUI := LS_BuildGui()
     LS_GUI.Show()
@@ -112,10 +116,10 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.4")
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.5")
     refreshBtn.Focus()
 
-    myGui.OnEvent("Close", (*) => myGui.Destroy())
+    myGui.OnEvent("Close", LS_GuiClose_Handler)
     myGui.OnEvent("Size", LS_GuiSize_Handler)
     LS_GuiRefreshStatus(myGui)
     return myGui
@@ -364,13 +368,19 @@ LS_EnsureTrayMenu() {
     if (logo != "")
         TraySetIcon(logo)
     A_TrayMenu.Delete()
-    A_TrayMenu.Add("Show Lab Station", (*) => (LS_StartMainGui(), LS_GUI.Show()))
+    A_TrayMenu.Add("Show Lab Station", (*) => LS_StartMainGui())
     A_TrayMenu.Add()
     A_TrayMenu.Add("Exit", (*) => ExitApp)
     trayReady := true
 }
 
 ; Event handlers
+LS_GuiClose_Handler(guiObj) {
+    global LS_GUI
+    guiObj.Destroy()
+    LS_GUI := ""
+}
+
 LS_GuiRefreshStatus_Handler(ctrl, info) {
     LS_GuiRefreshStatus(ctrl.Gui)
 }

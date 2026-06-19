@@ -2,6 +2,11 @@
 
 # Changelog
 
+## [3.0.5] - 2026-06-19
+
+### Fixed
+- Restoring the Lab Station GUI from tray no longer reads a non-existent `Gui.Visible` property.
+
 ## [3.0.4] - 2026-06-19
 
 ### Fixed
