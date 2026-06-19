@@ -74,14 +74,19 @@ function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
 function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
     try {
         `$groupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
-        Add-LocalGroupMember -Group `$groupName -Member `$Member -ErrorAction SilentlyContinue
+        Add-LocalGroupMember -Group `$groupName -Member `$Member -ErrorAction Stop
         return
-    } catch {}
+    } catch {
+        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
+    }
     try {
         `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
         `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
         & net localgroup `$groupName `$Member /add | Out-Null
-    } catch {}
+        if (`$LASTEXITCODE -ne 0 -and `$LASTEXITCODE -ne 2) { throw ('net localgroup add failed with exit code ' + `$LASTEXITCODE) }
+    } catch {
+        throw
+    }
 }
 
 function Remove-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
@@ -101,6 +106,11 @@ Ensure-LocalUserCompat `$User `$Password
 Add-LocalGroupMemberCompat 'S-1-5-32-545' `$User
 Add-LocalGroupMemberCompat 'S-1-5-32-555' `$User
 Remove-LocalGroupMemberCompat 'S-1-5-32-544' `$User
+`$rdpGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-555')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+`$rdpMembers = & net localgroup `$rdpGroup
+if ((`$rdpMembers -join "`n") -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
+    throw ('Local user ' + `$User + ' is not listed in ' + `$rdpGroup)
+}
         )"
         script := StrReplace(script, "__LABUSER__", escapedUser)
         script := StrReplace(script, "__LABUSER_PASSWORD__", escapedPassword)
@@ -189,10 +199,13 @@ function Get-LocalGroupNameCompat([string]`$GroupSid, [string]`$Fallback) {
 
 function Add-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
     try {
-        Add-LocalGroupMember -Group `$Group -Member `$Member -ErrorAction SilentlyContinue
+        Add-LocalGroupMember -Group `$Group -Member `$Member -ErrorAction Stop
         return
-    } catch {}
+    } catch {
+        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
+    }
     & net localgroup `$Group `$Member /add | Out-Null
+    if (`$LASTEXITCODE -ne 0 -and `$LASTEXITCODE -ne 2) { throw ('net localgroup add failed with exit code ' + `$LASTEXITCODE) }
 }
 
 `$group = Get-LocalGroupNameCompat 'S-1-5-32-555' 'Remote Desktop Users'
@@ -206,6 +219,10 @@ foreach (`$member in `$members) {
     }
 }
 Add-LocalGroupMemberCompat `$group `$User
+`$finalMembers = & net localgroup `$group
+if ((`$finalMembers -join "`n") -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
+    throw ('Local user ' + `$User + ' is not listed in ' + `$group)
+}
 try {
     Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -Name 'fDenyTSConnections' -Value 0
     New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -Name 'DisableLockWorkstation' -Value 1 -PropertyType DWORD -Force | Out-Null

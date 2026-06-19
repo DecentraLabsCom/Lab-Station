@@ -33,6 +33,22 @@ foreach (`$adapter in `$adapters) {
         Set-NetAdapterAdvancedProperty -Name `$adapter.Name -DisplayName 'Wake on pattern match' -DisplayValue 'Disabled' -ErrorAction SilentlyContinue
     } catch {
     }
+    try {
+        `$pattern = '*' + [WildcardPattern]::Escape(`$adapter.PnPDeviceID) + '*'
+        Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceEnable -ErrorAction SilentlyContinue |
+            Where-Object { `$_.InstanceName -like `$pattern } |
+            ForEach-Object {
+                `$_.Enable = `$false
+                Set-CimInstance -InputObject `$_ -ErrorAction SilentlyContinue | Out-Null
+            }
+        Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceWakeEnable -ErrorAction SilentlyContinue |
+            Where-Object { `$_.InstanceName -like `$pattern } |
+            ForEach-Object {
+                `$_.Enable = `$true
+                Set-CimInstance -InputObject `$_ -ErrorAction SilentlyContinue | Out-Null
+            }
+    } catch {
+    }
 }
 # Configure global power plan to avoid sleep on AC
 powercfg /change standby-timeout-ac 0 | Out-Null

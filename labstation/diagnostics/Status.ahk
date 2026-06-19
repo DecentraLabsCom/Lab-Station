@@ -208,13 +208,39 @@ class LS_Status {
         state := Map()
         script := "
         (
-        `$groupName = 'Remote Desktop Users'
-        try {
-            `$groupName = (Get-LocalGroup -SID 'S-1-5-32-555' -ErrorAction Stop).Name
-        } catch {}
-        try {
-            Get-LocalGroupMember -Group `$groupName -ErrorAction Stop | Where-Object {`$_.ObjectClass -eq 'User'} | ForEach-Object {`$_.Name}
-        } catch {}
+`$groupName = 'Remote Desktop Users'
+try {
+    `$groupName = (Get-LocalGroup -SID 'S-1-5-32-555' -ErrorAction Stop).Name
+} catch {
+    try {
+        `$groupName = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-555')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+    } catch {}
+}
+`$names = New-Object System.Collections.Generic.List[string]
+try {
+    Get-LocalGroupMember -Group `$groupName -ErrorAction Stop |
+        Where-Object { `$_.ObjectClass -eq 'User' } |
+        ForEach-Object { if (`$_.Name) { [void]`$names.Add([string]`$_.Name) } }
+} catch {}
+try {
+    `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
+    `$group.psbase.Invoke('Members') | ForEach-Object {
+        `$name = `$_.GetType().InvokeMember('Name', 'GetProperty', `$null, `$_, `$null)
+        if (`$name) { [void]`$names.Add([string]`$name) }
+    }
+} catch {}
+try {
+    `$netLines = & net localgroup `$groupName
+    `$collect = `$false
+    foreach (`$line in `$netLines) {
+        `$trimmed = [string]`$line.Trim()
+        if (`$trimmed -match '^-{3,}$') { `$collect = `$true; continue }
+        if (-not `$collect -or -not `$trimmed) { continue }
+        if (`$trimmed -match 'command completed|comando se complet') { break }
+        [void]`$names.Add(`$trimmed)
+    }
+} catch {}
+`$names | Where-Object { `$_ } | Sort-Object -Unique
         )"
         capture := LS_RunPowerShellCapture(script, "Query Remote Desktop Users members")
         members := this.ParseLines(capture["stdout"])
