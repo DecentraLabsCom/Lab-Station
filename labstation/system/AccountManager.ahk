@@ -108,7 +108,8 @@ Add-LocalGroupMemberCompat 'S-1-5-32-555' `$User
 Remove-LocalGroupMemberCompat 'S-1-5-32-544' `$User
 `$rdpGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-555')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
 `$rdpMembers = & net localgroup `$rdpGroup
-if ((`$rdpMembers -join "`n") -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
+`$rdpMembersText = (`$rdpMembers | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
+if (`$rdpMembersText -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
     throw ('Local user ' + `$User + ' is not listed in ' + `$rdpGroup)
 }
         )"
@@ -220,7 +221,8 @@ foreach (`$member in `$members) {
 }
 Add-LocalGroupMemberCompat `$group `$User
 `$finalMembers = & net localgroup `$group
-if ((`$finalMembers -join "`n") -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
+`$finalMembersText = (`$finalMembers | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
+if (`$finalMembersText -notmatch ('(^|\s|\\)' + [regex]::Escape(`$User) + '(\s|$)')) {
     throw ('Local user ' + `$User + ' is not listed in ' + `$group)
 }
 try {

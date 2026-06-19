@@ -206,8 +206,10 @@ class LS_Status {
 
     static GetRemoteDesktopGroupState(targetUser) {
         state := Map()
-        script := "
+        escapedTarget := StrReplace(targetUser, "'", "''")
+        template := "
         (
+`$targetUser = '__LABUSER__'
 `$groupName = 'Remote Desktop Users'
 try {
     `$groupName = (Get-LocalGroup -SID 'S-1-5-32-555' -ErrorAction Stop).Name
@@ -217,6 +219,7 @@ try {
     } catch {}
 }
 `$names = New-Object System.Collections.Generic.List[string]
+`$targetIsMember = `$false
 try {
     Get-LocalGroupMember -Group `$groupName -ErrorAction Stop |
         Where-Object { `$_.ObjectClass -eq 'User' } |
@@ -224,6 +227,9 @@ try {
 } catch {}
 try {
     `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
+    try {
+        `$targetIsMember = [bool]`$group.psbase.Invoke('IsMember', ('WinNT://./' + `$targetUser + ',user'))
+    } catch {}
     `$group.psbase.Invoke('Members') | ForEach-Object {
         `$name = `$_.GetType().InvokeMember('Name', 'GetProperty', `$null, `$_, `$null)
         if (`$name) { [void]`$names.Add([string]`$name) }
@@ -236,12 +242,14 @@ try {
         `$trimmed = [string]`$line.Trim()
         if (`$trimmed -match '^-{3,}$') { `$collect = `$true; continue }
         if (-not `$collect -or -not `$trimmed) { continue }
-        if (`$trimmed -match 'command completed|comando se complet') { break }
+        if (`$trimmed -match '(?i)(command completed|comando.*complet|se ha completado)') { break }
         [void]`$names.Add(`$trimmed)
     }
 } catch {}
+if (`$targetIsMember) { [void]`$names.Add(`$targetUser) }
 `$names | Where-Object { `$_ } | Sort-Object -Unique
         )"
+        script := StrReplace(template, "__LABUSER__", escapedTarget)
         capture := LS_RunPowerShellCapture(script, "Query Remote Desktop Users members")
         members := this.ParseLines(capture["stdout"])
         state["members"] := members
