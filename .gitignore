@@ -13,6 +13,7 @@ labstation/data
 
 /data
 /dev
+/dist
 /UIA-v2-1.1.1
 
 # Test output artifacts (current and future runs)

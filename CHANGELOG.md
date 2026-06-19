@@ -2,6 +2,13 @@
 
 # Changelog
 
+## [3.0.8] - 2026-06-19
+
+### Fixed
+- Lab Station Panel no longer leaves the tray icon in an unusable state after minimize/restore/close.
+- The desktop GUI now refreshes status reliably after opening and avoids permanent loading placeholders when diagnostics are slow.
+- Background service status now uses the correct scheduled task path and shows concise UI labels instead of raw scheduler errors.
+
 ## [3.0.7] - 2026-06-19
 
 ### Changed

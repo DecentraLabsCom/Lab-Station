@@ -19,7 +19,7 @@ LS_StartMainGui() {
     if (IsSet(LS_GUI) && IsObject(LS_GUI)) {
         try {
             LS_GUI.Show()
-            LS_GuiQueueStatusRefresh()
+            LS_GuiRefreshStatusAfterShow()
             return
         } catch {
             LS_GUI := ""
@@ -27,7 +27,7 @@ LS_StartMainGui() {
     }
     LS_GUI := LS_BuildGui()
     LS_GUI.Show()
-    LS_GuiQueueStatusRefresh()
+    LS_GuiRefreshStatusAfterShow()
 }
 
 LS_BuildGui() {
@@ -118,7 +118,7 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.7")
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.0.8")
     refreshBtn.Focus()
 
     myGui.OnEvent("Close", LS_GuiClose_Handler)
@@ -126,15 +126,12 @@ LS_BuildGui() {
     return myGui
 }
 
-LS_GuiQueueStatusRefresh() {
-    SetTimer(LS_GuiRefreshStatus_Timer, 0)
-    SetTimer(LS_GuiRefreshStatus_Timer, -50)
-}
-
-LS_GuiRefreshStatus_Timer(*) {
+LS_GuiRefreshStatusAfterShow() {
     global LS_GUI
+    ; Let Windows paint the newly shown GUI before the status checks block.
+    Sleep 100
     if (IsSet(LS_GUI) && IsObject(LS_GUI)) {
-        try LS_GuiRefreshStatus(LS_GUI)
+        LS_GuiRefreshStatus(LS_GUI)
     }
 }
 
@@ -155,7 +152,25 @@ LS_GuiNeedsSetup(status) {
 }
 
 LS_GuiRefreshStatus(gui) {
-    status := LS_Status.Collect()
+    try {
+        status := LS_Status.Collect()
+    } catch as e {
+        LS_LogError("GUI status refresh failed: " . e.Message)
+        if (gui.HasProp("SetupChip") && gui.SetupChip) {
+            gui.SetupChip.Text := "(Error)"
+            gui.SetupChip.Opt("cEF4444")
+        }
+        if (gui.HasProp("StatusBox") && gui.StatusBox) {
+            gui.StatusBox.Value := "Unable to refresh system status.`r`n`r`n" .
+                "Error: " . e.Message . "`r`n" .
+                "Last attempt: " . FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss")
+        }
+        if (gui.HasProp("ServiceStatusText") && gui.ServiceStatusText) {
+            gui.ServiceStatusText.Text := "Status: refresh failed"
+            gui.ServiceStatusText.Opt("cEF4444")
+        }
+        return
+    }
     needsSetup := LS_GuiNeedsSetup(status)
     ; The wizard must always be available for reconfiguration or repair runs.
     gui.SetupButton.Enabled := true
@@ -286,9 +301,22 @@ LS_GuiPublishStatus(status := "") {
 }
 
 LS_GuiGetServiceStatus() {
-    result := Map("running", false, "label", "Unknown", "unknown", true)
+    result := Map("running", false, "label", "Unknown", "unknown", true, "restartable", false)
     capture := LS_ServiceManager.StatusText()
     label := Trim(capture)
+    lowerCapture := StrLower(label)
+    if (InStr(lowerCapture, "cannot find") > 0
+        || InStr(lowerCapture, "no puede encontrar") > 0
+        || InStr(lowerCapture, "no se encuentra") > 0) {
+        result["label"] := "Not installed"
+        return result
+    }
+    if (InStr(lowerCapture, "nombre de archivo") > 0
+        || InStr(lowerCapture, "filename") > 0
+        || InStr(lowerCapture, "syntax") > 0) {
+        result["label"] := "Unavailable"
+        return result
+    }
     if (RegExMatch(capture, "Status:\\s*([^\\r\\n]+)", &m)) {
         label := Trim(m[1])
     }
@@ -297,6 +325,7 @@ LS_GuiGetServiceStatus() {
     result["running"] := running
     result["label"] := label != "" ? label : "Unknown"
     result["unknown"] := (label = "")
+    result["restartable"] := !result["unknown"]
     return result
 }
 
@@ -308,7 +337,7 @@ LS_GuiRefreshServiceState(gui) {
     gui.ServiceStatusText.Text := "Status: " . status["label"]
     gui.ServiceStatusText.Opt("c" . color)
     if (gui.HasProp("ServiceRestartButton") && gui.ServiceRestartButton)
-        gui.ServiceRestartButton.Enabled := !status["unknown"]
+        gui.ServiceRestartButton.Enabled := status.Has("restartable") && status["restartable"]
 }
 
 LS_GuiRestartService(gui) {
@@ -389,7 +418,6 @@ LS_GuiClose_Handler(guiObj) {
 
 LS_GuiShutdown(*) {
     global LS_GUI
-    SetTimer(LS_GuiRefreshStatus_Timer, 0)
     LS_GUI := ""
     ExitApp(0)
 }

@@ -8,7 +8,7 @@
 #Include ..\core\Shell.ahk
 
 class LS_ServiceManager {
-    static TaskName := "LabStation\\BackgroundService"
+    static TaskName := "LabStation\BackgroundService"
 
     static Install() {
         if (!LS_EnsureAdmin()) {
