@@ -42,6 +42,9 @@ CheckNoNativeProbeAbort(path, &errors) {
         if RegExMatch(content, "&\s+net\s+(user|localgroup)\b") {
             errors.Push(path . ": use net.exe with explicit stderr handling")
         }
+        if InStr(content, 'InStr(capture["stdout"], "1")') {
+            errors.Push(path . ": user probes must check an explicit success marker")
+        }
     } catch as e {
         errors.Push(path . ": cannot read file - " . e.Message)
     }

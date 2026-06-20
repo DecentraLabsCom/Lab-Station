@@ -624,22 +624,22 @@ if (`$code -ne 0) { throw `"secedit failed with exit code `$code`" }
         script := Format("
         (
 try {{
-    if (Get-LocalUser -Name '{1}' -ErrorAction Stop) {{ '1'; exit 0 }}
+    if (Get-LocalUser -Name '{1}' -ErrorAction Stop) {{ 'LABSTATION_USER_EXISTS'; exit 0 }}
 }} catch {{}}
 try {{
     `$user = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='{1}'" -ErrorAction Stop | Select-Object -First 1
-    if (`$user) {{ '1'; exit 0 }}
+    if (`$user) {{ 'LABSTATION_USER_EXISTS'; exit 0 }}
 }} catch {{}}
 `$oldPreference = `$ErrorActionPreference
 `$ErrorActionPreference = 'Continue'
 & net.exe user '{1}' 1>`$null 2>`$null
 `$code = `$LASTEXITCODE
 `$ErrorActionPreference = `$oldPreference
-if (`$code -eq 0) {{ '1'; exit 0 }}
+if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS'; exit 0 }}
 exit 1
         )", escaped)
         capture := LS_RunPowerShellCapture(script, "Verify local account")
-        return capture["exitCode"] = 0 && InStr(capture["stdout"], "1") > 0
+        return capture["exitCode"] = 0 && InStr(capture["stdout"], "LABSTATION_USER_EXISTS") > 0
     }
 
     static EscapeForPSSingleQuote(value) {
