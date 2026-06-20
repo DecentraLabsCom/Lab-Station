@@ -55,7 +55,7 @@ function Ensure-LocalUser([string]`$Name, [string]`$PlainPassword) {
         Set-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -Description 'DecentraLabs Lab Station service account' -ErrorAction Stop
         Enable-LocalUser -Name `$Name -ErrorAction Stop
     } else {
-        New-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -AccountNeverExpires `$true -Description 'DecentraLabs Lab Station service account' -ErrorAction Stop | Out-Null
+        New-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires -AccountNeverExpires -Description 'DecentraLabs Lab Station service account' -ErrorAction Stop | Out-Null
     }
     `$user = Get-LocalUser -Name `$Name -ErrorAction Stop
     if (-not `$user.Enabled) { Enable-LocalUser -Name `$Name -ErrorAction Stop }

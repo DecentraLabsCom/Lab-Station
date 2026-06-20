@@ -197,7 +197,7 @@ function Ensure-LocalUserCompat([string]$Name, [string]$PlainPassword) {
     $secure = ConvertTo-SecureString $PlainPassword -AsPlainText -Force
     if (-not (Test-LocalUserCompat $Name)) {
         try {
-            New-LocalUser -Name $Name -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account' | Out-Null
+            New-LocalUser -Name $Name -Password $secure -PasswordNeverExpires -AccountNeverExpires -Description 'DecentraLabs Lab Gateway WinRM account' | Out-Null
         } catch {
             $oldPreference = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
@@ -207,7 +207,7 @@ function Ensure-LocalUserCompat([string]$Name, [string]$PlainPassword) {
         }
     } else {
         try {
-            Set-LocalUser -Name $Name -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account'
+            Set-LocalUser -Name $Name -Password $secure -PasswordNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account'
             Enable-LocalUser -Name $Name -ErrorAction SilentlyContinue | Out-Null
         } catch {
             $oldPreference = $ErrorActionPreference
