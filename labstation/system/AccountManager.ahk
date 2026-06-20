@@ -50,27 +50,76 @@ function Test-LocalUserCompat([string]`$Name) {
     return `$LASTEXITCODE -eq 0
 }
 
+function Set-LocalUserWithAdsi([string]`$Name, [string]`$PlainPassword) {
+    `$created = `$false
+    try {
+        `$computer = [ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')
+        try {
+            `$user = [ADSI]('WinNT://' + `$env:COMPUTERNAME + '/' + `$Name + ',user')
+        } catch {
+            `$user = `$computer.Create('user', `$Name)
+            `$created = `$true
+            `$user.SetInfo()
+        }
+        `$user.SetPassword(`$PlainPassword)
+        `$user.Put('Description', 'DecentraLabs Lab Station service account')
+        try {
+            `$flags = [int]`$user.UserFlags.Value
+        } catch {
+            `$flags = 0x0200
+        }
+        `$flags = (`$flags -bor 0x0200 -bor 0x10000) -band (-bnot 0x0002)
+        `$user.Put('UserFlags', `$flags)
+        `$user.SetInfo()
+        return `$true
+    } catch {
+        if (`$created) {
+            try { ([ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')).Delete('user', `$Name) } catch {}
+        }
+        Write-Output ('ADSI user setup failed: ' + `$_.Exception.Message)
+        return `$false
+    }
+}
+
 function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
     `$secure = ConvertTo-SecureString `$PlainPassword -AsPlainText -Force
     if (-not (Test-LocalUserCompat `$Name)) {
+        `$created = `$false
         try {
             New-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -AccountNeverExpires `$true -Description 'DecentraLabs Lab Station service account' -UserMayNotChangePassword `$true | Out-Null
+            `$created = `$true
         } catch {
-            & net user `$Name `$PlainPassword /add /expires:never /passwordchg:no | Out-Null
-            if (`$LASTEXITCODE -ne 0) { throw ('net user add failed with exit code ' + `$LASTEXITCODE) }
+            Write-Output ('New-LocalUser failed: ' + `$_.Exception.Message)
         }
+        if (-not `$created) {
+            & net user `$Name `$PlainPassword /add /expires:never /passwordchg:no | Out-Null
+            if (`$LASTEXITCODE -eq 0) { `$created = `$true } else { Write-Output ('net user add failed with exit code ' + `$LASTEXITCODE) }
+        }
+        if (-not `$created) {
+            `$created = Set-LocalUserWithAdsi `$Name `$PlainPassword
+        }
+        if (-not `$created) { throw ('Unable to create local user ' + `$Name + ' with New-LocalUser, net user, or ADSI') }
     } else {
+        `$updated = `$false
         try {
             Set-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -Description 'DecentraLabs Lab Station service account'
             Enable-LocalUser -Name `$Name -ErrorAction SilentlyContinue | Out-Null
+            `$updated = `$true
         } catch {
-            & net user `$Name `$PlainPassword /active:yes /expires:never /passwordchg:no | Out-Null
-            if (`$LASTEXITCODE -ne 0) { throw ('net user update failed with exit code ' + `$LASTEXITCODE) }
+            Write-Output ('Set-LocalUser failed: ' + `$_.Exception.Message)
         }
+        if (-not `$updated) {
+            & net user `$Name `$PlainPassword /active:yes /expires:never /passwordchg:no | Out-Null
+            if (`$LASTEXITCODE -eq 0) { `$updated = `$true } else { Write-Output ('net user update failed with exit code ' + `$LASTEXITCODE) }
+        }
+        if (-not `$updated) {
+            `$updated = Set-LocalUserWithAdsi `$Name `$PlainPassword
+        }
+        if (-not `$updated) { throw ('Unable to update local user ' + `$Name + ' with Set-LocalUser, net user, or ADSI') }
     }
+    try { & net user `$Name /active:yes /expires:never /passwordchg:no | Out-Null } catch {}
     if (-not (Test-LocalUserCompat `$Name)) { throw ('Local user ' + `$Name + ' was not created') }
 }
-
 function Get-AdsiLocalGroupBySid([string]`$GroupSid) {
     try {
         `$computer = [ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')
@@ -223,15 +272,20 @@ Add-LocalGroupMemberCompat 'S-1-5-32-545' `$User
 Add-LocalGroupMemberCompat 'S-1-5-32-555' `$User
 Remove-LocalGroupMemberCompat 'S-1-5-32-544' `$User
 `$rdpGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-555')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
+if (-not (Test-LocalUserCompat `$User)) {
+    throw ('Local user ' + `$User + ' was not created or could not be verified')
+}
 if (-not (Test-LocalGroupMemberCompat 'S-1-5-32-555' `$User)) {
     throw ('Local user ' + `$User + ' is not listed in ' + `$rdpGroup)
 }
+'LABSTATION_ACCOUNT_READY'
+exit 0
         )"
         script := StrReplace(script, "__LABUSER__", escapedUser)
         script := StrReplace(script, "__LABUSER_PASSWORD__", escapedPassword)
-        capture := LS_RunPowerShellCapture(script, "Configure lab service account")
+        capture := LS_RunPowerShellCapture(script, "Configure lab service account", 60000)
         exitCode := capture["exitCode"]
-        if (exitCode = 0 && this.AccountExists(user)) {
+        if (exitCode = 0 && InStr(capture["stdout"], "LABSTATION_ACCOUNT_READY") > 0 && this.AccountExists(user)) {
             password := localPassword
             LS_LogInfo(Format("Account {1} created/updated", user))
             return true
@@ -533,7 +587,8 @@ try {{
     if (Get-LocalUser -Name '{1}' -ErrorAction Stop) {{ '1'; exit 0 }}
 }} catch {{}}
 & net user '{1}' *> `$null
-if (`$LASTEXITCODE -eq 0) {{ '1' }}
+if (`$LASTEXITCODE -eq 0) {{ '1'; exit 0 }}
+exit 1
         )", escaped)
         capture := LS_RunPowerShellCapture(script, "Verify local account")
         return capture["exitCode"] = 0 && InStr(capture["stdout"], "1") > 0
