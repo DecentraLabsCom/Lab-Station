@@ -70,6 +70,15 @@ CheckNoNativeProbeAbort(A_ScriptDir "\..\system\AccountManager.ahk", &errors)
 CheckNoNativeProbeAbort(A_ScriptDir "\..\system\WinRM.ahk", &errors)
 CheckNoNativeProbeAbort(A_ScriptDir "\..\diagnostics\Status.ahk", &errors)
 
+if (!LS_Status.EqualsUser("LABUSER`r`n", "LABUSER")) {
+    errors.Push("status: CR/LF-padded principals must match")
+}
+
+lines := LS_Status.ParseLines("LABUSER`r`n")
+if (lines.Length != 1 || lines[1] != "LABUSER") {
+    errors.Push("status: ParseLines must trim CR/LF from command output")
+}
+
 if (errors.Length > 0) {
     for _, msg in errors {
         FileAppend(msg . "`n", "*")

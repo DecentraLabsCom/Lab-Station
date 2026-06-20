@@ -152,8 +152,8 @@ class LS_Status {
 
     static ParseLines(text) {
         cleaned := []
-        for line in StrSplit(Trim(text), "`n") {
-            trimmed := Trim(line)
+        for line in StrSplit(Trim(text, " `t`r`n"), "`n") {
+            trimmed := Trim(line, " `t`r`n")
             if (trimmed != "") {
                 cleaned.Push(trimmed)
             }
@@ -425,7 +425,7 @@ if (`$targetIsMember) { [void]`$names.Add(`$targetUser) }
     static NormalizePrincipal(value) {
         if (!value)
             return ""
-        cleaned := StrLower(Trim(value))
+        cleaned := StrLower(Trim(value, " `t`r`n"))
         if (cleaned = "")
             return ""
         if (SubStr(cleaned, 1, 1) = "*")
