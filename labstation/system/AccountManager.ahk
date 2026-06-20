@@ -46,8 +46,19 @@ class LS_AccountManager {
 
 function Test-LocalUserCompat([string]`$Name) {
     try { return [bool](Get-LocalUser -Name `$Name -ErrorAction Stop) } catch {}
-    & net user `$Name *> `$null
-    return `$LASTEXITCODE -eq 0
+    try {
+        `$safeName = `$Name.Replace("'", "''")
+        `$user = Get-CimInstance Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1
+        if (`$user) { return `$true }
+    } catch {}
+    `$oldPreference = `$ErrorActionPreference
+    `$ErrorActionPreference = 'Continue'
+    try {
+        & net.exe user `$Name 1>`$null 2>`$null
+        return `$LASTEXITCODE -eq 0
+    } finally {
+        `$ErrorActionPreference = `$oldPreference
+    }
 }
 
 function Set-LocalUserWithAdsi([string]`$Name, [string]`$PlainPassword) {
@@ -92,7 +103,10 @@ function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
             Write-Output ('New-LocalUser failed: ' + `$_.Exception.Message)
         }
         if (-not `$created) {
-            & net user `$Name `$PlainPassword /add /expires:never /passwordchg:no | Out-Null
+            `$oldPreference = `$ErrorActionPreference
+            `$ErrorActionPreference = 'Continue'
+            & net.exe user `$Name `$PlainPassword /add /expires:never /passwordchg:no 1>`$null 2>`$null
+            `$ErrorActionPreference = `$oldPreference
             if (`$LASTEXITCODE -eq 0) { `$created = `$true } else { Write-Output ('net user add failed with exit code ' + `$LASTEXITCODE) }
         }
         if (-not `$created) {
@@ -109,7 +123,10 @@ function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
             Write-Output ('Set-LocalUser failed: ' + `$_.Exception.Message)
         }
         if (-not `$updated) {
-            & net user `$Name `$PlainPassword /active:yes /expires:never /passwordchg:no | Out-Null
+            `$oldPreference = `$ErrorActionPreference
+            `$ErrorActionPreference = 'Continue'
+            & net.exe user `$Name `$PlainPassword /active:yes /expires:never /passwordchg:no 1>`$null 2>`$null
+            `$ErrorActionPreference = `$oldPreference
             if (`$LASTEXITCODE -eq 0) { `$updated = `$true } else { Write-Output ('net user update failed with exit code ' + `$LASTEXITCODE) }
         }
         if (-not `$updated) {
@@ -117,7 +134,12 @@ function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
         }
         if (-not `$updated) { throw ('Unable to update local user ' + `$Name + ' with Set-LocalUser, net user, or ADSI') }
     }
-    try { & net user `$Name /active:yes /expires:never /passwordchg:no | Out-Null } catch {}
+    try {
+        `$oldPreference = `$ErrorActionPreference
+        `$ErrorActionPreference = 'Continue'
+        & net.exe user `$Name /active:yes /expires:never /passwordchg:no 1>`$null 2>`$null
+        `$ErrorActionPreference = `$oldPreference
+    } catch {}
     if (-not (Test-LocalUserCompat `$Name)) { throw ('Local user ' + `$Name + ' was not created') }
 }
 function Get-AdsiLocalGroupBySid([string]`$GroupSid) {
@@ -194,7 +216,10 @@ function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
         }
     } catch {}
     foreach (`$candidate in `$memberCandidates) {
-        & net localgroup `$groupName `$candidate /add | Out-Null
+        `$oldPreference = `$ErrorActionPreference
+        `$ErrorActionPreference = 'Continue'
+        & net.exe localgroup `$groupName `$candidate /add 1>`$null 2>`$null
+        `$ErrorActionPreference = `$oldPreference
         if (`$LASTEXITCODE -eq 0) { return }
     }
     try {
@@ -249,7 +274,10 @@ function Test-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
         if (`$group.psbase.Invoke('IsMember', ('WinNT://./' + `$Member + ',user'))) { return `$true }
     } catch {}
     if (Test-LocalGroupMemberBySidCim `$GroupSid `$Member) { return `$true }
-    `$netLines = & net localgroup `$groupName
+    `$oldPreference = `$ErrorActionPreference
+    `$ErrorActionPreference = 'Continue'
+    `$netLines = & net.exe localgroup `$groupName 2>`$null
+    `$ErrorActionPreference = `$oldPreference
     `$netText = (`$netLines | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
     return (`$netText -match ('(^|\s|\\)' + [regex]::Escape(`$Member) + '(\s|$)'))
 }
@@ -263,7 +291,10 @@ function Remove-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
     try {
         `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
         `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-        & net localgroup `$groupName `$Member /delete | Out-Null
+        `$oldPreference = `$ErrorActionPreference
+        `$ErrorActionPreference = 'Continue'
+        & net.exe localgroup `$groupName `$Member /delete 1>`$null 2>`$null
+        `$ErrorActionPreference = `$oldPreference
     } catch {}
 }
 
@@ -425,7 +456,10 @@ function Add-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
         }
     } catch {}
     foreach (`$candidate in `$memberCandidates) {
-        & net localgroup `$Group `$candidate /add | Out-Null
+        `$oldPreference = `$ErrorActionPreference
+        `$ErrorActionPreference = 'Continue'
+        & net.exe localgroup `$Group `$candidate /add 1>`$null 2>`$null
+        `$ErrorActionPreference = `$oldPreference
         if (`$LASTEXITCODE -eq 0) { return }
     }
     try {
@@ -452,7 +486,10 @@ function Test-LocalGroupMemberCompat([string]`$Group, [string]`$Member) {
         if (`$adsiGroup.psbase.Invoke('IsMember', ('WinNT://./' + `$Member + ',user'))) { return `$true }
     } catch {}
     if (Test-LocalGroupMemberBySidCim 'S-1-5-32-555' `$Member) { return `$true }
-    `$netLines = & net localgroup `$Group
+    `$oldPreference = `$ErrorActionPreference
+    `$ErrorActionPreference = 'Continue'
+    `$netLines = & net.exe localgroup `$Group 2>`$null
+    `$ErrorActionPreference = `$oldPreference
     `$netText = (`$netLines | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
     return (`$netText -match ('(^|\s|\\)' + [regex]::Escape(`$Member) + '(\s|$)'))
 }
@@ -468,7 +505,10 @@ foreach (`$member in `$members) {
     }
 }
 Add-LocalGroupMemberCompat `$group `$User
-`$finalMembers = & net localgroup `$group
+`$oldPreference = `$ErrorActionPreference
+`$ErrorActionPreference = 'Continue'
+`$finalMembers = & net.exe localgroup `$group 2>`$null
+`$ErrorActionPreference = `$oldPreference
 if (-not (Test-LocalGroupMemberCompat `$group `$User)) {
     throw ('Local user ' + `$User + ' is not listed in ' + `$group)
 }
@@ -586,8 +626,16 @@ if (`$code -ne 0) { throw `"secedit failed with exit code `$code`" }
 try {{
     if (Get-LocalUser -Name '{1}' -ErrorAction Stop) {{ '1'; exit 0 }}
 }} catch {{}}
-& net user '{1}' *> `$null
-if (`$LASTEXITCODE -eq 0) {{ '1'; exit 0 }}
+try {{
+    `$user = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='{1}'" -ErrorAction Stop | Select-Object -First 1
+    if (`$user) {{ '1'; exit 0 }}
+}} catch {{}}
+`$oldPreference = `$ErrorActionPreference
+`$ErrorActionPreference = 'Continue'
+& net.exe user '{1}' 1>`$null 2>`$null
+`$code = `$LASTEXITCODE
+`$ErrorActionPreference = `$oldPreference
+if (`$code -eq 0) {{ '1'; exit 0 }}
 exit 1
         )", escaped)
         capture := LS_RunPowerShellCapture(script, "Verify local account")

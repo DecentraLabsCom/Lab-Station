@@ -291,7 +291,10 @@ try {
     }
 } catch {}
 try {
-    `$netLines = & net localgroup `$groupName
+    `$oldPreference = `$ErrorActionPreference
+    `$ErrorActionPreference = 'Continue'
+    `$netLines = & net.exe localgroup `$groupName 2>`$null
+    `$ErrorActionPreference = `$oldPreference
     `$collect = `$false
     foreach (`$line in `$netLines) {
         `$trimmed = [string]`$line.Trim()
@@ -440,8 +443,16 @@ if (`$targetIsMember) { [void]`$names.Add(`$targetUser) }
 try {{
     if (Get-LocalUser -Name '{1}' -ErrorAction Stop) {{ '1'; exit 0 }}
 }} catch {{}}
-& net user '{1}' *> `$null
-if (`$LASTEXITCODE -eq 0) {{ '1' }}
+try {{
+    `$user = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='{1}'" -ErrorAction Stop | Select-Object -First 1
+    if (`$user) {{ '1'; exit 0 }}
+}} catch {{}}
+`$oldPreference = `$ErrorActionPreference
+`$ErrorActionPreference = 'Continue'
+& net.exe user '{1}' 1>`$null 2>`$null
+`$code = `$LASTEXITCODE
+`$ErrorActionPreference = `$oldPreference
+if (`$code -eq 0) {{ '1' }}
         )", escaped)
         capture := LS_RunPowerShellCapture(script, "Check local user")
         return capture["exitCode"] = 0 && InStr(capture["stdout"], "1") > 0

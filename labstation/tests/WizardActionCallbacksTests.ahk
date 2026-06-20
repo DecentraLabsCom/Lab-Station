@@ -33,6 +33,20 @@ CheckSteps(modeName, steps, expectedLen, &errors) {
     }
 }
 
+CheckNoNativeProbeAbort(path, &errors) {
+    try {
+        content := FileRead(path, "UTF-8")
+        if InStr(content, "*> `$null") || InStr(content, "*> $null") {
+            errors.Push(path . ": must not use *> $null for native command probes")
+        }
+        if RegExMatch(content, "&\s+net\s+(user|localgroup)\b") {
+            errors.Push(path . ": use net.exe with explicit stderr handling")
+        }
+    } catch as e {
+        errors.Push(path . ": cannot read file - " . e.Message)
+    }
+}
+
 errors := []
 
 try {
@@ -48,6 +62,10 @@ try {
 } catch as e {
     errors.Push("hybrid: exception while building steps - " . e.Message)
 }
+
+CheckNoNativeProbeAbort(A_ScriptDir "\..\system\AccountManager.ahk", &errors)
+CheckNoNativeProbeAbort(A_ScriptDir "\..\system\WinRM.ahk", &errors)
+CheckNoNativeProbeAbort(A_ScriptDir "\..\diagnostics\Status.ahk", &errors)
 
 if (errors.Length > 0) {
     for _, msg in errors {

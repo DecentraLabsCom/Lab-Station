@@ -165,8 +165,19 @@ Start-Service -Name WinRM
 
 function Test-LocalUserCompat([string]$Name) {
     try { return [bool](Get-LocalUser -Name $Name -ErrorAction Stop) } catch {}
-    & net user $Name *> $null
-    return $LASTEXITCODE -eq 0
+    try {
+        $safeName = $Name.Replace("'", "''")
+        $user = Get-CimInstance Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + $safeName + "'") -ErrorAction Stop | Select-Object -First 1
+        if ($user) { return $true }
+    } catch {}
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & net.exe user $Name 1>$null 2>$null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $oldPreference
+    }
 }
 
 function Get-LocalUserSidCompat([string]$Name) {
@@ -188,7 +199,10 @@ function Ensure-LocalUserCompat([string]$Name, [string]$PlainPassword) {
         try {
             New-LocalUser -Name $Name -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account' | Out-Null
         } catch {
-            & net user $Name $PlainPassword /add /expires:never /passwordchg:no | Out-Null
+            $oldPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            & net.exe user $Name $PlainPassword /add /expires:never /passwordchg:no 1>$null 2>$null
+            $ErrorActionPreference = $oldPreference
             if ($LASTEXITCODE -ne 0) { throw ('net user add failed with exit code ' + $LASTEXITCODE) }
         }
     } else {
@@ -196,7 +210,10 @@ function Ensure-LocalUserCompat([string]$Name, [string]$PlainPassword) {
             Set-LocalUser -Name $Name -Password $secure -PasswordNeverExpires $true -AccountNeverExpires $true -Description 'DecentraLabs Lab Gateway WinRM account'
             Enable-LocalUser -Name $Name -ErrorAction SilentlyContinue | Out-Null
         } catch {
-            & net user $Name $PlainPassword /active:yes /expires:never /passwordchg:no | Out-Null
+            $oldPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            & net.exe user $Name $PlainPassword /active:yes /expires:never /passwordchg:no 1>$null 2>$null
+            $ErrorActionPreference = $oldPreference
             if ($LASTEXITCODE -ne 0) { throw ('net user update failed with exit code ' + $LASTEXITCODE) }
         }
     }
@@ -212,7 +229,10 @@ function Add-LocalGroupMemberCompat([string]$GroupSid, [string]$Member) {
     try {
         $sid = New-Object System.Security.Principal.SecurityIdentifier($GroupSid)
         $groupName = $sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-        & net localgroup $groupName $Member /add | Out-Null
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & net.exe localgroup $groupName $Member /add 1>$null 2>$null
+        $ErrorActionPreference = $oldPreference
     } catch {}
 }
 
