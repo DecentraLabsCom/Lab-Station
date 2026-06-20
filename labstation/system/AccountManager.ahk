@@ -68,7 +68,7 @@ function Add-ToLocalGroupBySid([string]`$GroupSid, `$LocalUser) {
     foreach (`$member in `$members) {
         if (`$member.SID -and `$member.SID.Value -eq `$LocalUser.SID.Value) { return `$groupName }
     }
-    Add-LocalGroupMember -Group `$groupName -Member ('.\' + `$LocalUser.Name) -ErrorAction Stop
+    Add-LocalGroupMember -Group `$groupName -Member `$LocalUser.SID.Value -ErrorAction Stop
     return `$groupName
 }
 
@@ -86,7 +86,7 @@ function Test-LocalGroupContainsUser([string]`$GroupSid, `$LocalUser) {
 `$usersGroup = Add-ToLocalGroupBySid 'S-1-5-32-545' `$localUser
 `$rdpGroup = Add-ToLocalGroupBySid 'S-1-5-32-555' `$localUser
 try {
-    Remove-LocalGroupMember -Group (Get-LocalGroupNameBySid 'S-1-5-32-544') -Member ('.\' + `$User) -ErrorAction SilentlyContinue
+    Remove-LocalGroupMember -Group (Get-LocalGroupNameBySid 'S-1-5-32-544') -Member `$localUser.SID.Value -ErrorAction SilentlyContinue
 } catch {}
 Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -ErrorAction Stop
 Enable-NetFirewallRule -Name 'RemoteDesktop-*' -ErrorAction SilentlyContinue | Out-Null
