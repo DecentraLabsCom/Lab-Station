@@ -74,6 +74,12 @@ guiSource := FileRead(A_ScriptDir "\..\ui\MainGui.ahk", "UTF-8")
 if InStr(guiSource, "Ready: ") || InStr(guiSource, "Needs attention") {
     errors.Push("gui: status panel must use State instead of Ready/Needs attention")
 }
+if !InStr(guiSource, "ConnectorsButton") || !InStr(guiSource, "LS_ShowConnectorsPanel") {
+    errors.Push("gui: main panel must expose the Connectors panel")
+}
+if !InStr(guiSource, '"ConnectorsButton"') {
+    errors.Push("gui: Connectors button must be disabled while status checks are running")
+}
 if !InStr(guiSource, "LS_GuiSetQuickActionsEnabled(gui, false)") {
     errors.Push("gui: quick actions must be disabled while status checks are running")
 }
@@ -81,6 +87,22 @@ if !RegExMatch(guiSource, "s)LS_GuiEndRefresh\(gui\).*ServiceRestartButton\.Enab
     ; Service restart should be restored by LS_GuiRefreshServiceState(), not blindly.
 } else {
     errors.Push("gui: service restart must not be blindly re-enabled after status checks")
+}
+
+connectorSource := FileRead(A_ScriptDir "\..\connectors\Connectors.ahk", "UTF-8")
+connectorsPanelSource := FileRead(A_ScriptDir "\..\ui\ConnectorsPanel.ahk", "UTF-8")
+for expected in ['"fmi"', '"guacamole-app"', '"opc-ua"', '"tango"'] {
+    if !InStr(connectorSource, expected) {
+        errors.Push("connectors: registry missing " . expected)
+    }
+}
+for expected in ["FMU_BACKEND_MODE=station", "FMU_STATION_BASE_URL=", "FMU_STATION_INTERNAL_TOKEN="] {
+    if !InStr(connectorSource, expected) {
+        errors.Push("connectors: FMI gateway config missing " . expected)
+    }
+}
+if !InStr(connectorsPanelSource, "LS_ConnectorsPanelSelect") || !InStr(connectorsPanelSource, "LS_ConnectorsPanelRefresh") {
+    errors.Push("connectors: panel must support selection and refresh")
 }
 
 if (!LS_Status.EqualsUser("LABUSER`r`n", "LABUSER")) {

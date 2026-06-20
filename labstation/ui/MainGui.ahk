@@ -10,6 +10,7 @@
 #Include ..\service\SessionManager.ahk
 #Include ..\service\SessionGuard.ahk
 #Include ..\system\ServiceManager.ahk
+#Include ConnectorsPanel.ahk
 
 ; Entry point for LabStation.exe gui
 LS_StartMainGui() {
@@ -42,6 +43,7 @@ LS_BuildGui() {
     myGui.LocalModeButton := ""
     myGui.ServiceStatusText := ""
     myGui.ServiceRestartButton := ""
+    myGui.ConnectorsButton := ""
 
     ; Header
     myGui.SetFont("s17 Bold cFFFFFF", "Bahnschrift")
@@ -116,6 +118,9 @@ LS_BuildGui() {
     myGui.SetFont("s9 cFFFFFF")
     myGui.ServiceRestartButton := myGui.AddButton("x490 y260 w220 h34", "⟳ Restart service")
     myGui.ServiceRestartButton.OnEvent("Click", LS_GuiRestartService_Handler)
+
+    myGui.ConnectorsButton := myGui.AddButton("x490 y305 w220 h34", "Connectors")
+    myGui.ConnectorsButton.OnEvent("Click", LS_GuiConnectors_Handler)
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
@@ -251,7 +256,7 @@ LS_GuiEndRefresh(gui) {
 }
 
 LS_GuiSetQuickActionsEnabled(gui, enabled, includeService := true) {
-    for propName in ["SetupButton", "LocalModeButton"] {
+    for propName in ["SetupButton", "LocalModeButton", "ConnectorsButton"] {
         if (gui.HasProp(propName) && gui.%propName%)
             gui.%propName%.Enabled := enabled
     }
@@ -506,4 +511,8 @@ LS_GuiRestartService_Handler(ctrl, info) {
 
 LS_GuiToggleLocalMode_Handler(ctrl, info) {
     LS_GuiToggleLocalMode(ctrl.Gui)
+}
+
+LS_GuiConnectors_Handler(ctrl, info) {
+    LS_ShowConnectorsPanel()
 }
