@@ -44,269 +44,56 @@ class LS_AccountManager {
 `$User = '__LABUSER__'
 `$Password = '__LABUSER_PASSWORD__'
 
-function Test-LocalUserCompat([string]`$Name) {
-    try { return [bool](Get-LocalUser -Name `$Name -ErrorAction Stop) } catch {}
-    try {
-        `$safeName = `$Name.Replace("'", "''")
-        `$user = Get-CimInstance Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1
-        if (`$user) { return `$true }
-    } catch {}
-    `$oldPreference = `$ErrorActionPreference
-    `$ErrorActionPreference = 'Continue'
-    try {
-        & net.exe user `$Name 1>`$null 2>`$null
-        return `$LASTEXITCODE -eq 0
-    } finally {
-        `$ErrorActionPreference = `$oldPreference
-    }
+function Get-LocalGroupNameBySid([string]`$GroupSid) {
+    return (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
 }
 
-function Set-LocalUserWithAdsi([string]`$Name, [string]`$PlainPassword) {
-    `$created = `$false
-    try {
-        `$computer = [ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')
-        try {
-            `$user = [ADSI]('WinNT://' + `$env:COMPUTERNAME + '/' + `$Name + ',user')
-        } catch {
-            `$user = `$computer.Create('user', `$Name)
-            `$created = `$true
-            `$user.SetInfo()
-        }
-        `$user.SetPassword(`$PlainPassword)
-        `$user.Put('Description', 'DecentraLabs Lab Station service account')
-        try {
-            `$flags = [int]`$user.UserFlags.Value
-        } catch {
-            `$flags = 0x0200
-        }
-        `$flags = (`$flags -bor 0x0200 -bor 0x10000) -band (-bnot 0x0002)
-        `$user.Put('UserFlags', `$flags)
-        `$user.SetInfo()
-        return `$true
-    } catch {
-        if (`$created) {
-            try { ([ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')).Delete('user', `$Name) } catch {}
-        }
-        Write-Output ('ADSI user setup failed: ' + `$_.Exception.Message)
-        return `$false
-    }
-}
-
-function Ensure-LocalUserCompat([string]`$Name, [string]`$PlainPassword) {
+function Ensure-LocalUser([string]`$Name, [string]`$PlainPassword) {
     `$secure = ConvertTo-SecureString `$PlainPassword -AsPlainText -Force
-    if (-not (Test-LocalUserCompat `$Name)) {
-        `$created = `$false
-        try {
-            New-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -AccountNeverExpires `$true -Description 'DecentraLabs Lab Station service account' -UserMayNotChangePassword `$true | Out-Null
-            `$created = `$true
-        } catch {
-            Write-Output ('New-LocalUser failed: ' + `$_.Exception.Message)
-        }
-        if (-not `$created) {
-            `$oldPreference = `$ErrorActionPreference
-            `$ErrorActionPreference = 'Continue'
-            & net.exe user `$Name `$PlainPassword /add /expires:never /passwordchg:no 1>`$null 2>`$null
-            `$ErrorActionPreference = `$oldPreference
-            if (`$LASTEXITCODE -eq 0) { `$created = `$true } else { Write-Output ('net user add failed with exit code ' + `$LASTEXITCODE) }
-        }
-        if (-not `$created) {
-            `$created = Set-LocalUserWithAdsi `$Name `$PlainPassword
-        }
-        if (-not `$created) { throw ('Unable to create local user ' + `$Name + ' with New-LocalUser, net user, or ADSI') }
+    `$existing = Get-LocalUser -Name `$Name -ErrorAction SilentlyContinue
+    if (`$existing) {
+        Set-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -Description 'DecentraLabs Lab Station service account' -ErrorAction Stop
+        Enable-LocalUser -Name `$Name -ErrorAction Stop
     } else {
-        `$updated = `$false
-        try {
-            Set-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -Description 'DecentraLabs Lab Station service account'
-            Enable-LocalUser -Name `$Name -ErrorAction SilentlyContinue | Out-Null
-            `$updated = `$true
-        } catch {
-            Write-Output ('Set-LocalUser failed: ' + `$_.Exception.Message)
-        }
-        if (-not `$updated) {
-            `$oldPreference = `$ErrorActionPreference
-            `$ErrorActionPreference = 'Continue'
-            & net.exe user `$Name `$PlainPassword /active:yes /expires:never /passwordchg:no 1>`$null 2>`$null
-            `$ErrorActionPreference = `$oldPreference
-            if (`$LASTEXITCODE -eq 0) { `$updated = `$true } else { Write-Output ('net user update failed with exit code ' + `$LASTEXITCODE) }
-        }
-        if (-not `$updated) {
-            `$updated = Set-LocalUserWithAdsi `$Name `$PlainPassword
-        }
-        if (-not `$updated) { throw ('Unable to update local user ' + `$Name + ' with Set-LocalUser, net user, or ADSI') }
+        New-LocalUser -Name `$Name -Password `$secure -PasswordNeverExpires `$true -AccountNeverExpires `$true -Description 'DecentraLabs Lab Station service account' -ErrorAction Stop | Out-Null
     }
-    try {
-        `$oldPreference = `$ErrorActionPreference
-        `$ErrorActionPreference = 'Continue'
-        & net.exe user `$Name /active:yes /expires:never /passwordchg:no 1>`$null 2>`$null
-        `$ErrorActionPreference = `$oldPreference
-    } catch {}
-    if (-not (Test-LocalUserCompat `$Name)) { throw ('Local user ' + `$Name + ' was not created') }
-}
-function Get-AdsiLocalGroupBySid([string]`$GroupSid) {
-    try {
-        `$computer = [ADSI]('WinNT://' + `$env:COMPUTERNAME + ',computer')
-        foreach (`$child in `$computer.Children) {
-            try {
-                if (`$child.SchemaClassName -ne 'Group') { continue }
-                `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$child.objectSid.Value, 0)
-                if (`$sid.Value -eq `$GroupSid) { return `$child }
-            } catch {}
-        }
-    } catch {}
-    return `$null
+    `$user = Get-LocalUser -Name `$Name -ErrorAction Stop
+    if (-not `$user.Enabled) { Enable-LocalUser -Name `$Name -ErrorAction Stop }
+    return `$user
 }
 
-function Get-CimLocalGroupBySid([string]`$GroupSid) {
-    try { return Get-CimInstance Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
-    try { return Get-WmiObject Win32_Group -Filter ("SID='" + `$GroupSid.Replace("'", "''") + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
-    return `$null
+function Add-ToLocalGroupBySid([string]`$GroupSid, `$LocalUser) {
+    `$groupName = Get-LocalGroupNameBySid `$GroupSid
+    `$members = @(Get-LocalGroupMember -Group `$groupName -ErrorAction SilentlyContinue)
+    foreach (`$member in `$members) {
+        if (`$member.SID -and `$member.SID.Value -eq `$LocalUser.SID.Value) { return `$groupName }
+    }
+    Add-LocalGroupMember -Group `$groupName -Member ('.\' + `$LocalUser.Name) -ErrorAction Stop
+    return `$groupName
 }
 
-function Get-CimLocalUser([string]`$Name) {
-    `$safeName = `$Name.Replace("'", "''")
-    try { return Get-CimInstance Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
-    try { return Get-WmiObject Win32_UserAccount -Filter ("LocalAccount=True AND Name='" + `$safeName + "'") -ErrorAction Stop | Select-Object -First 1 } catch {}
-    return `$null
-}
-
-function Add-LocalGroupMemberBySidCim([string]`$GroupSid, [string]`$Member) {
-    `$group = Get-CimLocalGroupBySid `$GroupSid
-    `$user = Get-CimLocalUser `$Member
-    if (-not `$group -or -not `$user) { return `$false }
-    try {
-        `$groupPath = 'WinNT://' + `$group.Domain + '/' + `$group.Name + ',group'
-        `$userPath = 'WinNT://' + `$user.Domain + '/' + `$user.Name + ',user'
-        `$adsiGroup = [ADSI]`$groupPath
-        try {
-            if (`$adsiGroup.psbase.Invoke('IsMember', `$userPath)) { return `$true }
-        } catch {}
-        `$adsiGroup.Add(`$userPath)
-        return `$true
-    } catch {
-        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return `$true }
+function Test-LocalGroupContainsUser([string]`$GroupSid, `$LocalUser) {
+    `$groupName = Get-LocalGroupNameBySid `$GroupSid
+    `$members = @(Get-LocalGroupMember -Group `$groupName -ErrorAction Stop)
+    foreach (`$member in `$members) {
+        if (`$member.SID -and `$member.SID.Value -eq `$LocalUser.SID.Value) { return `$true }
+        if (`$member.Name -and `$member.Name.Split('\')[-1].ToLowerInvariant() -eq `$LocalUser.Name.ToLowerInvariant()) { return `$true }
     }
     return `$false
 }
 
-function Test-LocalGroupMemberBySidCim([string]`$GroupSid, [string]`$Member) {
-    `$group = Get-CimLocalGroupBySid `$GroupSid
-    `$user = Get-CimLocalUser `$Member
-    if (-not `$group -or -not `$user) { return `$false }
-    try {
-        `$groupPath = 'WinNT://' + `$group.Domain + '/' + `$group.Name + ',group'
-        `$userPath = 'WinNT://' + `$user.Domain + '/' + `$user.Name + ',user'
-        return [bool]([ADSI]`$groupPath).psbase.Invoke('IsMember', `$userPath)
-    } catch {}
-    return `$false
-}
-
-function Add-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
-    `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
-    `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-    `$memberSid = ''
-    try { `$memberSid = (Get-LocalUser -Name `$Member -ErrorAction Stop).SID.Value } catch {}
-    `$memberCandidates = @(`$Member, ('.\' + `$Member), (`$env:COMPUTERNAME + '\' + `$Member))
-    if (`$memberSid) { `$memberCandidates += `$memberSid }
-    try {
-        `$localGroupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
-        foreach (`$candidate in `$memberCandidates) {
-            try { Add-LocalGroupMember -Group `$localGroupName -Member `$candidate -ErrorAction Stop; return } catch {
-                if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
-            }
-        }
-    } catch {}
-    foreach (`$candidate in `$memberCandidates) {
-        `$oldPreference = `$ErrorActionPreference
-        `$ErrorActionPreference = 'Continue'
-        & net.exe localgroup `$groupName `$candidate /add 1>`$null 2>`$null
-        `$ErrorActionPreference = `$oldPreference
-        if (`$LASTEXITCODE -eq 0) { return }
-    }
-    try {
-        `$group = Get-AdsiLocalGroupBySid `$GroupSid
-        if (`$group) {
-            `$group.Add('WinNT://' + `$env:COMPUTERNAME + '/' + `$Member + ',user')
-            return
-        }
-    } catch {
-        if (`$_.Exception.Message -match 'already.*member|ya.*miembro') { return }
-    }
-    try {
-        `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
-        `$group.Add('WinNT://./' + `$Member + ',user')
-        return
-    } catch {}
-    if (Add-LocalGroupMemberBySidCim `$GroupSid `$Member) { return }
-    throw ('Unable to add ' + `$Member + ' to ' + `$groupName)
-}
-
-function Test-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
-    `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
-    `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-    `$memberSid = ''
-    try { `$memberSid = (Get-LocalUser -Name `$Member -ErrorAction Stop).SID.Value } catch {}
-    try {
-        `$localGroupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
-        `$members = Get-LocalGroupMember -Group `$localGroupName -ErrorAction Stop
-        foreach (`$entry in `$members) {
-            if (`$memberSid -and `$entry.SID -and `$entry.SID.Value -eq `$memberSid) { return `$true }
-            if (`$entry.Name -and `$entry.Name.Split('\')[-1].ToLowerInvariant() -eq `$Member.ToLowerInvariant()) { return `$true }
-        }
-    } catch {}
-    try {
-        `$group = Get-AdsiLocalGroupBySid `$GroupSid
-        if (`$group) {
-            `$members = `$group.psbase.Invoke('Members')
-            foreach (`$entry in `$members) {
-                try {
-                    `$entrySid = New-Object System.Security.Principal.SecurityIdentifier(`$entry.GetType().InvokeMember('objectSid', 'GetProperty', `$null, `$entry, `$null), 0)
-                    if (`$memberSid -and `$entrySid.Value -eq `$memberSid) { return `$true }
-                } catch {}
-                try {
-                    `$entryName = `$entry.GetType().InvokeMember('Name', 'GetProperty', `$null, `$entry, `$null)
-                    if (`$entryName -and `$entryName.ToLowerInvariant() -eq `$Member.ToLowerInvariant()) { return `$true }
-                } catch {}
-            }
-        }
-    } catch {}
-    try {
-        `$group = [ADSI]('WinNT://./' + `$groupName + ',group')
-        if (`$group.psbase.Invoke('IsMember', ('WinNT://./' + `$Member + ',user'))) { return `$true }
-    } catch {}
-    if (Test-LocalGroupMemberBySidCim `$GroupSid `$Member) { return `$true }
-    `$oldPreference = `$ErrorActionPreference
-    `$ErrorActionPreference = 'Continue'
-    `$netLines = & net.exe localgroup `$groupName 2>`$null
-    `$ErrorActionPreference = `$oldPreference
-    `$netText = (`$netLines | Where-Object { `$_ -notmatch '(?i)(command completed|comando.*complet|se ha completado)' }) -join "`n"
-    return (`$netText -match ('(^|\s|\\)' + [regex]::Escape(`$Member) + '(\s|$)'))
-}
-
-function Remove-LocalGroupMemberCompat([string]`$GroupSid, [string]`$Member) {
-    try {
-        `$groupName = (Get-LocalGroup -SID `$GroupSid -ErrorAction Stop).Name
-        Remove-LocalGroupMember -Group `$groupName -Member `$Member -ErrorAction SilentlyContinue
-        return
-    } catch {}
-    try {
-        `$sid = New-Object System.Security.Principal.SecurityIdentifier(`$GroupSid)
-        `$groupName = `$sid.Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-        `$oldPreference = `$ErrorActionPreference
-        `$ErrorActionPreference = 'Continue'
-        & net.exe localgroup `$groupName `$Member /delete 1>`$null 2>`$null
-        `$ErrorActionPreference = `$oldPreference
-    } catch {}
-}
-
-Ensure-LocalUserCompat `$User `$Password
-Add-LocalGroupMemberCompat 'S-1-5-32-545' `$User
-Add-LocalGroupMemberCompat 'S-1-5-32-555' `$User
-Remove-LocalGroupMemberCompat 'S-1-5-32-544' `$User
-`$rdpGroup = (New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-555')).Translate([System.Security.Principal.NTAccount]).Value.Split('\')[-1]
-if (-not (Test-LocalUserCompat `$User)) {
+`$localUser = Ensure-LocalUser `$User `$Password
+`$usersGroup = Add-ToLocalGroupBySid 'S-1-5-32-545' `$localUser
+`$rdpGroup = Add-ToLocalGroupBySid 'S-1-5-32-555' `$localUser
+try {
+    Remove-LocalGroupMember -Group (Get-LocalGroupNameBySid 'S-1-5-32-544') -Member ('.\' + `$User) -ErrorAction SilentlyContinue
+} catch {}
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -ErrorAction Stop
+Enable-NetFirewallRule -Name 'RemoteDesktop-*' -ErrorAction SilentlyContinue | Out-Null
+if (-not (Get-LocalUser -Name `$User -ErrorAction Stop)) {
     throw ('Local user ' + `$User + ' was not created or could not be verified')
 }
-if (-not (Test-LocalGroupMemberCompat 'S-1-5-32-555' `$User)) {
+if (-not (Test-LocalGroupContainsUser 'S-1-5-32-555' `$localUser)) {
     throw ('Local user ' + `$User + ' is not listed in ' + `$rdpGroup)
 }
 'LABSTATION_ACCOUNT_READY'
