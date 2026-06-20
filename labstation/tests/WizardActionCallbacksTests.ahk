@@ -72,7 +72,7 @@ CheckNoNativeProbeAbort(A_ScriptDir "\..\diagnostics\Status.ahk", &errors)
 
 guiSource := FileRead(A_ScriptDir "\..\ui\MainGui.ahk", "UTF-8")
 if InStr(guiSource, "Ready: ") || InStr(guiSource, "Needs attention") {
-    errors.Push("gui: status panel must use Diagnosis instead of Ready/Needs attention")
+    errors.Push("gui: status panel must use State instead of Ready/Needs attention")
 }
 if !InStr(guiSource, "LS_GuiSetQuickActionsEnabled(gui, false)") {
     errors.Push("gui: quick actions must be disabled while status checks are running")

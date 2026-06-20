@@ -188,10 +188,10 @@ LS_GuiRefreshStatus(gui) {
     summary.Push("")
     summary.Push("🖥️  Host: " . (status.Has("host") ? status["host"] : A_ComputerName))
     summary.Push("")
-    diagnosisReady := status.Has("summary") && status["summary"].Has("state") ? status["summary"]["state"] = "ready"
+    stateReady := status.Has("summary") && status["summary"].Has("state") ? status["summary"]["state"] = "ready"
         : ((status.Has("summary") && status["summary"].Has("ready")) ? status["summary"]["ready"] : false)
-    diagnosisIcon := diagnosisReady ? "✅" : "⚠️"
-    summary.Push(diagnosisIcon . "  Diagnosis: " . (diagnosisReady ? "OK" : "Needs action"))
+    stateIcon := stateReady ? "✅" : "⚠️"
+    summary.Push(stateIcon . "  State: " . (stateReady ? "OK" : "Needs action"))
     summary.Push("")
     localMode := status.Has("localModeEnabled") ? status["localModeEnabled"] : false
     localIcon := localMode ? "🔒" : "🌐"
