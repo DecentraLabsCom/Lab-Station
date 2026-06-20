@@ -25,7 +25,7 @@ LS_RunPowerShell(script, description := "PowerShell command") {
     return exitCode
 }
 
-LS_RunPowerShellCapture(script, description := "PowerShell command") {
+LS_RunPowerShellCapture(script, description := "PowerShell command", timeoutMs := 15000) {
     tempScript := A_Temp "\LabStation-" . A_TickCount . "-capture.ps1"
     try FileDelete(tempScript)
     try {
@@ -35,7 +35,7 @@ LS_RunPowerShellCapture(script, description := "PowerShell command") {
         return Map("exitCode", -1, "stdout", "", "stderr", e.Message)
     }
     command := Format('"{1}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{2}"', LS_GetPowerShellPath(), tempScript)
-    capture := LS_RunCommandCapture(command, description)
+    capture := LS_RunCommandCapture(command, description, timeoutMs)
     try FileDelete(tempScript)
     return capture
 }
