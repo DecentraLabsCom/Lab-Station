@@ -225,6 +225,7 @@ LS_GuiBeginRefresh(gui) {
         gui.RefreshButton.Enabled := false
         gui.RefreshButton.Text := "Refreshing"
     }
+    LS_GuiSetQuickActionsEnabled(gui, false)
     if (gui.HasProp("SetupChip") && gui.SetupChip) {
         gui.SetupChip.Text := "(checking)"
         gui.SetupChip.Opt("cC08A2B")
@@ -243,9 +244,19 @@ LS_GuiEndRefresh(gui) {
         gui.RefreshButton.Enabled := true
         gui.RefreshButton.Text := "Refresh"
     }
+    LS_GuiSetQuickActionsEnabled(gui, true, false)
     if (gui.HasProp("SetupChip") && gui.SetupChip && InStr(StrLower(gui.SetupChip.Text), "(checking") = 1) {
         gui.SetupChip.Text := ""
     }
+}
+
+LS_GuiSetQuickActionsEnabled(gui, enabled, includeService := true) {
+    for propName in ["SetupButton", "LocalModeButton"] {
+        if (gui.HasProp(propName) && gui.%propName%)
+            gui.%propName%.Enabled := enabled
+    }
+    if (includeService && gui.HasProp("ServiceRestartButton") && gui.ServiceRestartButton)
+        gui.ServiceRestartButton.Enabled := enabled
 }
 
 LS_GuiSpinnerStart(gui) {

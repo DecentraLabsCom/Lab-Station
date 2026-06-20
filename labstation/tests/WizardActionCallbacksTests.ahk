@@ -74,6 +74,14 @@ guiSource := FileRead(A_ScriptDir "\..\ui\MainGui.ahk", "UTF-8")
 if InStr(guiSource, "Ready: ") || InStr(guiSource, "Needs attention") {
     errors.Push("gui: status panel must use Diagnosis instead of Ready/Needs attention")
 }
+if !InStr(guiSource, "LS_GuiSetQuickActionsEnabled(gui, false)") {
+    errors.Push("gui: quick actions must be disabled while status checks are running")
+}
+if !RegExMatch(guiSource, "s)LS_GuiEndRefresh\(gui\).*ServiceRestartButton\.Enabled\s*:=\s*true") {
+    ; Service restart should be restored by LS_GuiRefreshServiceState(), not blindly.
+} else {
+    errors.Push("gui: service restart must not be blindly re-enabled after status checks")
+}
 
 if (!LS_Status.EqualsUser("LABUSER`r`n", "LABUSER")) {
     errors.Push("status: CR/LF-padded principals must match")
