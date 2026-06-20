@@ -549,8 +549,6 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("SeDenyInteractiveLogonRight not configured")
         if (deny["labUserDenied"])
             issues.Push("Lab user denied interactive logon")
-        if (data["sessions"]["hasOtherUsers"])
-            issues.Push("Another user is logged on")
         if (data["wake"]["armedCount"] = 0)
             issues.Push("No wake-armed devices detected")
         if (data["wake"]["nicNonCompliant"].Length > 0)

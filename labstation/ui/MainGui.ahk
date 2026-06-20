@@ -137,7 +137,9 @@ LS_GuiRefreshStatusAfterShow() {
 }
 
 LS_GuiNeedsSetup(status) {
-    ; Basic readiness check: summary.ready false OR missing core features
+    if (status.Has("summary") && status["summary"].Has("state") && status["summary"]["state"] != "ready")
+        return true
+    ; Backward compatibility with old status payloads.
     if (status.Has("summary") && status["summary"].Has("ready") && !status["summary"]["ready"])
         return true
     if (status.Has("remoteAppEnabled") && !status["remoteAppEnabled"])
@@ -186,9 +188,10 @@ LS_GuiRefreshStatus(gui) {
     summary.Push("")
     summary.Push("🖥️  Host: " . (status.Has("host") ? status["host"] : A_ComputerName))
     summary.Push("")
-    ready := (status.Has("summary") && status["summary"].Has("ready")) ? status["summary"]["ready"] : false
-    readyIcon := ready ? "✅" : "⚠️"
-    summary.Push(readyIcon . "  Ready: " . (ready ? "Yes" : "Needs attention"))
+    diagnosisReady := status.Has("summary") && status["summary"].Has("state") ? status["summary"]["state"] = "ready"
+        : ((status.Has("summary") && status["summary"].Has("ready")) ? status["summary"]["ready"] : false)
+    diagnosisIcon := diagnosisReady ? "✅" : "⚠️"
+    summary.Push(diagnosisIcon . "  Diagnosis: " . (diagnosisReady ? "OK" : "Needs action"))
     summary.Push("")
     localMode := status.Has("localModeEnabled") ? status["localModeEnabled"] : false
     localIcon := localMode ? "🔒" : "🌐"
