@@ -174,7 +174,7 @@ LS_WizardWinRM() {
         text := "WinRM is ready for Lab Gateway operations." . "`n`n"
         text .= "User: .\" . LS_WinRM.DefaultGatewayUser . "`n"
         text .= "Password: " . pass . "`n`n"
-        text .= "Store these in the Lab Gateway ops-worker environment as the host-specific WINRM_USER_* and WINRM_PASS_* values."
+        text .= "In Lab Gateway, open Lab Manager -> Lab Station Ops and save these in WinRM Credentials for this host address."
         MsgBox text, "Lab Station", "OK Iconi"
         return true
     }

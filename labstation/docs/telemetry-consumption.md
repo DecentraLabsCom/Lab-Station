@@ -160,7 +160,7 @@ $summary
 - `summary.ready`: `true` when RemoteApp, autostart, WoL, and policies are healthy.
 - `status.localSessionActive`: signals if a local session is still active (instructor). Combine with `operations.lastForcedLogoff.timestamp` to know if the host was cleaned.
 - `status.localModeEnabled`: reflects the presence of `data/local-mode.flag`; the UI should block reservations while this is true.
-- `status.wake.nicPower`: array of adapters with `wolReady`, `wakeArmed`, and `complianceIssues` (Wake on Magic Packet, Wake on Pattern, AllowTurnOff). Allows alerts when someone re-enabled "Allow computer to turn off" or the wake patterns changed.
+- `status.wake.nicPower`: array of adapters with `macAddress`, `status`, `wolReady`, `wakeArmed`, and `complianceIssues` (Wake on Magic Packet, Wake on Pattern, AllowTurnOff). Allows alerts when someone re-enabled "Allow computer to turn off" or the wake patterns changed, and lets Lab Gateway prefill the host Wake-on-LAN MAC.
 - `status.power.sleepCompliant` / `power.hibernateCompliant`: confirm that `powercfg /q` still shows 0 seconds for AC/DC.
 - `operations.lastPrepareSession` / `lastReleaseSession`: include `timestamp`, `success`, and metadata (`durationMs`, `user`). Useful for preparation/cleanup SLAs.
 - `operations.lastForcedLogoff`: mirrors the latest line in the JSONL log; lets you show whom the instructor expelled and the message used.

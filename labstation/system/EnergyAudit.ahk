@@ -111,7 +111,8 @@ class LS_EnergyAudit {
             if (`$advancedTable.ContainsKey('wakeonpattern')) {
                 `$advWakePattern = `$advancedTable['wakeonpattern']
             }
-            `$line = '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f `$adapter.Name, `$pm.WakeOnMagicPacket, `$pm.WakeOnPattern, `$pm.DeviceSleepOnDisconnect, `$pm.AllowComputerToTurnOffDevice, `$advWakeMagic, `$advWakePattern
+            `$safeDescription = ([string]`$adapter.InterfaceDescription) -replace '\|', ' '
+            `$line = '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}|{9}' -f `$adapter.Name, `$pm.WakeOnMagicPacket, `$pm.WakeOnPattern, `$pm.DeviceSleepOnDisconnect, `$pm.AllowComputerToTurnOffDevice, `$advWakeMagic, `$advWakePattern, `$adapter.MacAddress, `$adapter.Status, `$safeDescription
             Write-Output `$line
         }
         )"
@@ -136,6 +137,9 @@ class LS_EnergyAudit {
             entry["allowTurnOff"] := parts.Length >= 5 ? Trim(parts[5]) : ""
             entry["advancedWakeOnMagicPacket"] := parts.Length >= 6 ? Trim(parts[6]) : ""
             entry["advancedWakeOnPattern"] := parts.Length >= 7 ? Trim(parts[7]) : ""
+            entry["macAddress"] := parts.Length >= 8 ? Trim(parts[8]) : ""
+            entry["status"] := parts.Length >= 9 ? Trim(parts[9]) : ""
+            entry["interfaceDescription"] := parts.Length >= 10 ? Trim(parts[10]) : ""
             this.DecorateNicCompliance(entry)
             adapters.Push(entry)
         }

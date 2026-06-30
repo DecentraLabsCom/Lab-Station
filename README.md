@@ -70,7 +70,7 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 | `setup` | Guided wizard that chains RemoteApp policy, Wake-on-LAN tweaks, WinRM setup, autostart registration, diagnostics export, and service prompt. |
 | `remoteapp` | Sets `fAllowUnlistedRemotePrograms` and related HKLM keys for RemoteApp. |
 | `wol` | Configures adapters and power plan settings required for Wake-on-LAN. |
-| `winrm [configure|status]` | Enables WinRM HTTP for the lab VLAN pilot, opens Windows Remote Management firewall rules, creates/updates `.\LabGatewaySvc`, and reports readiness. |
+| `winrm [configure|status]` | Enables WinRM HTTP for the lab VLAN pilot, opens Windows Remote Management firewall rules, creates/updates `.\LabGatewaySvc`, and reports readiness. Save the generated credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials. |
 | `autostart [path]` | Registers AppControl (EXE or AHK) under HKLM\Run; optional custom path overrides bundle location. |
 | `launch-app-control [...]` | Pass-through launcher that proxies CLI args to the bundled controller. |
 | `account [create|autologon|lockdown|setup] [user] [password]` | Creates the lab account, refreshes autologon (DefaultUserName/Password), and `lockdown` now enforces `SeDenyInteractiveLogonRight` for every other local user. |
@@ -121,7 +121,7 @@ reboot-timeout=20
   ```
 - Processed instructions are archived to `labstation/data/commands/processed/` so the backend can audit what happened; results stay in `.../results/` for collection.
 
-This queue gives Lab Gateway two integration choices: fire `LabStation.exe ...` directly over WinRM for synchronous operations, or drop a command file (via SMB/WinRM copy) and let the service pick it up asynchronously. The setup wizard and `winrm configure` command prepare the station-side WinRM listener and print the generated `LabGatewaySvc` credentials that must be stored in Lab Gateway ops-worker as `WINRM_USER_*` and `WINRM_PASS_*`.
+This queue gives Lab Gateway two integration choices: fire `LabStation.exe ...` directly over WinRM for synchronous operations, or drop a command file (via SMB/WinRM copy) and let the service pick it up asynchronously. The setup wizard and `winrm configure` command prepare the station-side WinRM listener and print the generated `LabGatewaySvc` credentials. Save those credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials for the host address.
 
 For hardware-specific BIOS guidance and WoL validation steps, see `labstation/docs/bios-wol-playbook.md`.
 
@@ -133,7 +133,7 @@ The same service loop now emits `labstation/data/telemetry/heartbeat.json` every
 - `localModeEnabled`: reflects the presence of `data/local-mode.flag` so the backend knows the lab is intentionally reserved for in-person use.
 - `lastForcedLogoff`: metadata (timestamp, user, sessionId) for the most recent `session guard` eviction, sourced from `service-state.ini`.
 - `lastPowerAction`: records the last shutdown/hibernate order (mode, delay, wake readiness) so dashboards can prove who powered the host down.
-- `wake.nicPower`: per-adapter verdict showing `wakeOnMagicPacket`, `allowTurnOff`, and `wolReady` so NIC misconfigurations surface in dashboards.
+- `wake.nicPower`: per-adapter verdict showing `macAddress`, `status`, `wakeOnMagicPacket`, `allowTurnOff`, and `wolReady` so NIC misconfigurations surface in dashboards and Lab Gateway can suggest the Wake-on-LAN MAC.
 - `power.sleepCompliant` / `power.hibernateCompliant`: boolean flags derived from `powercfg /q` (`STANDBYIDLE`/`HIBERNATEIDLE`) to prove sleep/hibernate remain disabled.
 - `schemaVersion`: contract version for the JSON shape (`heartbeat.json` and `status.json` share the same schema version).
 
