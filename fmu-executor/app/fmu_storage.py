@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import time as _time
 from pathlib import Path
@@ -20,9 +21,38 @@ logger = logging.getLogger(__name__)
 # Written to disk as `<FMU_ROOT>/.quarantine/<accessKey>.reason`.
 _quarantine_cache: dict[str, dict[str, Any]] = {}
 
+_ACCESS_KEY_RE = re.compile(
+    r"(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}/)*"
+    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}(?:\.fmu)?"
+)
+
+
+def validate_access_key(access_key: str) -> str:
+    """Validate and normalize an FMU access key.
+
+    Access keys may identify a direct ``.fmu`` file or a provisioned
+    subdirectory containing one FMU.  They are deliberately restricted to
+    safe path components so every storage operation can share one boundary.
+    """
+    value = str(access_key).strip()
+    if _ACCESS_KEY_RE.fullmatch(value) is None:
+        raise ValueError("Invalid FMU access key")
+    return value
+
+
+def _resolve_inside(root: Path, relative_path: str | Path) -> Path:
+    """Resolve *relative_path* and require it to remain under *root*."""
+    resolved_root = root.resolve()
+    resolved_path = (resolved_root / relative_path).resolve()
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("Path escapes FMU storage root") from exc
+    return resolved_path
+
 
 def _quarantine_dir() -> Path:
-    return config.FMU_ROOT / ".quarantine"
+    return _resolve_inside(config.FMU_ROOT, ".quarantine")
 
 
 def _load_quarantine_cache() -> None:
@@ -45,17 +75,20 @@ def _load_quarantine_cache() -> None:
 
 def quarantine(access_key: str, reason: str) -> None:
     """Move an FMU to quarantine so it is excluded from the active catalog."""
+    access_key = validate_access_key(access_key)
     q = _quarantine_dir()
     q.mkdir(parents=True, exist_ok=True)
 
     # Persist reason to disk
-    reason_file = q / f"{access_key}.reason"
+    reason_file = _resolve_inside(q, f"{access_key}.reason")
+    reason_file.parent.mkdir(parents=True, exist_ok=True)
     reason_file.write_text(reason, encoding="utf-8")
 
     # Move the actual FMU aside if it exists
     root = config.FMU_ROOT
-    candidate = root / access_key
-    quarantined_target = q / access_key
+    candidate = _resolve_inside(root, access_key)
+    quarantined_target = _resolve_inside(q, access_key)
+    quarantined_target.parent.mkdir(parents=True, exist_ok=True)
     if candidate.exists() and not quarantined_target.exists():
         shutil.move(str(candidate), str(quarantined_target))
 
@@ -68,10 +101,11 @@ def quarantine(access_key: str, reason: str) -> None:
 
 def unquarantine(access_key: str) -> bool:
     """Restore a quarantined FMU back to the active catalog.  Returns True on success."""
+    access_key = validate_access_key(access_key)
     q = _quarantine_dir()
-    quarantined = q / access_key
-    reason_file = q / f"{access_key}.reason"
-    target = config.FMU_ROOT / access_key
+    quarantined = _resolve_inside(q, access_key)
+    reason_file = _resolve_inside(q, f"{access_key}.reason")
+    target = _resolve_inside(config.FMU_ROOT, access_key)
 
     restored = False
     if quarantined.exists() and not target.exists():
@@ -86,11 +120,19 @@ def unquarantine(access_key: str) -> bool:
 
 
 def is_quarantined(access_key: str) -> bool:
+    try:
+        access_key = validate_access_key(access_key)
+    except ValueError:
+        return False
     _load_quarantine_cache()
     return access_key in _quarantine_cache
 
 
 def quarantine_info(access_key: str) -> dict[str, Any] | None:
+    try:
+        access_key = validate_access_key(access_key)
+    except ValueError:
+        return None
     _load_quarantine_cache()
     return _quarantine_cache.get(access_key)
 
@@ -116,8 +158,9 @@ def validate_fmu(access_key: str) -> tuple[bool, str]:
         return False, "FMU file not found"
     try:
         md = fmpy.read_model_description(str(path))
-    except Exception as exc:
-        return False, f"Cannot parse model description: {exc}"
+    except Exception:
+        logger.exception("Cannot parse FMU model description for %s", access_key)
+        return False, "Cannot parse model description"
     if md.coSimulation is None:
         return False, "FMU does not support Co-Simulation"
     if not md.guid:
@@ -130,22 +173,29 @@ def _resolve_fmu_path(access_key: str) -> Path | None:
 
     Quarantined FMUs are excluded.
     """
+    try:
+        access_key = validate_access_key(access_key)
+    except ValueError:
+        return None
     if is_quarantined(access_key):
         return None
     root = config.FMU_ROOT
     # Direct file: <root>/<accessKey>  (already ends with .fmu)
-    candidate = root / access_key
+    try:
+        candidate = _resolve_inside(root, access_key)
+    except ValueError:
+        logger.warning("Path traversal attempt blocked: %s", access_key)
+        return None
     if candidate.is_file() and candidate.suffix == ".fmu":
-        # Ensure the resolved path stays inside root to prevent path traversal.
-        try:
-            candidate.resolve().relative_to(root.resolve())
-        except ValueError:
-            logger.warning("Path traversal attempt blocked: %s", access_key)
-            return None
         return candidate
     # Sub-folder containing a single .fmu
     if candidate.is_dir():
-        fmus = list(candidate.glob("*.fmu"))
+        fmus = []
+        for fmu in candidate.glob("*.fmu"):
+            try:
+                fmus.append(_resolve_inside(root, fmu))
+            except ValueError:
+                logger.warning("FMU symlink outside root blocked: %s", fmu)
         if len(fmus) == 1:
             return fmus[0]
     return None

@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import secrets
 import time
 from typing import Any
@@ -32,12 +31,6 @@ from . import config, fmu_storage, engine, auth
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FMU Executor", version="0.1.0", docs_url=None, redoc_url=None)
-
-_FMU_ACCESS_KEY_RE = re.compile(
-    r"(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}/)*"
-    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.fmu"
-)
-
 
 # ── Startup / shutdown ───────────────────────────────────────────
 
@@ -82,10 +75,10 @@ async def health():
 # ── Catalog ──────────────────────────────────────────────────────
 
 def _validated_access_key(access_key: str) -> str:
-    value = str(access_key).strip()
-    if _FMU_ACCESS_KEY_RE.fullmatch(value) is None:
-        raise HTTPException(status_code=400, detail="Invalid FMU access key")
-    return value
+    try:
+        return fmu_storage.validate_access_key(access_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="INVALID_FMU_ACCESS_KEY") from exc
 
 
 @app.get("/internal/fmu/catalog", dependencies=[Depends(_check_token)])
@@ -116,6 +109,7 @@ async def describe(access_key: str = Header(..., alias="X-FMU-Access-Key")):
 @app.post("/internal/fmu/validate/{access_key:path}", dependencies=[Depends(_check_token)])
 async def validate_fmu(access_key: str, auto_quarantine: bool = Query(False)):
     """Validate an FMU and optionally quarantine it if broken."""
+    access_key = _validated_access_key(access_key)
     ok, reason = fmu_storage.validate_fmu(access_key)
     if not ok and auto_quarantine:
         fmu_storage.quarantine(access_key, reason)
@@ -125,6 +119,7 @@ async def validate_fmu(access_key: str, auto_quarantine: bool = Query(False)):
 @app.post("/internal/fmu/quarantine/{access_key:path}", dependencies=[Depends(_check_token)])
 async def quarantine_fmu(access_key: str, reason: str = Query("manual")):
     """Quarantine an FMU explicitly."""
+    access_key = _validated_access_key(access_key)
     fmu_storage.quarantine(access_key, reason)
     return {"accessKey": access_key, "quarantined": True, "reason": reason}
 
@@ -132,6 +127,7 @@ async def quarantine_fmu(access_key: str, reason: str = Query("manual")):
 @app.delete("/internal/fmu/quarantine/{access_key:path}", dependencies=[Depends(_check_token)])
 async def unquarantine_fmu(access_key: str):
     """Restore a quarantined FMU."""
+    access_key = _validated_access_key(access_key)
     restored = fmu_storage.unquarantine(access_key)
     return {"accessKey": access_key, "restored": restored}
 
@@ -213,8 +209,9 @@ async def stream_simulation(body: SimulationBody):
             ):
                 yield json.dumps(snapshot, default=str) + "\n"
             yield json.dumps({"type": "sim.done", "time": float(stop)}) + "\n"
-        except Exception as exc:
-            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+        except Exception:
+            logger.exception("FMU streaming simulation failed")
+            yield json.dumps({"type": "error", "message": "FMU simulation failed"}) + "\n"
         finally:
             engine.remove_session(session.session_id)
 
@@ -281,8 +278,14 @@ async def ws_sessions(ws: WebSocket):
                 if request_id:
                     err["requestId"] = request_id
                 await ws.send_text(json.dumps(err))
-            except Exception as exc:
-                err = {"type": "error", "code": "INTERNAL_ERROR", "message": str(exc), "retryable": False}
+            except Exception:
+                logger.exception("FMU WebSocket command failed")
+                err = {
+                    "type": "error",
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal FMU executor error",
+                    "retryable": False,
+                }
                 if request_id:
                     err["requestId"] = request_id
                 await ws.send_text(json.dumps(err))
@@ -317,6 +320,7 @@ def _handle_ws_message(
         access_key = auth.extract_access_key_from_context(gateway_ctx)
         if not access_key:
             raise HTTPException(400, "Missing accessKey in gatewayContext")
+        access_key = _validated_access_key(access_key)
         auth.validate_gateway_context(gateway_ctx, access_key)
 
         if not fmu_storage.fmu_exists(access_key):

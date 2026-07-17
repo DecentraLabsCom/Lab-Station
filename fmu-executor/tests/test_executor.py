@@ -210,6 +210,53 @@ class TestPathTraversal:
         )
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize("route", [
+        "/internal/fmu/validate/..%2Foutside.fmu",
+        "/internal/fmu/quarantine/..%2Foutside.fmu",
+    ])
+    def test_path_routes_reject_traversal(self, client, auth_headers, route):
+        resp = client.post(route, headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_unquarantine_route_rejects_traversal(self, client, auth_headers):
+        resp = client.delete(
+            "/internal/fmu/quarantine/..%2Foutside.fmu",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+
+    def test_storage_rejects_invalid_access_key(self, _isolate_config):
+        from app import fmu_storage
+
+        with pytest.raises(ValueError, match="Invalid FMU access key"):
+            fmu_storage.quarantine("../outside.fmu", "test")
+
+    def test_symlinked_directory_outside_root_is_not_resolved(
+        self, _isolate_config, tmp_path
+    ):
+        from app import fmu_storage
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "outside.fmu").write_bytes(b"PK")
+        link = _isolate_config / "linked-model"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("Creating directory symlinks requires elevated Windows privileges")
+
+        assert fmu_storage.fmu_exists("linked-model") is False
+
+    def test_nested_directory_access_key_remains_supported(self, _isolate_config):
+        from app import fmu_storage
+
+        model_dir = _isolate_config / "provider"
+        model_dir.mkdir()
+        (model_dir / "demo.fmu").write_bytes(b"PK")
+
+        assert fmu_storage.fmu_exists("provider") is True
+        assert fmu_storage.get_fmu_path("provider") == model_dir / "demo.fmu"
+
 
 # ---------------------------------------------------------------------------
 # Run simulation – 404 when FMU missing
@@ -273,6 +320,25 @@ class TestWebSocketSession:
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "error"
             assert resp["requestId"] == "req1"
+
+    def test_session_create_rejects_traversal_access_key(self, client):
+        with client.websocket_connect(
+            "/internal/fmu/sessions",
+            headers={"X-Internal-Session-Token": "test-secret"}
+        ) as ws:
+            ws.send_text(json.dumps({
+                "type": "session.create",
+                "requestId": "traversal",
+                "gatewayContext": {
+                    "mode": "station",
+                    "accessKey": "../outside.fmu",
+                    "claims": {"accessKey": "../outside.fmu"},
+                },
+            }))
+            resp = json.loads(ws.receive_text())
+            assert resp["type"] == "error"
+            assert resp["requestId"] == "traversal"
+            assert resp["code"] == "INVALID_FMU_ACCESS_KEY"
 
     def test_session_create_validates_access_key(self, client):
         with client.websocket_connect(
@@ -862,6 +928,23 @@ class TestFmuValidation:
         body = resp.json()
         assert body["valid"] is False
         assert "Co-Simulation" in body["reason"]
+
+    def test_validate_does_not_expose_exception_details(
+        self, client, _isolate_config, auth_headers
+    ):
+        (_isolate_config / "Broken.fmu").write_bytes(b"not-a-zip")
+        with patch(
+            "fmpy.read_model_description",
+            side_effect=RuntimeError("secret path C:\\private\\model.fmu"),
+        ):
+            resp = client.post(
+                "/internal/fmu/validate/Broken.fmu",
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "Cannot parse model description"
+        assert "private" not in resp.text
 
 
 class TestQuarantine:
