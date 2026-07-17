@@ -33,10 +33,10 @@ All endpoints require `X-Internal-Session-Token` header (except `/internal/healt
 | Method | Path | Description |
 |---|---|---|
 | GET | `/internal/health` | Health & diagnostics |
-| GET | `/internal/fmu/catalog/{accessKey}` | FMU inventory for an access key |
-| GET | `/internal/fmu/describe/{accessKey}` | Model description (variables, types, defaults) |
-| POST | `/internal/fmu/simulations/run/{accessKey}` | One-shot simulation run |
-| POST | `/internal/fmu/simulations/stream/{accessKey}` | Streaming NDJSON simulation |
+| GET | `/internal/fmu/catalog?accessKey=...` | FMU inventory for an access key |
+| GET | `/internal/fmu/describe?accessKey=...` | Model description (variables, types, defaults) |
+| POST | `/internal/fmu/simulations/run` | One-shot simulation run; JSON body contains `accessKey` |
+| POST | `/internal/fmu/simulations/stream` | Streaming NDJSON simulation; JSON body contains `accessKey` |
 | WS | `/internal/fmu/sessions` | Realtime session (step, setInputs, getOutputs) |
 
 ## FMU provisioning
