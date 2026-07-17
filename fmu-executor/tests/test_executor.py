@@ -85,19 +85,18 @@ class TestHealth:
 
 class TestAuth:
     def test_describe_requires_token(self, client):
-        resp = client.get("/internal/fmu/describe", params={"accessKey": "test.fmu"})
+        resp = client.get("/internal/fmu/describe", headers={"X-FMU-Access-Key": "test.fmu"})
         assert resp.status_code == 401
 
     def test_describe_rejects_wrong_token(self, client):
         resp = client.get(
             "/internal/fmu/describe",
-            params={"accessKey": "test.fmu"},
-            headers={"X-Internal-Session-Token": "wrong"},
+            headers={"X-Internal-Session-Token": "wrong", "X-FMU-Access-Key": "test.fmu"},
         )
         assert resp.status_code == 401
 
     def test_catalog_requires_token(self, client):
-        resp = client.get("/internal/fmu/catalog", params={"accessKey": "test.fmu"})
+        resp = client.get("/internal/fmu/catalog", headers={"X-FMU-Access-Key": "test.fmu"})
         assert resp.status_code == 401
 
 
@@ -107,11 +106,11 @@ class TestAuth:
 
 class TestDescribe:
     def test_describe_404_when_missing(self, client, auth_headers):
-        resp = client.get("/internal/fmu/describe", params={"accessKey": "nonexistent.fmu"}, headers=auth_headers)
+        resp = client.get("/internal/fmu/describe", headers={**auth_headers, "X-FMU-Access-Key": "nonexistent.fmu"})
         assert resp.status_code == 404
 
     def test_catalog_404_when_missing(self, client, auth_headers):
-        resp = client.get("/internal/fmu/catalog", params={"accessKey": "nonexistent.fmu"}, headers=auth_headers)
+        resp = client.get("/internal/fmu/catalog", headers={**auth_headers, "X-FMU-Access-Key": "nonexistent.fmu"})
         assert resp.status_code == 404
 
 
@@ -168,7 +167,7 @@ class TestDescribeWithFmu:
 
         md = self._mock_model_description()
         with patch("fmpy.read_model_description", return_value=md):
-            resp = client.get("/internal/fmu/describe", params={"accessKey": "TestModel.fmu"}, headers=auth_headers)
+            resp = client.get("/internal/fmu/describe", headers={**auth_headers, "X-FMU-Access-Key": "TestModel.fmu"})
 
         assert resp.status_code == 200
         body = resp.json()
@@ -190,7 +189,7 @@ class TestDescribeWithFmu:
 
         md = self._mock_model_description()
         with patch("fmpy.read_model_description", return_value=md):
-            resp = client.get("/internal/fmu/catalog", params={"accessKey": "TestModel.fmu"}, headers=auth_headers)
+            resp = client.get("/internal/fmu/catalog", headers={**auth_headers, "X-FMU-Access-Key": "TestModel.fmu"})
 
         assert resp.status_code == 200
         body = resp.json()
@@ -207,8 +206,7 @@ class TestPathTraversal:
     def test_traversal_blocked(self, client, auth_headers, _isolate_config):
         resp = client.get(
             "/internal/fmu/describe",
-            params={"accessKey": "../../etc/passwd"},
-            headers=auth_headers,
+            headers={**auth_headers, "X-FMU-Access-Key": "../../etc/passwd"},
         )
         assert resp.status_code == 400
 

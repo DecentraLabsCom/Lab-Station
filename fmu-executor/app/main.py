@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import (
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -88,7 +89,7 @@ def _validated_access_key(access_key: str) -> str:
 
 
 @app.get("/internal/fmu/catalog", dependencies=[Depends(_check_token)])
-async def catalog(access_key: str = Query(..., alias="accessKey")):
+async def catalog(access_key: str = Header(..., alias="X-FMU-Access-Key")):
     access_key = _validated_access_key(access_key)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
@@ -103,7 +104,7 @@ async def catalog(access_key: str = Query(..., alias="accessKey")):
 # ── Describe ─────────────────────────────────────────────────────
 
 @app.get("/internal/fmu/describe", dependencies=[Depends(_check_token)])
-async def describe(access_key: str = Query(..., alias="accessKey")):
+async def describe(access_key: str = Header(..., alias="X-FMU-Access-Key")):
     access_key = _validated_access_key(access_key)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
