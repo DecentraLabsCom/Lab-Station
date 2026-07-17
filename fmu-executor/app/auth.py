@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def validate_internal_token(request: Request) -> None:
     """Check X-Internal-Session-Token header matches the configured secret."""
-    expected = config.INTERNAL_TOKEN
+    expected = config.internal_token()
     if not expected:
         # No token configured – allow (development mode).
         return

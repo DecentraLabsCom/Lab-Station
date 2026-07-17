@@ -36,12 +36,12 @@ app = FastAPI(title="FMU Executor", version="0.1.0", docs_url=None, redoc_url=No
 
 @app.on_event("startup")
 async def _startup() -> None:
-    logging.basicConfig(level=getattr(logging, config.LOG_LEVEL, logging.INFO))
+    logging.basicConfig(level=getattr(logging, config.log_level(), logging.INFO))
     config.FMU_ROOT.mkdir(parents=True, exist_ok=True)
     config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
     logger.info(
         "FMU Executor starting – root=%s, port=%s, max_sessions=%s",
-        config.FMU_ROOT, config.BIND_PORT, config.MAX_CONCURRENT_SESSIONS,
+        config.FMU_ROOT, config.bind_port(), config.MAX_CONCURRENT_SESSIONS,
     )
 
 
@@ -224,7 +224,8 @@ async def stream_simulation(body: SimulationBody):
 async def ws_sessions(ws: WebSocket):
     # Validate internal token from headers (timing-safe comparison)
     token = ws.headers.get("x-internal-session-token") or ""
-    if config.INTERNAL_TOKEN and not secrets.compare_digest(token, config.INTERNAL_TOKEN):
+    internal_token = config.internal_token()
+    if internal_token and not secrets.compare_digest(token, internal_token):
         await ws.close(code=4001, reason="UNAUTHORIZED")
         return
 
@@ -241,8 +242,10 @@ async def ws_sessions(ws: WebSocket):
                     if payload:
                         await ws.send_text(json.dumps(payload, default=str))
                 await asyncio.sleep(0.01)  # 10 ms polling resolution
-        except (WebSocketDisconnect, asyncio.CancelledError):
-            pass
+        except WebSocketDisconnect:
+            logger.debug("Output emitter stopped after WebSocket disconnect")
+        except asyncio.CancelledError:
+            logger.debug("Output emitter task cancelled")
         except Exception:
             logger.debug("Output emitter stopped", exc_info=True)
 
@@ -291,14 +294,14 @@ async def ws_sessions(ws: WebSocket):
                 await ws.send_text(json.dumps(err))
 
     except WebSocketDisconnect:
-        pass
+        logger.debug("WebSocket client disconnected")
     finally:
         if _emitter_task:
             _emitter_task.cancel()
             try:
                 await _emitter_task
             except asyncio.CancelledError:
-                pass
+                logger.debug("WebSocket emitter task cancelled during cleanup")
         if session:
             engine.remove_session(session.session_id)
 

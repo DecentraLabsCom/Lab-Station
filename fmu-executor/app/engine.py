@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shutil
 import tempfile
 import time as _time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generator, Optional
 
-import fmpy
 from fmpy import extract as fmpy_extract, read_model_description
 from fmpy.fmi2 import FMU2Slave
 
