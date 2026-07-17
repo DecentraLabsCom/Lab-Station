@@ -85,18 +85,19 @@ class TestHealth:
 
 class TestAuth:
     def test_describe_requires_token(self, client):
-        resp = client.get("/internal/fmu/describe/test.fmu")
+        resp = client.get("/internal/fmu/describe", params={"accessKey": "test.fmu"})
         assert resp.status_code == 401
 
     def test_describe_rejects_wrong_token(self, client):
         resp = client.get(
-            "/internal/fmu/describe/test.fmu",
+            "/internal/fmu/describe",
+            params={"accessKey": "test.fmu"},
             headers={"X-Internal-Session-Token": "wrong"},
         )
         assert resp.status_code == 401
 
     def test_catalog_requires_token(self, client):
-        resp = client.get("/internal/fmu/catalog/test.fmu")
+        resp = client.get("/internal/fmu/catalog", params={"accessKey": "test.fmu"})
         assert resp.status_code == 401
 
 
@@ -106,11 +107,11 @@ class TestAuth:
 
 class TestDescribe:
     def test_describe_404_when_missing(self, client, auth_headers):
-        resp = client.get("/internal/fmu/describe/nonexistent.fmu", headers=auth_headers)
+        resp = client.get("/internal/fmu/describe", params={"accessKey": "nonexistent.fmu"}, headers=auth_headers)
         assert resp.status_code == 404
 
     def test_catalog_404_when_missing(self, client, auth_headers):
-        resp = client.get("/internal/fmu/catalog/nonexistent.fmu", headers=auth_headers)
+        resp = client.get("/internal/fmu/catalog", params={"accessKey": "nonexistent.fmu"}, headers=auth_headers)
         assert resp.status_code == 404
 
 
@@ -167,7 +168,7 @@ class TestDescribeWithFmu:
 
         md = self._mock_model_description()
         with patch("fmpy.read_model_description", return_value=md):
-            resp = client.get("/internal/fmu/describe/TestModel.fmu", headers=auth_headers)
+            resp = client.get("/internal/fmu/describe", params={"accessKey": "TestModel.fmu"}, headers=auth_headers)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -189,7 +190,7 @@ class TestDescribeWithFmu:
 
         md = self._mock_model_description()
         with patch("fmpy.read_model_description", return_value=md):
-            resp = client.get("/internal/fmu/catalog/TestModel.fmu", headers=auth_headers)
+            resp = client.get("/internal/fmu/catalog", params={"accessKey": "TestModel.fmu"}, headers=auth_headers)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -204,8 +205,12 @@ class TestDescribeWithFmu:
 
 class TestPathTraversal:
     def test_traversal_blocked(self, client, auth_headers, _isolate_config):
-        resp = client.get("/internal/fmu/describe/..%2F..%2Fetc%2Fpasswd", headers=auth_headers)
-        assert resp.status_code == 404
+        resp = client.get(
+            "/internal/fmu/describe",
+            params={"accessKey": "../../etc/passwd"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -215,17 +220,17 @@ class TestPathTraversal:
 class TestRunSimulation:
     def test_run_404_when_fmu_missing(self, client, auth_headers):
         resp = client.post(
-            "/internal/fmu/simulations/run/missing.fmu",
+            "/internal/fmu/simulations/run",
             headers=auth_headers,
-            json={"parameters": {}, "options": {"stopTime": 0.5}},
+            json={"accessKey": "missing.fmu", "parameters": {}, "options": {"stopTime": 0.5}},
         )
         assert resp.status_code == 404
 
     def test_stream_404_when_fmu_missing(self, client, auth_headers):
         resp = client.post(
-            "/internal/fmu/simulations/stream/missing.fmu",
+            "/internal/fmu/simulations/stream",
             headers=auth_headers,
-            json={"parameters": {}, "options": {"stopTime": 0.5}},
+            json={"accessKey": "missing.fmu", "parameters": {}, "options": {"stopTime": 0.5}},
         )
         assert resp.status_code == 404
 

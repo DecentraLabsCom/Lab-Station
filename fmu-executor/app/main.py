@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import time
 from typing import Any
@@ -30,6 +31,11 @@ from . import config, fmu_storage, engine, auth
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FMU Executor", version="0.1.0", docs_url=None, redoc_url=None)
+
+_FMU_ACCESS_KEY_RE = re.compile(
+    r"(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}/)*"
+    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.fmu"
+)
 
 
 # ── Startup / shutdown ───────────────────────────────────────────
@@ -74,8 +80,16 @@ async def health():
 
 # ── Catalog ──────────────────────────────────────────────────────
 
-@app.get("/internal/fmu/catalog/{access_key:path}", dependencies=[Depends(_check_token)])
-async def catalog(access_key: str):
+def _validated_access_key(access_key: str) -> str:
+    value = str(access_key).strip()
+    if _FMU_ACCESS_KEY_RE.fullmatch(value) is None:
+        raise HTTPException(status_code=400, detail="Invalid FMU access key")
+    return value
+
+
+@app.get("/internal/fmu/catalog", dependencies=[Depends(_check_token)])
+async def catalog(access_key: str = Query(..., alias="accessKey")):
+    access_key = _validated_access_key(access_key)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
     desc = fmu_storage.describe(access_key)
@@ -88,8 +102,9 @@ async def catalog(access_key: str):
 
 # ── Describe ─────────────────────────────────────────────────────
 
-@app.get("/internal/fmu/describe/{access_key:path}", dependencies=[Depends(_check_token)])
-async def describe(access_key: str):
+@app.get("/internal/fmu/describe", dependencies=[Depends(_check_token)])
+async def describe(access_key: str = Query(..., alias="accessKey")):
+    access_key = _validated_access_key(access_key)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
     return fmu_storage.describe(access_key)
@@ -129,7 +144,7 @@ async def list_quarantined():
 # ── Simulation run ───────────────────────────────────────────────
 
 class SimulationBody(BaseModel):
-    accessKey: str | None = None
+    accessKey: str
     claims: dict = Field(default_factory=dict)
     labId: str | None = None
     reservationKey: str | None = None
@@ -137,8 +152,9 @@ class SimulationBody(BaseModel):
     options: dict = Field(default_factory=dict)
 
 
-@app.post("/internal/fmu/simulations/run/{access_key:path}", dependencies=[Depends(_check_token)])
-async def run_simulation(access_key: str, body: SimulationBody):
+@app.post("/internal/fmu/simulations/run", dependencies=[Depends(_check_token)])
+async def run_simulation(body: SimulationBody):
+    access_key = _validated_access_key(body.accessKey)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
 
@@ -169,8 +185,9 @@ async def run_simulation(access_key: str, body: SimulationBody):
 
 # ── Simulation stream (NDJSON) ───────────────────────────────────
 
-@app.post("/internal/fmu/simulations/stream/{access_key:path}", dependencies=[Depends(_check_token)])
-async def stream_simulation(access_key: str, body: SimulationBody):
+@app.post("/internal/fmu/simulations/stream", dependencies=[Depends(_check_token)])
+async def stream_simulation(body: SimulationBody):
+    access_key = _validated_access_key(body.accessKey)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
 

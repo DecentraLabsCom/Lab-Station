@@ -145,7 +145,7 @@ class TestCatalogContract:
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
         with patch("fmpy.read_model_description", return_value=md):
-            resp = client.get("/internal/fmu/catalog/BouncingBall.fmu", headers=headers)
+            resp = client.get("/internal/fmu/catalog", params={"accessKey": "BouncingBall.fmu"}, headers=headers)
         assert resp.status_code == 200
         body = resp.json()
         fmus = body.get("fmus")
@@ -156,7 +156,7 @@ class TestCatalogContract:
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
         with patch("fmpy.read_model_description", return_value=md):
-            body = client.get("/internal/fmu/catalog/BouncingBall.fmu", headers=headers).json()
+            body = client.get("/internal/fmu/catalog", params={"accessKey": "BouncingBall.fmu"}, headers=headers).json()
         entry = body["fmus"][0]
         assert "filename" in entry, "Gateway reads entry['filename']"
         assert "path" in entry, "Gateway reads entry['path']"
@@ -165,12 +165,12 @@ class TestCatalogContract:
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
         with patch("fmpy.read_model_description", return_value=md):
-            body = client.get("/internal/fmu/catalog/BouncingBall.fmu", headers=headers).json()
+            body = client.get("/internal/fmu/catalog", params={"accessKey": "BouncingBall.fmu"}, headers=headers).json()
         entry = body["fmus"][0]
         assert entry.get("source") == "station"
 
     def test_catalog_404_when_missing(self, client, headers):
-        resp = client.get("/internal/fmu/catalog/nonexistent.fmu", headers=headers)
+        resp = client.get("/internal/fmu/catalog", params={"accessKey": "nonexistent.fmu"}, headers=headers)
         assert resp.status_code == 404
 
 
@@ -191,7 +191,7 @@ class TestDescribeContract:
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
         with patch("fmpy.read_model_description", return_value=md):
-            resp = client.get("/internal/fmu/describe/BouncingBall.fmu", headers=headers)
+            resp = client.get("/internal/fmu/describe", params={"accessKey": "BouncingBall.fmu"}, headers=headers)
         body = resp.json()
         for field in ("modelName", "guid", "fmiVersion", "supportsCoSimulation",
                        "simulationKind", "simulationType", "modelVariables"):
@@ -201,7 +201,7 @@ class TestDescribeContract:
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
         with patch("fmpy.read_model_description", return_value=md):
-            body = client.get("/internal/fmu/describe/BouncingBall.fmu", headers=headers).json()
+            body = client.get("/internal/fmu/describe", params={"accessKey": "BouncingBall.fmu"}, headers=headers).json()
 
         variables = body["modelVariables"]
         assert isinstance(variables, list)
@@ -219,7 +219,7 @@ class TestDescribeContract:
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
         with patch("fmpy.read_model_description", return_value=md):
-            body = client.get("/internal/fmu/describe/BouncingBall.fmu", headers=headers).json()
+            body = client.get("/internal/fmu/describe", params={"accessKey": "BouncingBall.fmu"}, headers=headers).json()
         assert isinstance(body.get("defaultStartTime"), (int, float))
         assert isinstance(body.get("defaultStopTime"), (int, float))
         assert isinstance(body.get("defaultStepSize"), (int, float))
@@ -233,11 +233,11 @@ class TestAuthHeaderContract:
     """Gateway sends X-Internal-Session-Token header on all REST and WS requests."""
 
     def test_rest_requires_token(self, client):
-        resp = client.get("/internal/fmu/describe/any.fmu")
+        resp = client.get("/internal/fmu/describe", params={"accessKey": "any.fmu"})
         assert resp.status_code == 401
 
     def test_rest_rejects_wrong_token(self, client):
-        resp = client.get("/internal/fmu/describe/any.fmu",
+        resp = client.get("/internal/fmu/describe", params={"accessKey": "any.fmu"},
                           headers={"X-Internal-Session-Token": "wrong"})
         assert resp.status_code == 401
 
@@ -583,7 +583,7 @@ class TestRunSimulationContract:
 
     def test_run_404_when_fmu_missing(self, client, headers):
         resp = client.post(
-            "/internal/fmu/simulations/run/nonexistent.fmu",
+            "/internal/fmu/simulations/run",
             headers=headers,
             json={
                 "accessKey": "nonexistent.fmu",
@@ -596,7 +596,7 @@ class TestRunSimulationContract:
 
     def test_stream_404_when_fmu_missing(self, client, headers):
         resp = client.post(
-            "/internal/fmu/simulations/stream/nonexistent.fmu",
+            "/internal/fmu/simulations/stream",
             headers=headers,
             json={
                 "accessKey": "nonexistent.fmu",
