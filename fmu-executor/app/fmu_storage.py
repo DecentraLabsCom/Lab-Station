@@ -40,19 +40,61 @@ def validate_access_key(access_key: str) -> str:
     return value
 
 
-def _resolve_inside(root: Path, relative_path: str | Path) -> Path:
-    """Resolve *relative_path* and require it to remain under *root*."""
-    resolved_root = root.resolve()
-    resolved_path = (resolved_root / relative_path).resolve()
-    try:
-        resolved_path.relative_to(resolved_root)
-    except ValueError as exc:
-        raise ValueError("Path escapes FMU storage root") from exc
-    return resolved_path
-
-
 def _quarantine_dir() -> Path:
-    return _resolve_inside(config.FMU_ROOT, ".quarantine")
+    return config.FMU_ROOT.resolve() / ".quarantine"
+
+
+def _iter_storage_entries(root: Path):
+    """Yield resolved entries that are physically contained by *root*.
+
+    The filesystem is enumerated from the trusted root first.  User input is
+    only compared with the resulting relative keys and is never used to build
+    a filesystem path.
+    """
+    resolved_root = root.resolve()
+    if not resolved_root.is_dir():
+        return
+    for entry in resolved_root.rglob("*"):
+        relative = entry.relative_to(resolved_root)
+        if ".quarantine" in relative.parts:
+            continue
+        try:
+            resolved_entry = entry.resolve()
+            resolved_entry.relative_to(resolved_root)
+        except ValueError:
+            logger.warning("Storage symlink outside root blocked: %s", entry)
+            continue
+        yield resolved_entry
+
+
+def _single_fmu(directory: Path, root: Path) -> Path | None:
+    """Return the only direct FMU in *directory*, if there is exactly one."""
+    resolved_root = root.resolve()
+    fmus: list[Path] = []
+    for entry in directory.iterdir():
+        if entry.is_file() and entry.suffix == ".fmu":
+            try:
+                resolved_entry = entry.resolve()
+                resolved_entry.relative_to(resolved_root)
+            except ValueError:
+                logger.warning("FMU symlink outside root blocked: %s", entry)
+                continue
+            fmus.append(resolved_entry)
+    return fmus[0] if len(fmus) == 1 else None
+
+
+def _find_storage_entry(root: Path, access_key: str) -> Path | None:
+    """Find a provisioned file or single-FMU directory by its access key."""
+    resolved_root = root.resolve()
+    for entry in _iter_storage_entries(resolved_root) or ():
+        relative_key = entry.relative_to(resolved_root).as_posix()
+        if relative_key != access_key:
+            continue
+        if entry.is_file() and entry.suffix == ".fmu":
+            return entry
+        if entry.is_dir() and _single_fmu(entry, resolved_root) is not None:
+            return entry
+    return None
 
 
 def _load_quarantine_cache() -> None:
@@ -60,9 +102,9 @@ def _load_quarantine_cache() -> None:
     q = _quarantine_dir()
     if not q.is_dir():
         return
-    for entry in q.iterdir():
-        key = entry.stem  # e.g. "Model.fmu" from "Model.fmu.reason"
-        if entry.suffix == ".reason" and key not in _quarantine_cache:
+    for entry in q.rglob("*.reason"):
+        key = entry.relative_to(q).with_suffix("").as_posix()
+        if key not in _quarantine_cache:
             try:
                 reason = entry.read_text(encoding="utf-8").strip()
             except OSError:
@@ -79,18 +121,15 @@ def quarantine(access_key: str, reason: str) -> None:
     q = _quarantine_dir()
     q.mkdir(parents=True, exist_ok=True)
 
-    # Persist reason to disk
-    reason_file = _resolve_inside(q, f"{access_key}.reason")
-    reason_file.parent.mkdir(parents=True, exist_ok=True)
-    reason_file.write_text(reason, encoding="utf-8")
-
-    # Move the actual FMU aside if it exists
-    root = config.FMU_ROOT
-    candidate = _resolve_inside(root, access_key)
-    quarantined_target = _resolve_inside(q, access_key)
-    quarantined_target.parent.mkdir(parents=True, exist_ok=True)
-    if candidate.exists() and not quarantined_target.exists():
-        shutil.move(str(candidate), str(quarantined_target))
+    candidate = _find_storage_entry(config.FMU_ROOT, access_key)
+    if candidate is not None:
+        relative = candidate.relative_to(config.FMU_ROOT.resolve())
+        quarantined_target = q.joinpath(*relative.parts)
+        reason_file = quarantined_target.with_name(quarantined_target.name + ".reason")
+        reason_file.parent.mkdir(parents=True, exist_ok=True)
+        reason_file.write_text(reason, encoding="utf-8")
+        if not quarantined_target.exists():
+            shutil.move(str(candidate), str(quarantined_target))
 
     _quarantine_cache[access_key] = {
         "reason": reason,
@@ -103,16 +142,18 @@ def unquarantine(access_key: str) -> bool:
     """Restore a quarantined FMU back to the active catalog.  Returns True on success."""
     access_key = validate_access_key(access_key)
     q = _quarantine_dir()
-    quarantined = _resolve_inside(q, access_key)
-    reason_file = _resolve_inside(q, f"{access_key}.reason")
-    target = _resolve_inside(config.FMU_ROOT, access_key)
+    quarantined = _find_storage_entry(q, access_key)
 
     restored = False
-    if quarantined.exists() and not target.exists():
-        shutil.move(str(quarantined), str(target))
-        restored = True
-    if reason_file.exists():
-        reason_file.unlink()
+    if quarantined is not None:
+        relative = quarantined.relative_to(q.resolve())
+        target = config.FMU_ROOT.resolve().joinpath(*relative.parts)
+        reason_file = quarantined.with_name(quarantined.name + ".reason")
+        if not target.exists():
+            shutil.move(str(quarantined), str(target))
+            restored = True
+        if reason_file.exists():
+            reason_file.unlink()
     _quarantine_cache.pop(access_key, None)
     if restored:
         logger.info("Restored FMU %s from quarantine", access_key)
@@ -179,26 +220,12 @@ def _resolve_fmu_path(access_key: str) -> Path | None:
         return None
     if is_quarantined(access_key):
         return None
-    root = config.FMU_ROOT
-    # Direct file: <root>/<accessKey>  (already ends with .fmu)
-    try:
-        candidate = _resolve_inside(root, access_key)
-    except ValueError:
-        logger.warning("Path traversal attempt blocked: %s", access_key)
+    candidate = _find_storage_entry(config.FMU_ROOT, access_key)
+    if candidate is None:
         return None
-    if candidate.is_file() and candidate.suffix == ".fmu":
+    if candidate.is_file():
         return candidate
-    # Sub-folder containing a single .fmu
-    if candidate.is_dir():
-        fmus = []
-        for fmu in candidate.glob("*.fmu"):
-            try:
-                fmus.append(_resolve_inside(root, fmu))
-            except ValueError:
-                logger.warning("FMU symlink outside root blocked: %s", fmu)
-        if len(fmus) == 1:
-            return fmus[0]
-    return None
+    return _single_fmu(candidate, config.FMU_ROOT)
 
 
 def list_fmus() -> list[str]:

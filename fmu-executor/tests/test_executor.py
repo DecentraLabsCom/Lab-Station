@@ -242,10 +242,13 @@ class TestPathTraversal:
         link = _isolate_config / "linked-model"
         try:
             link.symlink_to(outside, target_is_directory=True)
+            file_link = _isolate_config / "linked-file.fmu"
+            file_link.symlink_to(outside / "outside.fmu")
         except OSError:
             pytest.skip("Creating directory symlinks requires elevated Windows privileges")
 
         assert fmu_storage.fmu_exists("linked-model") is False
+        assert fmu_storage.fmu_exists("linked-file.fmu") is False
 
     def test_nested_directory_access_key_remains_supported(self, _isolate_config):
         from app import fmu_storage
@@ -983,6 +986,27 @@ class TestQuarantine:
         resp = client.delete("/internal/fmu/quarantine/Restore.fmu", headers=auth_headers)
         assert resp.json()["restored"] is True
         assert not fmu_storage.is_quarantined("Restore.fmu")
+
+    def test_nested_directory_quarantine_roundtrip(self, client, _isolate_config, auth_headers):
+        model_dir = _isolate_config / "provider"
+        model_dir.mkdir()
+        (model_dir / "demo.fmu").write_bytes(b"PK")
+
+        resp = client.post(
+            "/internal/fmu/quarantine/provider?reason=nested",
+            headers=auth_headers,
+        )
+        assert resp.json()["quarantined"] is True
+
+        from app import fmu_storage
+        assert not fmu_storage.fmu_exists("provider")
+
+        resp = client.delete(
+            "/internal/fmu/quarantine/provider",
+            headers=auth_headers,
+        )
+        assert resp.json()["restored"] is True
+        assert fmu_storage.fmu_exists("provider")
 
     def test_health_includes_quarantine_count(self, client, _isolate_config, auth_headers):
         fmu_root = _isolate_config
