@@ -280,11 +280,16 @@ class FmuSession:
         return outputs
 
     def _cleanup_temp(self) -> None:
-        if self._extract_dir and self._extract_dir.exists():
+        extract_dir = getattr(self, "_extract_dir", None)
+        if extract_dir and extract_dir.exists():
             try:
-                shutil.rmtree(self._extract_dir, ignore_errors=True)
+                shutil.rmtree(extract_dir, ignore_errors=True)
             except Exception:
-                pass
+                logger.debug(
+                    "Could not remove FMU temporary directory %s",
+                    extract_dir,
+                    exc_info=True,
+                )
 
     def __del__(self) -> None:
         self.terminate()

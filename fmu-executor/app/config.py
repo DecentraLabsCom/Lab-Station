@@ -28,7 +28,6 @@ TEMP_DIR: Path = Path(_env("FMU_EXECUTOR_TEMP", str(FMU_ROOT / ".tmp")))
 
 # Session limits
 MAX_CONCURRENT_SESSIONS: int = int(_env("FMU_MAX_SESSIONS", "4"))
-SESSION_IDLE_TIMEOUT_S: int = int(_env("FMU_SESSION_IDLE_TIMEOUT", "300"))
 
 # Logging
 LOG_LEVEL: str = _env("FMU_LOG_LEVEL", "INFO")

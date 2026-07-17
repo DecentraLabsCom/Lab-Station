@@ -22,7 +22,6 @@ The service listens on `http://0.0.0.0:8091` by default.
 | `FMU_ROOT` | `./fmu-data` | Directory with provisioned `.fmu` files |
 | `FMU_INTERNAL_TOKEN` | *(none)* | Shared secret for `X-Internal-Session-Token` |
 | `FMU_MAX_SESSIONS` | `4` | Max concurrent realtime sessions |
-| `FMU_SESSION_IDLE_TIMEOUT` | `300` | Idle timeout in seconds |
 | `FMU_EXECUTOR_TEMP` | `<FMU_ROOT>/.tmp` | Temp dir for FMU extraction |
 | `FMU_LOG_LEVEL` | `INFO` | Log level |
 

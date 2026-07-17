@@ -543,6 +543,32 @@ class TestGatewayContextValidation:
             validate_gateway_context(ctx, "test.fmu")
         assert "RESERVATION_NOT_ACTIVE" in exc_info.value.detail
 
+    def test_invalid_exp_claim_rejected(self):
+        from fastapi import HTTPException
+        from app.auth import validate_gateway_context
+
+        ctx = {
+            "accessKey": "test.fmu",
+            "claims": {"exp": "not-a-timestamp"},
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            validate_gateway_context(ctx, "test.fmu")
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "RESERVATION_NOT_ACTIVE"
+
+    def test_invalid_nbf_claim_rejected(self):
+        from fastapi import HTTPException
+        from app.auth import validate_gateway_context
+
+        ctx = {
+            "accessKey": "test.fmu",
+            "claims": {"nbf": "not-a-timestamp"},
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            validate_gateway_context(ctx, "test.fmu")
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "RESERVATION_NOT_ACTIVE"
+
     def test_access_key_mismatch_rejected(self):
         from fastapi import HTTPException
         from app.auth import validate_gateway_context
@@ -605,21 +631,21 @@ def _mock_fmu_patches(fmu_root: Path):
     from contextlib import ExitStack
 
     class _Patches:
-        def __enter__(self_inner):
-            self_inner._stack = ExitStack()
-            self_inner._stack.__enter__()
-            self_inner._stack.enter_context(
+        def __enter__(self):
+            self._stack = ExitStack()
+            self._stack.__enter__()
+            self._stack.enter_context(
                 patch("app.engine.read_model_description", return_value=md)
             )
-            self_inner._stack.enter_context(
+            self._stack.enter_context(
                 patch("app.engine.fmpy_extract", return_value=str(fmu_root))
             )
-            self_inner._stack.enter_context(
+            self._stack.enter_context(
                 patch("fmpy.read_model_description", return_value=md)
             )
             return md
-        def __exit__(self_inner, *exc):
-            self_inner._stack.__exit__(*exc)
+        def __exit__(self, *exc):
+            self._stack.__exit__(*exc)
 
     return _Patches()
 
