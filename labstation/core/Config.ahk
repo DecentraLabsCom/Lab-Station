@@ -13,13 +13,27 @@ if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {
 }
 
 if (!IsSet(LAB_STATION_ROOT)) {
-    ; LabStation scripts live inside the labstation/ folder. Project root is one level up.
-    global LAB_STATION_ROOT := A_ScriptDir
-    global LAB_STATION_PROJECT_ROOT := A_IsCompiled ? A_ScriptDir : NormalizePath(A_ScriptDir "\..")
+    ; Source scripts live inside labstation/. Compiled releases are placed at
+    ; the project root, but Gateway's operational contract uses the same
+    ; labstation/data layout for telemetry, flags, and queued commands.
+    if (A_IsCompiled) {
+        global LAB_STATION_PROJECT_ROOT := A_ScriptDir
+        global LAB_STATION_ROOT := NormalizePath(A_ScriptDir "\labstation")
+    } else {
+        global LAB_STATION_ROOT := A_ScriptDir
+        global LAB_STATION_PROJECT_ROOT := NormalizePath(A_ScriptDir "\..")
+    }
 }
 
 if (!IsSet(LAB_STATION_PROJECT_ROOT)) {
     global LAB_STATION_PROJECT_ROOT := NormalizePath(LAB_STATION_ROOT "\..")
+}
+
+if (!IsSet(LAB_STATION_LEGACY_DATA_DIR)) {
+    ; Older compiled releases wrote data directly below the executable. Keep
+    ; the path available for one-way telemetry migration without making it
+    ; the active Gateway contract.
+    global LAB_STATION_LEGACY_DATA_DIR := A_IsCompiled ? LAB_STATION_PROJECT_ROOT "\data" : ""
 }
 
 if (!IsSet(LAB_STATION_CONTROLLER_DIR)) {
@@ -97,6 +111,57 @@ if (!IsSet(LAB_STATION_PROFILE_FILE)) {
 if (!IsSet(LAB_STATION_SESSION_AUDIT_FILE)) {
     global LAB_STATION_SESSION_AUDIT_FILE := LAB_STATION_TELEMETRY_DIR "\session-guard-events.jsonl"
 }
+
+if (!IsSet(LAB_STATION_LEGACY_STATUS_FILE)) {
+    global LAB_STATION_LEGACY_STATUS_FILE := LAB_STATION_LEGACY_DATA_DIR != ""
+        ? LAB_STATION_LEGACY_DATA_DIR "\status.json"
+        : ""
+}
+
+if (!IsSet(LAB_STATION_LEGACY_HEARTBEAT_FILE)) {
+    global LAB_STATION_LEGACY_HEARTBEAT_FILE := LAB_STATION_LEGACY_DATA_DIR != ""
+        ? LAB_STATION_LEGACY_DATA_DIR "\telemetry\heartbeat.json"
+        : ""
+}
+
+LS_IsHeadlessSession() {
+    static initialized := false
+    static cached := false
+    if (initialized)
+        return cached
+
+    station := DllCall("GetProcessWindowStation", "Ptr")
+    flags := Buffer(8, 0)
+    required := 0
+    if (station && DllCall(
+        "GetUserObjectInformation",
+        "Ptr", station,
+        "Int", 2,
+        "Ptr", flags,
+        "UInt", flags.Size,
+        "UInt*", &required
+    )) {
+        ; WSF_VISIBLE is set for the interactive WinSta0 window station.
+        cached := (NumGet(flags, 0, "UInt") & 0x1) = 0
+        initialized := true
+        return cached
+    }
+
+    sessionName := StrLower(Trim(EnvGet("SESSIONNAME")))
+    cached := sessionName = "services" || sessionName = "winrm" || sessionName = "ssh"
+    initialized := true
+    return cached
+}
+
+LS_ShowMessage(message, title := "Lab Station", options := "OK") {
+    if (LS_IsHeadlessSession()) {
+        OutputDebug("LabStation headless result - " . title)
+        try FileAppend(message . "`n", "*", "UTF-8")
+        return ""
+    }
+    return MsgBox(message, title, options)
+}
+
 EnsureDir(path) {
     try {
         if (!DirExist(path)) {
@@ -108,7 +173,8 @@ EnsureDir(path) {
 
 NormalizePath(path) {
     try {
-        return StrReplace(Trim(DirExist(path) ? DirExist(path) : PathGet(path)), "//", "\\")
+        resolved := PathGet(path)
+        return StrReplace(Trim(resolved), "/", "\")
     } catch {
         return path
     }

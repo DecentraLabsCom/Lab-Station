@@ -151,7 +151,7 @@ class LS_SessionGuard {
             return ""
         if (SubStr(cleaned, 1, 1) = "*")
             cleaned := SubStr(cleaned, 2)
-        lastSlash := InStr(cleaned, "\\", , -1)
+        lastSlash := InStr(cleaned, "\", , -1)
         if (lastSlash > 0)
             cleaned := SubStr(cleaned, lastSlash + 1)
         return cleaned

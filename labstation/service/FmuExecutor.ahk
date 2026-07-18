@@ -15,7 +15,7 @@ if (!IsSet(LAB_STATION_FMU_EXECUTOR_DIR)) {
 }
 
 if (!IsSet(LAB_STATION_FMU_EXECUTOR_PORT)) {
-    global LAB_STATION_FMU_EXECUTOR_PORT := "8091"
+    global LAB_STATION_FMU_EXECUTOR_PORT := 8091
 }
 
 if (!IsSet(LAB_STATION_FMU_EXECUTOR_LOG)) {
@@ -33,7 +33,11 @@ class LS_FmuExecutor {
     ; ── lifecycle ────────────────────────────────────────────
 
     static IsAvailable() {
-        return DirExist(LAB_STATION_FMU_EXECUTOR_DIR) && FileExist(LAB_STATION_FMU_EXECUTOR_DIR "\app\main.py")
+        return (DirExist(LAB_STATION_FMU_EXECUTOR_DIR) && FileExist(LAB_STATION_FMU_EXECUTOR_DIR "\app\main.py")) ? true : false
+    }
+
+    static TokenConfigured() {
+        return Trim(EnvGet("FMU_INTERNAL_TOKEN")) != ""
     }
 
     static IsRunning() {
@@ -45,6 +49,14 @@ class LS_FmuExecutor {
     static Start() {
         if (!this.IsAvailable()) {
             LS_LogWarning("FMU executor: not available (directory missing)")
+            return false
+        }
+        if (!this.TokenConfigured()) {
+            LS_LogError("FMU executor: FMU_INTERNAL_TOKEN is not configured in the service environment")
+            return false
+        }
+        if (!this.EnsureFirewallRule()) {
+            LS_LogError("FMU executor: unable to configure the private-network firewall rule for port " . LAB_STATION_FMU_EXECUTOR_PORT)
             return false
         }
         if (this.IsRunning()) {
@@ -93,6 +105,16 @@ class LS_FmuExecutor {
         return this.Start()
     }
 
+    static EnsureFirewallRule() {
+        script := Format("
+        (
+$ErrorActionPreference = 'Stop'
+Remove-NetFirewallRule -Name 'LabStation-FMU-Executor' -ErrorAction SilentlyContinue
+New-NetFirewallRule -Name 'LabStation-FMU-Executor' -DisplayName 'Lab Station FMU Executor' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {1} -Profile Domain,Private -ErrorAction Stop | Out-Null
+        )", LAB_STATION_FMU_EXECUTOR_PORT)
+        return LS_RunPowerShell(script, "Configure FMU executor firewall") = 0
+    }
+
     ; ── health probing ──────────────────────────────────────
 
     static CheckHealth() {
@@ -131,6 +153,7 @@ try {{
         summary["running"] := this.IsRunning()
         summary["pid"] := this._pid
         summary["port"] := LAB_STATION_FMU_EXECUTOR_PORT
+        summary["tokenConfigured"] := this.TokenConfigured()
         summary["consecutiveFailures"] := this._consecutiveFailures
         summary["lastHealth"] := this._lastHealthResult
         return summary

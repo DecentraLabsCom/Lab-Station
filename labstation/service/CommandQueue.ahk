@@ -226,7 +226,7 @@ class LS_CommandQueue {
     }
 
     static GetFileName(path) {
-        parts := StrSplit(path, "\\")
+        parts := StrSplit(path, "\")
         return parts.Length > 0 ? parts[parts.Length] : path
     }
 

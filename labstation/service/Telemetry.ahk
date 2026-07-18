@@ -34,6 +34,12 @@ class LS_Telemetry {
     static WriteHeartbeat(payload) {
         try {
             LS_WriteJson(LAB_STATION_HEARTBEAT_FILE, payload)
+            if (LAB_STATION_LEGACY_HEARTBEAT_FILE != ""
+                && LAB_STATION_LEGACY_HEARTBEAT_FILE != LAB_STATION_HEARTBEAT_FILE) {
+                ; Preserve visibility for hosts upgraded from the old
+                ; executable-root data layout.
+                LS_WriteJson(LAB_STATION_LEGACY_HEARTBEAT_FILE, payload)
+            }
         } catch as e {
             LS_LogWarning("Unable to write telemetry heartbeat: " . e.Message)
         }

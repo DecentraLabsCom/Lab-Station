@@ -34,6 +34,7 @@ class LS_ConnectorRegistry {
         details.Push("Station endpoint: http://" . A_ComputerName . ":" . LAB_STATION_FMU_EXECUTOR_PORT)
         details.Push("FMU folder: " . LS_ConnectorRegistry.FmiRoot())
         details.Push("Port: " . LAB_STATION_FMU_EXECUTOR_PORT)
+        details.Push("Internal token: " . (status.Has("tokenConfigured") && status["tokenConfigured"] ? "configured" : "MISSING"))
         if (fmuCount != "")
             details.Push("FMUs detected: " . fmuCount)
         details.Push("Gateway mode: FMU_BACKEND_MODE=station")

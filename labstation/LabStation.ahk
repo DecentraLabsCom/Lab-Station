@@ -30,7 +30,9 @@
 
 ; Entry point - call main function
 if (A_Args.Length > 0) {
-    LabStationMain(A_Args)
+    commandExitCode := LabStationMain(A_Args)
+    if (commandExitCode >= 0)
+        ExitApp(commandExitCode)
 } else {
     ExitApp
 }
@@ -38,7 +40,7 @@ if (A_Args.Length > 0) {
 LabStationMain(args) {
     if (args.Length = 0) {
         LS_ShowHelp()
-        return
+        return 2
     }
 
     command := StrLower(args[1])
@@ -48,63 +50,65 @@ LabStationMain(args) {
             remaining.Push(args[A_Index + 1])
     }
 
+    exitCode := 0
     switch command {
         case "setup":
-            LS_RunSetupWizard()
+            exitCode := LS_RunSetupWizard() ? 0 : 1
         case "remoteapp":
-            LS_RegistryManager.SetRemoteAppPolicy()
+            exitCode := LS_RegistryManager.SetRemoteAppPolicy() ? 0 : 2
         case "wol":
-            LS_WakeOnLan.Configure()
+            exitCode := LS_WakeOnLan.Configure() ? 0 : 2
         case "winrm":
-            LS_HandleWinRMCommand(remaining)
+            exitCode := LS_HandleWinRMCommand(remaining)
         case "autostart":
             target := remaining.Length >= 1 ? remaining[1] : ""
             if (target != "") {
-                LS_Autostart.Configure(target)
+                exitCode := LS_Autostart.Configure(target) ? 0 : 2
             } else {
-                LS_Autostart.Configure()
+                exitCode := LS_Autostart.Configure() ? 0 : 2
             }
         case "status":
-            MsgBox LS_Status.SummaryText(), "Lab Station"
+            LS_ShowMessage(LS_Status.SummaryText(), "Lab Station")
+            exitCode := 0
         case "status-json":
-            target := remaining.Length >= 1 ? remaining[1] : LAB_STATION_STATUS_FILE
-            if (LS_Status.ExportJson(target)) {
-                MsgBox "Report saved to " . target, "Lab Station"
-            } else {
-                MsgBox "Unable to export report", "Lab Station", "OK Iconx"
-            }
+            exitCode := LS_RunStatusJsonCommand(remaining)
         case "diagnostics":
-            LS_RunDiagnosticsCommand(remaining)
+            exitCode := LS_RunDiagnosticsCommand(remaining)
         case "tray":
             LS_StartTrayUI()
+            return -1
         case "gui":
             LS_StartMainGui()
+            return -1
         case "launch-app-control":
-            LS_LaunchAppControl(remaining)
+            exitCode := LS_LaunchAppControl(remaining) ? 0 : 2
         case "account":
-            LS_HandleAccountCommand(remaining)
+            exitCode := LS_HandleAccountCommand(remaining)
         case "session":
-            LS_HandleSessionCommand(remaining)
+            exitCode := LS_HandleSessionCommand(remaining)
         case "prepare-session":
-            LS_RunPrepareSession(remaining)
+            exitCode := LS_RunPrepareSession(remaining)
         case "release-session":
-            LS_RunReleaseSession(remaining)
+            exitCode := LS_RunReleaseSession(remaining)
         case "energy":
-            LS_HandleEnergyCommand(remaining)
+            exitCode := LS_HandleEnergyCommand(remaining)
         case "power":
-            LS_HandlePowerCommand(remaining)
+            exitCode := LS_HandlePowerCommand(remaining)
         case "service":
-            LS_HandleServiceCommand(remaining)
+            exitCode := LS_HandleServiceCommand(remaining)
         case "recovery":
-            LS_HandleRecoveryCommand(remaining)
+            exitCode := LS_HandleRecoveryCommand(remaining)
         case "fmu-executor":
-            LS_HandleFmuExecutorCommand(remaining)
+            exitCode := LS_HandleFmuExecutorCommand(remaining)
         case "service-loop":
             LS_ServiceLoop()
+            return 0
         default:
             LS_LogWarning("Unknown command: " . command)
             LS_ShowHelp()
+            exitCode := 2
     }
+    return exitCode
 }
 
 LS_ShowHelp() {
@@ -129,7 +133,7 @@ LS_ShowHelp() {
         "  LabStation.exe recovery reboot-if-needed [--force] [--timeout=20]" . "`n" .
         "  LabStation.exe fmu-executor [start|stop|restart|status]" . "`n" .
         "  LabStation.exe energy audit [--json=path]" . "`n"
-    MsgBox text, "Lab Station", "OK"
+    LS_ShowMessage(text, "Lab Station", "OK")
 }
 
 LS_HandleWinRMCommand(args) {
@@ -138,19 +142,26 @@ LS_HandleWinRMCommand(args) {
         case "configure":
             pass := ""
             if (LS_WinRM.Configure("", &pass)) {
-                MsgBox "WinRM configured.`nUser: .\" . LS_WinRM.DefaultGatewayUser . "`nPassword: " . pass, "Lab Station", "OK Iconi"
+                LS_ShowMessage("WinRM HTTPS configured on port 5986.`nUser: " . LS_WinRM.DefaultGatewayUser . "`nPassword: " . pass . "`nGateway must trust the station certificate thumbprint shown in the log.", "Lab Station", "OK Iconi")
+                return 0
             } else {
-                MsgBox "WinRM configuration failed", "Lab Station", "OK Iconx"
+                LS_ShowMessage("WinRM HTTPS configuration failed. See the log for details.", "Lab Station", "OK Iconx")
+                return 1
             }
         case "status":
             status := LS_WinRM.GetStatus()
             text := "Ready: " . (status.Has("ready") && status["ready"] ? "yes" : "no") . "`n"
             text .= "Service running: " . (status.Has("serviceRunning") && status["serviceRunning"] ? "yes" : "no") . "`n"
             text .= "HTTP listener: " . (status.Has("httpListener") && status["httpListener"] ? "yes" : "no") . "`n"
+            text .= "HTTPS listener: " . (status.Has("httpsListener") && status["httpsListener"] ? "yes" : "no") . "`n"
+            text .= "HTTPS port: " . (status.Has("httpsPort") && status["httpsPort"] ? "yes" : "no") . "`n"
+            text .= "Certificate: " . (status.Has("certificateConfigured") && status["certificateConfigured"] ? "yes" : "no") . "`n"
             text .= "Firewall enabled: " . (status.Has("firewallEnabled") && status["firewallEnabled"] ? "yes" : "no")
-            MsgBox text, "Lab Station - WinRM"
+            LS_ShowMessage(text, "Lab Station - WinRM")
+            return (status.Has("ready") && status["ready"]) ? 0 : 1
         default:
-            MsgBox "Usage: LabStation.exe winrm [configure|status]", "Lab Station", "OK Iconi"
+            LS_ShowMessage("Usage: LabStation.exe winrm [configure|status]", "Lab Station", "OK Iconi")
+            return 2
     }
 }
 
@@ -159,14 +170,15 @@ LS_LaunchAppControl(args) {
     controllerScript := LAB_STATION_CONTROLLER_DIR "\AppControl.ahk"
     if (FileExist(controllerExe)) {
         Run Format('"{1}" {2}', controllerExe, LS_BuildCliFromArgs(args))
-        return
+        return true
     }
     if (!FileExist(controllerScript)) {
-        MsgBox "AppControl was not found next to Lab Station.", "Lab Station", "OK Iconx"
+        LS_ShowMessage("AppControl was not found next to Lab Station.", "Lab Station", "OK Iconx")
         LS_LogError("AppControl.* not available")
-        return
+        return false
     }
     Run Format('"{1}" "{2}" {3}', A_AhkPath, controllerScript, LS_BuildCliFromArgs(args))
+    return true
 }
 
 LS_BuildCliFromArgs(args) {
@@ -180,34 +192,53 @@ LS_BuildCliFromArgs(args) {
 LS_RunDiagnosticsCommand(args) {
     target := args.Length >= 1 ? args[1] : LAB_STATION_STATUS_FILE
     if (LS_Status.ExportJson(target)) {
-        MsgBox "Report saved to " . target, "Lab Station"
+        LS_ShowMessage("Report saved to " . target, "Lab Station")
+        return 0
     } else {
-        MsgBox "Unable to export report", "Lab Station", "OK Iconx"
+        LS_ShowMessage("Unable to export report", "Lab Station", "OK Iconx")
+        return 1
     }
+}
+
+LS_RunStatusJsonCommand(args) {
+    target := args.Length >= 1 ? args[1] : ""
+    if (target = "") {
+        status := LS_Status.Collect()
+        FileAppend(LS_ToJson(status), "*", "UTF-8")
+        return 0
+    }
+    return LS_Status.ExportJson(target) ? 0 : 1
 }
 
 LS_HandleServiceCommand(args) {
     action := args.Length >= 1 ? StrLower(args[1]) : ""
     if (action = "install") {
-        LS_ServiceManager.Install()
+        return LS_ServiceManager.Install() ? 0 : 1
     } else if (action = "uninstall") {
-        LS_ServiceManager.Uninstall()
+        return LS_ServiceManager.Uninstall() ? 0 : 1
     } else if (action = "start") {
-        if (!LS_ServiceManager.Start())
-            MsgBox "Service could not be started", "Lab Station", "OK Iconx"
+        if (!LS_ServiceManager.Start()) {
+            LS_ShowMessage("Service could not be started", "Lab Station", "OK Iconx")
+            return 1
+        }
+        return 0
     } else if (action = "stop") {
-        if (!LS_ServiceManager.Stop())
-            MsgBox "Service could not be stopped", "Lab Station", "OK Iconx"
+        if (!LS_ServiceManager.Stop()) {
+            LS_ShowMessage("Service could not be stopped", "Lab Station", "OK Iconx")
+            return 1
+        }
+        return 0
     } else {
         status := LS_ServiceManager.StatusText()
-        MsgBox status, "Lab Station"
+        LS_ShowMessage(status, "Lab Station")
+        return 0
     }
 }
 
 LS_HandleAccountCommand(args) {
     if (args.Length = 0) {
-        MsgBox "Usage: LabStation.exe account [create|autologon|lockdown|setup] [user] [password]", "Lab Station", "OK Iconi"
-        return
+        LS_ShowMessage("Usage: LabStation.exe account [create|autologon|lockdown|setup] [user] [password]", "Lab Station", "OK Iconi")
+        return 2
     }
     action := StrLower(args[1])
     user := args.Length >= 2 ? args[2] : ""
@@ -216,49 +247,62 @@ LS_HandleAccountCommand(args) {
         case "create":
             pass := password
             if (LS_AccountManager.EnsureAccount(user, &pass)) {
-                MsgBox Format("Account ready: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi"
+                LS_ShowMessage(Format("Account ready: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi")
+                return 0
             } else {
-                MsgBox "Account could not be created/updated", "Lab Station", "OK Iconx"
+                LS_ShowMessage("Account could not be created/updated", "Lab Station", "OK Iconx")
+                return 1
             }
         case "autologon":
             if (!LS_AccountManager.ConfigureAutologon(user, password)) {
-                MsgBox "Autologon could not be configured", "Lab Station", "OK Iconx"
+                LS_ShowMessage("Autologon could not be configured", "Lab Station", "OK Iconx")
+                return 1
             } else {
-                MsgBox "Autologon configured", "Lab Station", "OK Iconi"
+                LS_ShowMessage("Autologon configured", "Lab Station", "OK Iconi")
+                return 0
             }
         case "lockdown":
             if (!LS_AccountManager.ApplyLockdown(user)) {
-                MsgBox "Lockdown could not be applied", "Lab Station", "OK Iconx"
+                LS_ShowMessage("Lockdown could not be applied", "Lab Station", "OK Iconx")
+                return 1
             } else {
-                MsgBox "Lockdown applied", "Lab Station", "OK Iconi"
+                LS_ShowMessage("Lockdown applied", "Lab Station", "OK Iconi")
+                return 0
             }
         case "setup":
             pass := password
             if (LS_AccountManager.Setup(user, &pass)) {
-                MsgBox Format("Account + Autologon ready. User: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi"
+                LS_ShowMessage(Format("Account + Autologon ready. User: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi")
+                return 0
             } else {
-                MsgBox "Account setup failed", "Lab Station", "OK Iconx"
+                LS_ShowMessage("Account setup failed", "Lab Station", "OK Iconx")
+                return 1
             }
         default:
-            MsgBox "Unknown account subcommand", "Lab Station", "OK Iconx"
+            LS_ShowMessage("Unknown account subcommand", "Lab Station", "OK Iconx")
+            return 2
     }
 }
 
 LS_RunPrepareSession(args := []) {
     opts := LS_ParseSessionOptions(args)
     if (LS_SessionManager.PrepareSession(opts)) {
-        MsgBox "Session prepared successfully", "Lab Station", "OK Iconi"
+        LS_ShowMessage("Session prepared successfully", "Lab Station", "OK Iconi")
+        return 0
     } else {
-        MsgBox "Prepare-session finished with warnings (see log)", "Lab Station", "OK Iconx"
+        LS_ShowMessage("Prepare-session finished with warnings (see log)", "Lab Station", "OK Iconx")
+        return 1
     }
 }
 
 LS_RunReleaseSession(args := []) {
     opts := LS_ParseSessionOptions(args)
     if (LS_SessionManager.ReleaseSession(opts)) {
-        MsgBox "Session released successfully", "Lab Station", "OK Iconi"
+        LS_ShowMessage("Session released successfully", "Lab Station", "OK Iconi")
+        return 0
     } else {
-        MsgBox "Release-session finished with warnings (see log)", "Lab Station", "OK Iconx"
+        LS_ShowMessage("Release-session finished with warnings (see log)", "Lab Station", "OK Iconx")
+        return 1
     }
 }
 
@@ -292,8 +336,8 @@ LS_ParseSessionOptions(args) {
 
 LS_HandleSessionCommand(args) {
     if (args.Length = 0) {
-        MsgBox "Usage: LabStation.exe session guard [--grace=120] [--user=LABUSER]", "Lab Station", "OK Iconi"
-        return
+        LS_ShowMessage("Usage: LabStation.exe session guard [--grace=120] [--user=LABUSER]", "Lab Station", "OK Iconi")
+        return 2
     }
     sub := StrLower(args[1])
     subArgs := []
@@ -303,18 +347,21 @@ LS_HandleSessionCommand(args) {
     }
     switch sub {
         case "guard":
-            LS_RunSessionGuard(subArgs)
+            return LS_RunSessionGuard(subArgs)
         default:
-            MsgBox "Unknown session subcommand", "Lab Station", "OK Iconx"
+            LS_ShowMessage("Unknown session subcommand", "Lab Station", "OK Iconx")
+            return 2
     }
 }
 
 LS_RunSessionGuard(args := []) {
     opts := LS_ParseGuardOptions(args)
     if (LS_SessionGuard.Run(opts)) {
-        MsgBox "Local sessions cleared", "Lab Station", "OK Iconi"
+        LS_ShowMessage("Local sessions cleared", "Lab Station", "OK Iconi")
+        return 0
     } else {
-        MsgBox "Session guard finished with warnings (see log)", "Lab Station", "OK Iconx"
+        LS_ShowMessage("Session guard finished with warnings (see log)", "Lab Station", "OK Iconx")
+        return 1
     }
 }
 
@@ -347,9 +394,10 @@ LS_HandleEnergyCommand(args) {
             subArgs.Push(args[A_Index + 1])
     }
     if (sub = "" || sub = "audit") {
-        LS_RunEnergyAudit(subArgs)
+        return LS_RunEnergyAudit(subArgs)
     } else {
-        MsgBox "Usage: LabStation.exe energy audit [--json=path]", "Lab Station", "OK Iconi"
+        LS_ShowMessage("Usage: LabStation.exe energy audit [--json=path]", "Lab Station", "OK Iconi")
+        return 2
     }
 }
 
@@ -360,7 +408,8 @@ LS_RunEnergyAudit(args := []) {
         LS_EnergyAudit.SaveJson(opts["json"], report)
     }
     summary := LS_EnergyAudit.RenderSummary(report)
-    MsgBox summary, "Lab Station", "OK"
+    LS_ShowMessage(summary, "Lab Station", "OK")
+    return 0
 }
 
 LS_ParseEnergyOptions(args) {
@@ -375,8 +424,8 @@ LS_ParseEnergyOptions(args) {
 
 LS_HandlePowerCommand(args) {
     if (args.Length = 0) {
-        MsgBox "Usage: LabStation.exe power [shutdown|hibernate] [--delay=0] [--reason=text]", "Lab Station", "OK Iconi"
-        return
+        LS_ShowMessage("Usage: LabStation.exe power [shutdown|hibernate] [--delay=0] [--reason=text]", "Lab Station", "OK Iconi")
+        return 2
     }
     sub := StrLower(args[1])
     powerArgs := []
@@ -392,13 +441,15 @@ LS_HandlePowerCommand(args) {
         case "hibernate":
             success := LS_PowerManager.Hibernate(opts)
         default:
-            MsgBox "Unknown power subcommand", "Lab Station", "OK Iconx"
-            return
+            LS_ShowMessage("Unknown power subcommand", "Lab Station", "OK Iconx")
+            return 2
     }
     if (success) {
-        MsgBox "Power action scheduled", "Lab Station", "OK Iconi"
+        LS_ShowMessage("Power action scheduled", "Lab Station", "OK Iconi")
+        return 0
     } else {
-        MsgBox "Power action failed (see log)", "Lab Station", "OK Iconx"
+        LS_ShowMessage("Power action failed (see log)", "Lab Station", "OK Iconx")
+        return 1
     }
 }
 
@@ -429,8 +480,8 @@ LS_ParsePowerOptions(args) {
 
 LS_HandleRecoveryCommand(args) {
     if (args.Length = 0) {
-        MsgBox "Usage: LabStation.exe recovery reboot-if-needed [--force] [--timeout=20]", "Lab Station", "OK Iconi"
-        return
+        LS_ShowMessage("Usage: LabStation.exe recovery reboot-if-needed [--force] [--timeout=20]", "Lab Station", "OK Iconi")
+        return 2
     }
     sub := StrLower(args[1])
     subArgs := []
@@ -443,9 +494,11 @@ LS_HandleRecoveryCommand(args) {
             opts := LS_ParseRecoveryOptions(subArgs)
             result := LS_Recovery.RebootIfNeeded(opts)
             icon := (result.Has("success") && !result["success"]) ? "OK Iconx" : "OK Iconi"
-            MsgBox result["message"], "Lab Station", icon
+            LS_ShowMessage(result["message"], "Lab Station", icon)
+            return (result.Has("success") && result["success"]) ? 0 : 1
         default:
-            MsgBox "Unknown recovery subcommand", "Lab Station", "OK Iconx"
+            LS_ShowMessage("Unknown recovery subcommand", "Lab Station", "OK Iconx")
+            return 2
     }
 }
 
@@ -455,7 +508,7 @@ LS_ParseRecoveryOptions(args) {
         lower := StrLower(arg)
         if (lower = "--force" || lower = "force") {
             opts["force"] := true
-        } else if RegExMatch(arg, "^--timeout=(\\d+)$", &m) {
+        } else if RegExMatch(arg, "^--timeout=(\d+)$", &m) {
             opts["timeout"] := m[1] + 0
         } else if RegExMatch(arg, "^--user=(.+)$", &m2) {
             opts["user"] := m2[1]
@@ -471,18 +524,21 @@ LS_HandleFmuExecutorCommand(args) {
     switch action {
         case "start":
             if (LS_FmuExecutor.Start()) {
-                MsgBox "FMU executor started", "Lab Station", "OK Iconi"
+                LS_ShowMessage("FMU executor started", "Lab Station", "OK Iconi")
+                return 0
             } else {
-                MsgBox "FMU executor could not be started", "Lab Station", "OK Iconx"
+                LS_ShowMessage("FMU executor could not be started", "Lab Station", "OK Iconx")
+                return 1
             }
         case "stop":
-            LS_FmuExecutor.Stop()
-            MsgBox "FMU executor stopped", "Lab Station", "OK Iconi"
+            return LS_FmuExecutor.Stop() ? 0 : 1
         case "restart":
             if (LS_FmuExecutor.Restart()) {
-                MsgBox "FMU executor restarted", "Lab Station", "OK Iconi"
+                LS_ShowMessage("FMU executor restarted", "Lab Station", "OK Iconi")
+                return 0
             } else {
-                MsgBox "FMU executor could not be restarted", "Lab Station", "OK Iconx"
+                LS_ShowMessage("FMU executor could not be restarted", "Lab Station", "OK Iconx")
+                return 1
             }
         case "status":
             summary := LS_FmuExecutor.GetHealthSummary()
@@ -490,9 +546,12 @@ LS_HandleFmuExecutorCommand(args) {
             text .= "Running: " . (summary["running"] ? "yes" : "no") . "`n"
             text .= "PID: " . summary["pid"] . "`n"
             text .= "Port: " . summary["port"] . "`n"
-            MsgBox text, "Lab Station – FMU Executor"
+            text .= "Token configured: " . (summary["tokenConfigured"] ? "yes" : "no")
+            LS_ShowMessage(text, "Lab Station - FMU Executor")
+            return (summary["available"] && summary["running"] && summary["tokenConfigured"]) ? 0 : 1
         default:
-            MsgBox "Usage: LabStation.exe fmu-executor [start|stop|restart|status]", "Lab Station", "OK Iconi"
+            LS_ShowMessage("Usage: LabStation.exe fmu-executor [start|stop|restart|status]", "Lab Station", "OK Iconi")
+            return 2
     }
 }
 

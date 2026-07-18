@@ -24,12 +24,15 @@ LS_ToJson(value) {
             return "{" . LS_StrJoin(parts, ",") . "}"
         }
     }
-    if (value = true)
+    if (Type(value) = "String") {
+        if (value == "null")
+            return "null"
+        return LS_JsonEscape(value)
+    }
+    if (value == true)
         return "true"
-    if (value = false)
+    if (value == false)
         return "false"
-    if (value = "null")
-        return "null"
     if (IsNumber(value))
         return value
     return LS_JsonEscape(value)
@@ -39,7 +42,7 @@ LS_IsArray(obj) {
     if !IsObject(obj)
         return false
     expected := 1
-    for key in obj {
+    for key, value in obj {
         if (key != expected)
             return false
         expected += 1
@@ -48,18 +51,32 @@ LS_IsArray(obj) {
 }
 
 LS_JsonEscape(value) {
-    value := StrReplace(value, "\\", "\\\\")
-    value := StrReplace(value, '"', '\\"')
-    value := StrReplace(value, "\n", "\\n")
-    value := StrReplace(value, "\r", "\\r")
-    value := StrReplace(value, "\t", "\\t")
+    ; AHK does not use C-style backslash escapes in string literals. Build
+    ; valid JSON escapes explicitly so Windows paths and command output can be
+    ; consumed by Python/JavaScript clients.
+    value := StrReplace(value, "\", "\\")
+    value := StrReplace(value, '"', '\"')
+    value := StrReplace(value, Chr(8), "\b")
+    value := StrReplace(value, Chr(12), "\f")
+    value := StrReplace(value, Chr(10), "\n")
+    value := StrReplace(value, Chr(13), "\r")
+    value := StrReplace(value, Chr(9), "\t")
     return '"' . value . '"'
 }
 
 LS_WriteJson(path, value) {
     json := LS_ToJson(value)
-    try FileDelete(path)
-    FileAppend(json, path, "UTF-8")
+    SplitPath(path, &fileName, &directory)
+    if (directory != "")
+        EnsureDir(directory)
+    temporaryPath := path . ".tmp-" . A_TickCount . "-" . Random(1000, 9999)
+    try {
+        FileAppend(json, temporaryPath, "UTF-8")
+        FileMove(temporaryPath, path, true)
+    } catch as e {
+        try FileDelete(temporaryPath)
+        throw e
+    }
 }
 
 LS_StrJoin(parts, delimiter := ",") {
@@ -176,14 +193,14 @@ class LS_JsonParser {
             if (ch = '"')
                 return out
 
-            if (ch != "\\") {
+            if (ch != "\") {
                 out .= ch
                 continue
             }
 
             esc := this._Consume()
             switch esc {
-                case '"', "\\", "/":
+                case '"', "\", "/":
                     out .= esc
                 case "b":
                     out .= Chr(8)

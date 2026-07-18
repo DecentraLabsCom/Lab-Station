@@ -169,7 +169,7 @@ if (Test-Path `$Path) {{
     }
 
     static GetUserProfilePath(user) {
-        profile := "C:\\Users\\" . user
+        profile := "C:\Users\" . user
         if (DirExist(profile)) {
             return profile
         }
@@ -177,7 +177,7 @@ if (Test-Path `$Path) {{
         script := Format("
         (
 `$u = '{1}'
-`$p = Get-CimInstance -ClassName Win32_UserProfile | Where-Object {{ `$_.LocalPath -like '*\\{1}' -and -not `$_.Special }} | Select-Object -First 1
+`$p = Get-CimInstance -ClassName Win32_UserProfile | Where-Object {{ `$_.LocalPath -like '*\{1}' -and -not `$_.Special }} | Select-Object -First 1
 if (`$p) {{ `$p.LocalPath }}
         )", filterUser)
         capture := LS_RunPowerShellCapture(script, "Lookup user profile")

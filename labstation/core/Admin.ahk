@@ -10,8 +10,8 @@ LS_EnsureAdmin(prompt := true) {
         return true
     }
     if (prompt) {
-        MsgBox "Lab Station requires administrator privileges for this action." . "`n" .
-            "Run the executable or script with 'Run as administrator'.", "Lab Station", "OK Icon!"
+        LS_ShowMessage("Lab Station requires administrator privileges for this action." . "`n" .
+            "Run the executable or script with 'Run as administrator'.", "Lab Station", "OK Icon!")
     }
     LS_LogWarning("Administrative privileges required but not granted")
     return false
@@ -43,6 +43,6 @@ LS_EscapeCliArgument(value) {
     if !RegExMatch(value, "[\s" . quote . "]") {
         return value
     }
-    escaped := StrReplace(value, quote, "\\" . quote)
+    escaped := StrReplace(value, quote, "\" . quote)
     return quote . escaped . quote
 }

@@ -10,6 +10,7 @@
 
 class LS_WinRM {
     static DefaultGatewayUser := "LabGatewaySvc"
+    static HttpsPort := 5986
 
     static Configure(user := "", &password := "") {
         if (!LS_EnsureAdmin()) {
@@ -26,6 +27,9 @@ class LS_WinRM {
         if (exitCode = 0 && status.Has("ready") && status["ready"]) {
             password := localPassword
             LS_LogInfo("WinRM configured for Lab Gateway user " . user)
+            certificateInfo := Trim(capture["stdout"])
+            if (certificateInfo != "")
+                LS_LogInfo(certificateInfo)
             return true
         }
         detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
@@ -43,10 +47,13 @@ $ErrorActionPreference = 'Continue'
 $svc = Get-Service -Name WinRM -ErrorAction SilentlyContinue
 $listenerText = ''
 try { $listenerText = (& winrm enumerate winrm/config/listener 2>$null) -join [Environment]::NewLine } catch {}
-$listener = $listenerText -match 'Transport\s*=\s*HTTP'
-$firewall = $false
+`$httpsListener = `$listenerText -match '(?im)Transport\s*=\s*HTTPS'
+`$httpsPort = `$listenerText -match '(?im)Port\s*=\s*5986'
+`$httpListener = `$listenerText -match '(?im)Transport\s*=\s*HTTP\s*$'
+`$certificateConfigured = `$listenerText -match '(?im)Certificate\s*=\s*\S+'
+`$firewall = `$false
 try {
-    $rule = Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*','LabStation-WinRM-HTTP' -ErrorAction SilentlyContinue |
+    $rule = Get-NetFirewallRule -Name 'WINRM-HTTPS-In-TCP*','LabStation-WinRM-HTTPS' -ErrorAction SilentlyContinue |
         Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } |
         Select-Object -First 1
     if (-not $rule) {
@@ -59,8 +66,14 @@ try {
 if (-not $firewall) {
     try {
         $netsh = (& netsh advfirewall firewall show rule name=all 2>$null) -join [Environment]::NewLine
-        $firewall = ($netsh -match '5985') -and ($netsh -match '(?i)(Enabled|Habilitada|Habilitado)\s*:\s*(Yes|S[ií])')
+        $firewall = ($netsh -match '5986') -and ($netsh -match '(?i)(Enabled|Habilitada|Habilitado)\s*:\s*(Yes|S[ií])')
     } catch {}
+}
+if (-not $firewall) {
+try {
+    $httpsNetsh = (& netsh advfirewall firewall show rule name='Lab Station WinRM HTTPS' 2>$null) -join [Environment]::NewLine
+    $firewall = ($httpsNetsh -match '5986') -and ($httpsNetsh -match '(?i)(Enabled|Habilitada|Habilitado)')
+} catch {}
 }
 $allowUnencrypted = $false
 $negotiateAuth = $false
@@ -70,7 +83,10 @@ try { $negotiateAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\Negotiate -
     serviceInstalled = [bool]$svc
     serviceRunning = ($svc.Status -eq 'Running')
     serviceStartType = [string]$svc.StartType
-    httpListener = [bool]$listener
+    httpListener = [bool]$httpListener
+    httpsListener = [bool]$httpsListener
+    httpsPort = [bool]$httpsPort
+    certificateConfigured = [bool]$certificateConfigured
     firewallEnabled = [bool]$firewall
     allowUnencrypted = [bool]$allowUnencrypted
     negotiateAuth = [bool]$negotiateAuth
@@ -89,6 +105,9 @@ try { $negotiateAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\Negotiate -
                 "serviceRunning", false,
                 "serviceStartType", "",
                 "httpListener", false,
+                "httpsListener", false,
+                "httpsPort", false,
+                "certificateConfigured", false,
                 "firewallEnabled", false,
                 "allowUnencrypted", false,
                 "negotiateAuth", false,
@@ -100,9 +119,11 @@ try { $negotiateAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\Negotiate -
             status := LS_ParseJson(capture["stdout"])
             status["ready"] := (
                 status["serviceRunning"]
-                && status["httpListener"]
+                && status["httpsListener"]
+                && status["httpsPort"]
+                && status["certificateConfigured"]
                 && status["firewallEnabled"]
-                && status["allowUnencrypted"]
+                && !status["allowUnencrypted"]
                 && status["negotiateAuth"]
             )
             return status
@@ -147,20 +168,62 @@ Set-Service -Name WinRM -StartupType Automatic
 Start-Service -Name WinRM
 & winrm quickconfig -quiet | Out-Null
 Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
-Set-WinRMConfigBool 'WSMan:\localhost\Service\AllowUnencrypted' $true 'winrm/config/service' 'AllowUnencrypted'
+Set-WinRMConfigBool 'WSMan:\localhost\Service\AllowUnencrypted' $false 'winrm/config/service' 'AllowUnencrypted'
 Set-WinRMConfigBool 'WSMan:\localhost\Service\Auth\Negotiate' $true 'winrm/config/service/auth' 'Negotiate'
+try { Set-WinRMConfigBool 'WSMan:\localhost\Service\Auth\Basic' $false 'winrm/config/service/auth' 'Basic' } catch {}
 try { Set-WinRMConfigBool 'WSMan:\localhost\Service\Auth\Kerberos' $true 'winrm/config/service/auth' 'Kerberos' } catch {}
+
+$dnsNames = New-Object System.Collections.Generic.List[string]
+[void]$dnsNames.Add($env:COMPUTERNAME)
+[void]$dnsNames.Add('localhost')
 try {
-    Enable-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction Stop
-} catch {
-    try { Enable-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction Stop } catch {}
+    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+        ForEach-Object { [void]$dnsNames.Add($_.IPAddress) }
+} catch {}
+$certificate = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.HasPrivateKey -and
+        $_.NotAfter -gt (Get-Date).AddDays(30) -and
+        $_.Subject -match ('CN=' + [regex]::Escape($env:COMPUTERNAME))
+    } |
+    Sort-Object NotAfter -Descending |
+    Select-Object -First 1
+if (-not $certificate) {
+    $certificate = New-SelfSignedCertificate -DnsName ($dnsNames | Select-Object -Unique) -CertStoreLocation 'Cert:\LocalMachine\My' -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(2) -FriendlyName 'DecentraLabs Lab Station WinRM'
 }
+if (-not $certificate -or -not $certificate.Thumbprint) {
+    throw 'Unable to create or locate a WinRM HTTPS certificate'
+}
+$certificateDir = Join-Path $env:ProgramData 'DecentraLabs\Lab Station'
+New-Item -ItemType Directory -Path $certificateDir -Force | Out-Null
+$certificateExport = Join-Path $certificateDir 'winrm-server.cer'
+Export-Certificate -Cert $certificate -FilePath $certificateExport -Force | Out-Null
+Write-Output ('WinRM certificate thumbprint: ' + $certificate.Thumbprint)
+Write-Output ('WinRM certificate export: ' + $certificateExport)
+
 try {
-    New-NetFirewallRule -Name 'LabStation-WinRM-HTTP' -DisplayName 'Lab Station WinRM HTTP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5985 -Profile Any -ErrorAction SilentlyContinue | Out-Null
+    Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue |
+        Where-Object { $_.Keys -match 'Transport=HTTP' } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+} catch {}
+try {
+    Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue |
+        Where-Object { $_.Keys -match 'Transport=HTTPS' } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+} catch {}
+New-Item -Path 'WSMan:\localhost\Listener' -Transport HTTPS -Address '*' -Hostname $env:COMPUTERNAME -CertificateThumbprint $certificate.Thumbprint -Force | Out-Null
+
+try {
+    Disable-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -Name 'LabStation-WinRM-HTTP' -ErrorAction SilentlyContinue
+} catch {}
+try {
+    Remove-NetFirewallRule -Name 'LabStation-WinRM-HTTPS' -ErrorAction SilentlyContinue
+    New-NetFirewallRule -Name 'LabStation-WinRM-HTTPS' -DisplayName 'Lab Station WinRM HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5986 -Profile Domain,Private -ErrorAction SilentlyContinue | Out-Null
 } catch {
-    netsh advfirewall firewall set rule group='Windows Remote Management' new enable=yes | Out-Null
+    netsh advfirewall firewall add rule name='Lab Station WinRM HTTPS' dir=in action=allow protocol=TCP localport=5986 profile=domain,private | Out-Null
 }
-netsh advfirewall firewall add rule name='Lab Station WinRM HTTP' dir=in action=allow protocol=TCP localport=5985 profile=any | Out-Null
 Start-Service -Name WinRM
 
 function Test-LocalUserCompat([string]$Name) {

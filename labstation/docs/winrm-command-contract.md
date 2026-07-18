@@ -9,9 +9,9 @@
 ## 2. Connectivity profile
 | Item | Value |
 | --- | --- |
-| Transport | WinRM over HTTP (`http://<hostname>:5985/wsman`) inside the lab VLAN. HTTPS upgrade planned once certificates are available. |
-| Listener config | `LabStation.exe setup` or `LabStation.exe winrm configure` applies the pilot HTTP listener, `AllowUnencrypted`, WinRM service autostart, and Windows Remote Management firewall rules. Manual equivalent: `Enable-PSRemoting -Force` plus `Set-Item WSMan:\localhost\Service\AllowUnencrypted $true` during pilot. Firewall rule `WINRM-HTTP-In-TCP` must stay enabled. |
-| Client trust | Each Lab Gateway node must add the workstation to `TrustedHosts` (`Set-Item WSMan:\localhost\Client\TrustedHosts`). Limit list to managed hosts. |
+| Transport | WinRM over HTTPS (`https://<hostname>:5986/wsman`) inside the managed/private network, using NTLM/Negotiate. Plain HTTP/5985 is deliberately disabled. |
+| Listener config | `LabStation.exe setup` or `LabStation.exe winrm configure` creates/reuses a server-auth certificate, exports it to `C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer`, configures the HTTPS listener, disables `AllowUnencrypted`, enables Negotiate, and opens only the HTTPS firewall rule. |
+| Client trust | Import the exported `.cer` into the Lab Gateway host's trusted root/certificate store (or use a certificate issued by the organisation's trusted CA). The Gateway validates the server certificate; `TrustedHosts` is not a substitute for certificate trust. |
 | Rate limits | Default WinRM quotas (150 concurrent operations) are sufficient; stick to a max of 2 parallel commands per host. |
 | Logging | All Lab Station actions continue to log to `C:\LabStation\labstation.log`; WinRM transcripts stay on the gateway. |
 
@@ -42,8 +42,8 @@ All remote executions call the bundled binary: `C:\LabStation\LabStation.exe <co
 | `release-session` | Same switches as `prepare-session`. `--reboot` triggers `shutdown /r /t <timeout> /f`. | Closes controller, logs off LABUSER, optionally schedules reboot. Run after reservation completes. | Forces logoff, optional reboot. |
 | `recovery reboot-if-needed` | `--force` bypasses health heuristics, `--timeout=<seconds>` overrides default 20s, `--reason=<text>` tags the order. | Evaluates `status.json` issues (RemoteApp/WoL/autostart/policy drift, lingering sessions) and only triggers a forced reboot when needed; `--force` handles manual overrides. | Writes a safeguard entry to `service-state.ini`, updates `telemetry/heartbeat.json`, and schedules `shutdown /r`. |
 | `power shutdown` / `power hibernate` | `--delay=<seconds>` (default 0), `--reason=<text>`, `--no-force`, `--skip-wake-check`, `--repair-wake=no`, `--require-wake`. | Re-validates Wake-on-LAN compliance (optionally reapplying adapter settings) and schedules a graceful shutdown or hibernate so the host can be powered off between reservations without breaking WoL. | Records `lastPowerAction` inside `service-state.ini`/telemetry and logs result to `labstation.log`. |
-| `status-json` | `status-json <absolute-path>` | Refreshes diagnostics (RemoteApp, WoL, autostart, account/lockdown, sessions) and writes JSON to the provided path. | JSON file including `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`, and the `operations` block; stdout carries the summary text. |
-| `service start|stop|status|install|uninstall` | subcommand only | Manages the Lab Station background scheduled task when automation needs it (rare). | Task Scheduler entry `LabStationService`. |
+| `status-json` | `status-json [absolute-path]` | Refreshes diagnostics (RemoteApp, WoL, autostart, account/lockdown, sessions) and writes JSON to the provided path; without a path it writes the JSON document to stdout. | JSON file/document including `summary.ready`, `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`, and the `operations` block. |
+| `service start|stop|status|install|uninstall` | subcommand only | Manages the Lab Station background scheduled task when automation needs it (rare). | Task Scheduler entry `LabStation\BackgroundService`. |
 
 > Note: `release-session --reboot --reboot-timeout=15` remains the default end-of-reservation reboot. Use `recovery reboot-if-needed` only when the host is stuck in a degraded state or the backend wants a one-off safeguard reboot.
 
@@ -58,7 +58,7 @@ function Invoke-LabStationCommand {
         [string[]]$Arguments = @()
     )
 
-    $exe = "C:\\LabStation\\LabStation.exe"
+    $exe = "C:\LabStation\LabStation.exe"
     $argLine = @($Command) + $Arguments
 
     Invoke-Command -ComputerName $ComputerName -Credential $Credential -ScriptBlock {
@@ -97,7 +97,7 @@ import json
 import winrm
 
 session = winrm.Session(
-    'http://lab-ws-07:5985/wsman',
+    'https://lab-ws-07:5986/wsman',
     auth=('LABSTATION\\LabGatewaySvc', '***'),
     transport='ntlm'
 )
@@ -106,7 +106,7 @@ ps = r'''
 $exe = 'C:\LabStation\LabStation.exe'
 $psi = New-Object Diagnostics.ProcessStartInfo
 $psi.FileName = $exe
-$psi.ArgumentList.Add('status-json', 'C:\LabStation\data\status.json')
+$psi.ArgumentList.Add('status-json', 'C:\LabStation\labstation\data\status.json')
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.UseShellExecute = $false
@@ -115,7 +115,7 @@ $proc = [Diagnostics.Process]::Start($psi)
 $stdout = $proc.StandardOutput.ReadToEnd()
 $stderr = $proc.StandardError.ReadToEnd()
 $proc.WaitForExit()
-Get-Content -Raw 'C:\LabStation\data\status.json'
+Get-Content -Raw 'C:\LabStation\labstation\data\status.json'
 exit $proc.ExitCode
 '''
 
@@ -131,10 +131,9 @@ print(status['summary']['state'])
 3. **Assign reservation** via Guacamole/RemoteApp.
 4. **`release-session --reboot`** when Lab Gateway marks reservation complete. Reboot timeout default 15 seconds so the next wake cycle starts from a clean slate.
 5. **Optional:** `power shutdown --delay=60 --reason="Reservation completed"` (or `power hibernate`) if the host must remain fully off until WoL wakes it up again.
-6. **`status-json`** every 5 minutes (or on demand) to copy health data back to the gateway for dashboards; alternatively poll `C:\LabStation\data\telemetry\heartbeat.json` if SMB access is already available.
+6. **`status-json`** every 5 minutes (or on demand) to copy health data back to the gateway for dashboards; alternatively poll `C:\LabStation\labstation\data\telemetry\heartbeat.json` if SMB access is already available.
 
 ## 7. Open items / future enhancements
-- **HTTPS listener + cert pinning:** still pending; during pilot stay on HTTP with TrustedHosts constrained to managed hosts and keep firewall scopes tight. Plan: document `New-SelfSignedCertificate` + listener binding once CA strategy is chosen.
-- **`status-json --stdout`:** not yet implemented. Current workaround: write to a temp path via `status-json <path>` and fetch the file in the same WinRM session.
+- **HTTPS certificate trust:** `winrm configure` exports the certificate used by the listener. Install that certificate on every Lab Gateway node, or replace it with a certificate issued by the organisation's trusted CA before enabling the host.
 - **Proactive alerts:** notifications on `ready=false` or stale heartbeat remain roadmap items; rely on ops-worker polling + dashboards until built-in alerts land.
 - **Completed**: ops-worker REST API simplifies integration vs raw WinRM (see `ops-worker/README.md`).

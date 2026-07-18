@@ -17,8 +17,10 @@ def validate_internal_token(request: Request) -> None:
     """Check X-Internal-Session-Token header matches the configured secret."""
     expected = config.internal_token()
     if not expected:
-        # No token configured – allow (development mode).
-        return
+        # The service binds to the station network interface by default. An
+        # absent token must therefore fail closed instead of exposing the
+        # internal FMU control plane anonymously.
+        raise HTTPException(status_code=401, detail="FMU_INTERNAL_TOKEN_NOT_CONFIGURED")
     provided = request.headers.get("X-Internal-Session-Token") or ""
     if not secrets.compare_digest(provided, expected):
         logger.warning("Rejected request: invalid internal token")

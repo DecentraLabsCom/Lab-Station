@@ -39,12 +39,19 @@ class LS_Status {
         return data
     }
 
-    static ExportJson(path := "labstation\\status.json", data := "") {
+    static ExportJson(path := "labstation\status.json", data := "") {
         if (!IsObject(data))
             data := this.Collect()
         fullPath := this.ResolvePath(path)
         try {
             LS_WriteJson(fullPath, data)
+            if (fullPath = LAB_STATION_STATUS_FILE
+                && LAB_STATION_LEGACY_STATUS_FILE != ""
+                && LAB_STATION_LEGACY_STATUS_FILE != fullPath) {
+                ; Keep the previous compiled-release location readable while
+                ; Gateway installations migrate to labstation/data.
+                LS_WriteJson(LAB_STATION_LEGACY_STATUS_FILE, data)
+            }
             LS_LogInfo("Status exported to " . fullPath)
             return true
         } catch as e {
@@ -75,7 +82,7 @@ class LS_Status {
         info["labUser"] := user
         info["labUserExists"] := this.LocalUserExists(user)
         info["labUserNormalized"] := this.NormalizePrincipal(user)
-        profile := "C:\\Users\\" . user
+        profile := "C:\Users\" . user
         info["profilePath"] := DirExist(profile) ? profile : ""
         return info
     }
@@ -396,10 +403,10 @@ if (`$targetIsMember) { [void]`$names.Add(`$targetUser) }
             cleaned := SubStr(cleaned, 2)
         normalized := this.NormalizePrincipal(cleaned)
         static Known := Map(
-            "S-1-5-32-544", "Builtin\\Administrators",
-            "S-1-5-32-545", "Builtin\\Users",
-            "S-1-5-32-546", "Builtin\\Guests",
-            "S-1-5-32-551", "Builtin\\Backup Operators"
+            "S-1-5-32-544", "Builtin\Administrators",
+            "S-1-5-32-545", "Builtin\Users",
+            "S-1-5-32-546", "Builtin\Guests",
+            "S-1-5-32-551", "Builtin\Backup Operators"
         )
         if (Known.Has(cleaned))
             return Known[cleaned]
@@ -513,7 +520,11 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     }
 
     static IsLocalModeEnabled() {
-        return FileExist(LAB_STATION_LOCAL_MODE_FLAG) ? true : false
+        if (FileExist(LAB_STATION_LOCAL_MODE_FLAG))
+            return true
+        if (LAB_STATION_LEGACY_DATA_DIR != "" && FileExist(LAB_STATION_LEGACY_DATA_DIR "\local-mode.flag"))
+            return true
+        return false
     }
 
     static GetFmuExecutorStatus() {
@@ -557,8 +568,16 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("Sleep timeout is not disabled")
         if (!data["power"]["hibernateCompliant"])
             issues.Push("Hibernate timeout is not disabled")
+        if (data.Has("fmuExecutor") && data["fmuExecutor"]["available"]) {
+            fmu := data["fmuExecutor"]
+            if (fmu.Has("tokenConfigured") && !fmu["tokenConfigured"])
+                issues.Push("FMU executor internal token is not configured")
+            if (!fmu["running"])
+                issues.Push("FMU executor is not running")
+        }
         summary := Map()
         summary["state"] := issues.Length > 0 ? "needs-action" : "ready"
+        summary["ready"] := issues.Length = 0
         summary["issues"] := issues
         return summary
     }
@@ -603,10 +622,10 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     }
 
     static ResolvePath(path) {
-        if (RegExMatch(path, "^[A-Za-z]:\\") || SubStr(path, 1, 2) = "\\\\") {
+        if (RegExMatch(path, "^[A-Za-z]:\\") || SubStr(path, 1, 2) = "\\") {
             return path
         }
-        if (SubStr(path, 1, 2) = ".\\") {
+        if (SubStr(path, 1, 2) = ".\") {
             return LAB_STATION_PROJECT_ROOT "\" SubStr(path, 3)
         }
         return LAB_STATION_PROJECT_ROOT "\" path

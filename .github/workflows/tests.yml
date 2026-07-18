@@ -88,15 +88,20 @@ jobs:
         run: |
           & $Env:AHK_EXE labstation\tests\WizardActionCallbacksTests.ahk
 
+      - name: Run LabStation integration contract tests
+        shell: powershell
+        run: |
+          & $Env:AHK_EXE labstation\tests\IntegrationContractTests.ahk
+
       - name: Run DualAppMode smoke test
         shell: powershell
         run: |
-          & $Env:AHK_EXE tests\SmokeTest_DualAppMode.ahk
+          & $Env:AHK_EXE controller\tests\SmokeTest_DualAppMode.ahk
 
       - name: Run argument parsing matrix
         shell: powershell
         run: |
-          & $Env:AHK_EXE tests\ArgumentParsingTests.ahk
+          & $Env:AHK_EXE controller\tests\ArgumentParsingTests.ahk
 
       - name: Upload smoke test log
         if: always()

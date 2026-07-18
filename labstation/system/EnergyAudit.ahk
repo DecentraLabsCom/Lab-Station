@@ -217,9 +217,9 @@ class LS_EnergyAudit {
     }
 
     static ResolvePath(path) {
-        if (RegExMatch(path, "^[A-Za-z]:\\") || SubStr(path, 1, 2) = "\\\\")
+        if (RegExMatch(path, "^[A-Za-z]:\\") || SubStr(path, 1, 2) = "\\")
             return path
-        if (SubStr(path, 1, 2) = ".\\")
+        if (SubStr(path, 1, 2) = ".\")
             return LAB_STATION_PROJECT_ROOT "\" SubStr(path, 3)
         return LAB_STATION_PROJECT_ROOT "\" path
     }
