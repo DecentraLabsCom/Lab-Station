@@ -453,9 +453,9 @@ class TestOutputSubscription:
 
     def test_subscription_with_max_hz(self):
         from app.engine import OutputSubscription
-        sub = OutputSubscription(max_hz=10.0)
-        # period_ms=100 → 0.1s, max_hz=10 → 0.1s, max wins
-        assert sub.min_interval_seconds() == 0.1
+        sub = OutputSubscription(max_hz=5.0)
+        # period_ms=100 → 0.1s, max_hz=5 → 0.2s, max_hz wins
+        assert sub.min_interval_seconds() == 0.2
 
     def test_subscription_hz_dominates(self):
         from app.engine import OutputSubscription
