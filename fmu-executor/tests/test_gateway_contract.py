@@ -450,7 +450,7 @@ class TestWsErrorContract:
             code = resp["code"]
             # Code should not contain sentences — it should be a short token
             assert " – " not in code, f"code contains long detail: {code!r}"
-            assert " - " not in code or len(code) < 30, f"code too long: {code!r}"
+            assert " - " not in code and len(code) < 30, f"code too long: {code!r}"
 
     def test_fmu_not_found_error(self, client):
         with client.websocket_connect(
@@ -518,9 +518,9 @@ class TestWsPingPongContract:
 # ===================================================================
 
 class TestWsSimOutputsContract:
-    """Gateway proxy passes ``sim.outputs`` messages verbatim to the client.
-    The shape must include: ``type``, ``sessionId``, ``seq``, ``dropped``,
-    ``simTime``, ``values``.
+    """Gateway proxy passes synchronous and subscribed ``sim.outputs`` messages.
+    Subscription events must include: ``type``, ``sessionId``, ``seq``,
+    ``dropped``, ``simTime``, and ``values``.
     """
 
     def test_outputs_shape_from_get_outputs(self, client, _isolate_config):
@@ -570,6 +570,70 @@ class TestWsSimOutputsContract:
                 assert "time" in resp
                 assert "outputs" in resp
                 assert isinstance(resp["outputs"], dict)
+
+    def test_subscription_outputs_shape(self, client, _isolate_config):
+        """Subscription events expose the fields consumed by the Gateway proxy."""
+        _provision_fmu(_isolate_config)
+        md = _make_mock_md()
+        mock_slave = MagicMock()
+        mock_slave.getReal.return_value = [3.14]
+
+        with patch("app.engine.read_model_description", return_value=md), \
+             patch("app.engine.fmpy_extract", return_value=str(_isolate_config)), \
+             patch("fmpy.read_model_description", return_value=md), \
+             patch("app.engine.FMU2Slave", return_value=mock_slave):
+            with client.websocket_connect(
+                "/internal/fmu/sessions",
+                headers={"X-Internal-Session-Token": "station-shared-secret"},
+            ) as ws:
+                ws.send_text(json.dumps({
+                    "type": "session.create",
+                    "requestId": "c1",
+                    "gatewayContext": {
+                        "mode": "station",
+                        "accessKey": "BouncingBall.fmu",
+                        "claims": {},
+                    },
+                }))
+                created = json.loads(ws.receive_text())
+                session_id = created["sessionId"]
+
+                ws.send_text(json.dumps({
+                    "type": "sim.initialize",
+                    "requestId": "i1",
+                    "options": {"startTime": 0, "stopTime": 5, "stepSize": 0.01},
+                }))
+                init_resp = json.loads(ws.receive_text())
+                assert init_resp["type"] == "sim.initialized"
+
+                ws.send_text(json.dumps({
+                    "type": "sim.subscribeOutputs",
+                    "requestId": "s1",
+                    "periodMs": 100,
+                }))
+
+                subscribed = None
+                output = None
+                while subscribed is None:
+                    candidate = json.loads(ws.receive_text())
+                    if candidate["type"] == "sim.subscribed":
+                        subscribed = candidate
+                    else:
+                        assert candidate["type"] == "sim.outputs"
+                        output = candidate
+
+                assert subscribed["requestId"] == "s1"
+                assert subscribed["sessionId"] == session_id
+
+                if output is None:
+                    output = json.loads(ws.receive_text())
+
+                assert output["type"] == "sim.outputs"
+                assert output["sessionId"] == session_id
+                assert isinstance(output["seq"], int)
+                assert isinstance(output["dropped"], int)
+                assert isinstance(output["simTime"], (int, float))
+                assert isinstance(output["values"], dict)
 
 
 # ===================================================================
