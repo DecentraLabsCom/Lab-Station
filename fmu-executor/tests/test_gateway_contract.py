@@ -41,11 +41,13 @@ def _isolate_config(tmp_path: Path):
         import importlib
         from app import config as cfg
         importlib.reload(cfg)
-        yield fmu_root
-    from app.engine import terminate_all
-    terminate_all()
-    from app.fmu_storage import _quarantine_cache
-    _quarantine_cache.clear()
+        try:
+            yield fmu_root
+        finally:
+            from app.engine import terminate_all
+            terminate_all()
+            from app.fmu_storage import _quarantine_cache
+            _quarantine_cache.clear()
 
 
 @pytest.fixture

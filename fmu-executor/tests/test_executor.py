@@ -38,13 +38,15 @@ def _isolate_config(tmp_path: Path):
         import importlib
         from app import config as cfg
         importlib.reload(cfg)
-        yield fmu_root
-    # Cleanup all sessions
-    from app.engine import terminate_all
-    terminate_all()
-    # Clear quarantine cache between tests
-    from app.fmu_storage import _quarantine_cache
-    _quarantine_cache.clear()
+        try:
+            yield fmu_root
+        finally:
+            # Cleanup while the test configuration is still active.
+            from app.engine import terminate_all
+            terminate_all()
+            # Clear quarantine cache between tests
+            from app.fmu_storage import _quarantine_cache
+            _quarantine_cache.clear()
 
 
 @pytest.fixture
@@ -234,26 +236,24 @@ class TestDescribeWithFmu:
 # ---------------------------------------------------------------------------
 
 class TestPathTraversal:
-    def test_traversal_blocked(self, client, auth_headers, _isolate_config):
+    @pytest.mark.parametrize("route", [
+        "/internal/fmu/describe",
+        "/internal/fmu/catalog",
+    ])
+    def test_header_routes_reject_traversal(self, client, auth_headers, route):
         resp = client.get(
-            "/internal/fmu/describe",
+            route,
             headers={**auth_headers, "X-FMU-Access-Key": "../../etc/passwd"},
         )
         assert resp.status_code == 400
 
-    @pytest.mark.parametrize("route", [
-        "/internal/fmu/validate/..%2Foutside.fmu",
-        "/internal/fmu/quarantine/..%2Foutside.fmu",
+    @pytest.mark.parametrize(("method", "route"), [
+        ("POST", "/internal/fmu/validate/..%2Foutside.fmu"),
+        ("POST", "/internal/fmu/quarantine/..%2Foutside.fmu"),
+        ("DELETE", "/internal/fmu/quarantine/..%2Foutside.fmu"),
     ])
-    def test_path_routes_reject_traversal(self, client, auth_headers, route):
-        resp = client.post(route, headers=auth_headers)
-        assert resp.status_code == 400
-
-    def test_unquarantine_route_rejects_traversal(self, client, auth_headers):
-        resp = client.delete(
-            "/internal/fmu/quarantine/..%2Foutside.fmu",
-            headers=auth_headers,
-        )
+    def test_path_routes_reject_traversal(self, client, auth_headers, method, route):
+        resp = client.request(method, route, headers=auth_headers)
         assert resp.status_code == 400
 
     def test_storage_rejects_invalid_access_key(self, _isolate_config):
@@ -681,11 +681,11 @@ def _mock_fmu_patches(fmu_root: Path):
     return _Patches()
 
 
-def _ws_create_session(ws):
+def _ws_create_session(ws, request_id: str = "req-create"):
     """Send session.create and return the response dict."""
     ws.send_text(json.dumps({
         "type": "session.create",
-        "requestId": "req-create",
+        "requestId": request_id,
         "gatewayContext": {
             "mode": "station",
             "accessKey": "Test.fmu",
@@ -694,6 +694,7 @@ def _ws_create_session(ws):
     }))
     resp = json.loads(ws.receive_text())
     assert resp["type"] == "session.created", f"Unexpected: {resp}"
+    assert resp["requestId"] == request_id
     return resp
 
 
@@ -709,7 +710,7 @@ class TestSessionAttach:
                 "/internal/fmu/sessions",
                 headers={"X-Internal-Session-Token": "test-secret"},
             ) as ws:
-                created = _ws_create_session(ws)
+                created = _ws_create_session(ws, request_id="attach-create")
                 session_id = created["sessionId"]
 
                 ws.send_text(json.dumps({
@@ -743,7 +744,7 @@ class TestSessionAttach:
                 "/internal/fmu/sessions",
                 headers={"X-Internal-Session-Token": "test-secret"},
             ) as ws:
-                created = _ws_create_session(ws)
+                created = _ws_create_session(ws, request_id="lifecycle-create")
                 sid = created["sessionId"]
 
                 # Attach
@@ -814,21 +815,23 @@ class TestSubscriptionBackpressure:
         assert result["dropped"] == 0
 
         # Immediately call again — should be rate-limited (returns None)
+        session.subscription.last_emit_monotonic = _time_mod.monotonic()
         result2 = session.sample_subscription()
         assert result2 is None
 
         # And again
+        session.subscription.last_emit_monotonic = _time_mod.monotonic()
         result3 = session.sample_subscription()
         assert result3 is None
 
         # Simulate time passing beyond the interval
         session.subscription.last_emit_monotonic = _time_mod.monotonic() - 0.2
 
-        # Now should emit with dropped count > 0
+        # Now should emit with exactly the two rate-limited calls dropped
         result4 = session.sample_subscription()
         assert result4 is not None
         assert result4["seq"] == 1
-        assert result4["dropped"] >= 2  # at least the 2 rate-limited calls
+        assert result4["dropped"] == 2  # exactly the 2 rate-limited calls
 
     def test_max_batch_size_enforced(self):
         """When pending samples exceed max_batch_size, oldest are dropped."""
