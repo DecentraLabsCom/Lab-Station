@@ -180,6 +180,39 @@ class TestDescribeWithFmu:
         assert body["defaultStopTime"] == 1.0
         assert body["defaultStepSize"] == 0.01
 
+    def test_describe_serializes_fmi3_binary_start_as_base64(self, client, auth_headers, _isolate_config):
+        dummy_fmu = _isolate_config / "BinaryModel.fmu"
+        dummy_fmu.write_bytes(b"PK\x03\x04dummy")
+
+        md = MagicMock()
+        md.modelName = "BinaryModel"
+        md.guid = "{binary-guid}"
+        md.fmiVersion = "3.0"
+        md.coSimulation = MagicMock()
+        md.modelExchange = None
+        md.defaultExperiment = None
+
+        binary = MagicMock()
+        binary.name = "blob"
+        binary.valueReference = 11
+        binary.causality = "input"
+        binary.variability = "discrete"
+        binary.type = "Binary"
+        binary.start = b"\x01\x02"
+        binary.unit = None
+        binary.min = None
+        binary.max = None
+        md.modelVariables = [binary]
+
+        with patch("fmpy.read_model_description", return_value=md):
+            response = client.get(
+                "/internal/fmu/describe",
+                headers={**auth_headers, "X-FMU-Access-Key": "BinaryModel.fmu"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["modelVariables"][0]["start"] == "AQI="
+
     def test_catalog_returns_files_and_describe(self, client, auth_headers, _isolate_config):
         fmu_root = _isolate_config
         dummy_fmu = fmu_root / "TestModel.fmu"

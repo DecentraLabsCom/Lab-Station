@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import shutil
@@ -273,7 +274,10 @@ def describe(access_key: str) -> dict[str, Any]:
         if var.type:
             entry["type"] = var.type
         if var.start is not None:
-            entry["start"] = var.start
+            if var.type == "Binary" and isinstance(var.start, (bytes, bytearray)):
+                entry["start"] = base64.b64encode(bytes(var.start)).decode("ascii")
+            else:
+                entry["start"] = var.start
         if var.unit:
             entry["unit"] = var.unit
         if var.min is not None:
