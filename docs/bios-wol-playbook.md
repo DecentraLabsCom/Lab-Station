@@ -67,7 +67,7 @@ The goal is to guarantee that every Lab Station host can power on via Wake-on-LA
 2. **Windows verification**:
    - `LabStation.exe wol`
    - `LabStation.exe energy audit --json "C:\\LabStation\\data\\energy-<host>.json"`
-   - `LabStation.exe status-json` (verifica `wake.nicPower` y `power.sleep`/`power.hibernate` para asegurar que WoL y los timeouts siguen conformes)
+   - `LabStation.exe status-json` (verify `wake.nicPower` and `power.sleep`/`power.hibernate` to ensure WoL and timeouts remain compliant)
 3. **Remote test**: From Lab Gateway, send a WoL packet, wait for WinRM to respond, then run `prepare-session`.
 4. **Sign-off**: Attach the audit output and WoL test log to the ticket before closing the maintenance task.
 

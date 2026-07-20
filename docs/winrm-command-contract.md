@@ -87,7 +87,7 @@ function Invoke-LabStationCommand {
 }
 
 # Example: prepare session for LABUSER before reservation
-test = Invoke-LabStationCommand -ComputerName "LAB-WS-07" -Credential $cred -Command "prepare-session" -Arguments "--user=LABUSER"
+$test = Invoke-LabStationCommand -ComputerName "LAB-WS-07" -Credential $cred -Command "prepare-session" -Arguments "--user=LABUSER"
 if ($test.ExitCode -ne 0) { throw "Prepare-session failed: $($test.StdErr)" }
 ```
 
@@ -106,7 +106,8 @@ ps = r'''
 $exe = 'C:\LabStation\LabStation.exe'
 $psi = New-Object Diagnostics.ProcessStartInfo
 $psi.FileName = $exe
-$psi.ArgumentList.Add('status-json', 'C:\LabStation\labstation\data\status.json')
+$psi.ArgumentList.Add('status-json')
+$psi.ArgumentList.Add('C:\LabStation\labstation\data\status.json')
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.UseShellExecute = $false
