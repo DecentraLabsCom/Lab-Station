@@ -65,7 +65,14 @@ function Invoke-LabStationCommand {
         param($Exe, $ArgLine)
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $Exe
-        $psi.ArgumentList.AddRange($ArgLine)
+        $psi.Arguments = (($ArgLine | ForEach-Object {
+            $argument = [string]$_
+            if ($argument -match '[\s"]') {
+                '"' + ($argument -replace '"', '\"') + '"'
+            } else {
+                $argument
+            }
+        }) -join ' ')
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.CreateNoWindow = $true
@@ -73,32 +80,14 @@ function Invoke-LabStationCommand {
 
         $process = New-Object System.Diagnostics.Process
         $process.StartInfo = $psi
+
         $null = $process.Start()
-        
-        $stdoutLines = New-Object System.Collections.Generic.List[string]
-        $stderrLines = New-Object System.Collections.Generic.List[string]
-        $process.add_OutputDataReceived({
-            param($sender, $eventArgs)
-            if ($null -ne $eventArgs.Data) { [void]$stdoutLines.Add($eventArgs.Data) }
-        })
-        $process.add_ErrorDataReceived({
-            param($sender, $eventArgs)
-            if ($null -ne $eventArgs.Data) { [void]$stderrLines.Add($eventArgs.Data) }
-        })
-        $null = $process.Start()
-        $null = $process.Start()
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $process.BeginOutputReadLine()
-        $stderr = $process.StandardError.ReadToEnd()
-        $process.BeginErrorReadLine()
-        $process.WaitForExit()
-        $process.WaitForExit()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
 
-        $stdout = ($stdoutLines -join [Environment]::NewLine).Trim()
-        $stderr = ($stderrLines -join [Environment]::NewLine).Trim()
-
-        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+        $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
 
         [pscustomobject]@{
             ExitCode = $process.ExitCode
