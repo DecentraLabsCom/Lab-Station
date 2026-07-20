@@ -80,13 +80,13 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 | `prepare-session [--user=LABUSER] [--guard-grace=90] [--no-guard]` | Runs `session guard` automatically (unless `--no-guard`), captures expulsions, and then wipes LABUSER temps/logs so a remote reservation can start pristine. |
 | `release-session [--user=LABUSER] [--reboot] [--reboot-timeout=15]` | Closes controller processes, logs off LABUSER, and optionally schedules a reboot when a reservation finishes. |
 | `recovery reboot-if-needed [--force] [--timeout=20]` | Evaluates RemoteApp/WoL/autostart + policy drift and only schedules a forced reboot when the host is unhealthy (or when `--force` is passed). |
-| `power shutdown [--delay=0] [--reason=text] [--no-force] [--skip-wake-check]`<br>`power hibernate [...]` | Validates WoL readiness (optionally reapplying NIC settings) and schedules a graceful shutdown or hibernate so Lab Gateway can power off hosts at the end of a reservation without breaking WoL. Véase `labstation/docs/power-control.md` para el checklist de pruebas. |
+| `power shutdown [--delay=0] [--reason=text] [--no-force] [--skip-wake-check]`<br>`power hibernate [...]` | Validates WoL readiness (optionally reapplying NIC settings) and schedules a graceful shutdown or hibernate so Lab Gateway can power off hosts at the end of a reservation without breaking WoL. Detailed verification steps are maintained in private developer notes. |
 | `tray` | Starts the tray UI with shortcuts to logs, wizard, and manual exports. |
 | `energy audit [--json=path]` | Collects power plan, sleep/hibernate timers, NIC wake settings, and WoL readiness; optionally exports JSON for compliance. |
 | `service install|start|stop|status|uninstall` | Manages the Scheduled Task (`LabStationService`) that runs the `service-loop`. |
 | `service-loop` | Internal command invoked by the service to refresh diagnostics every minute. |
 
-> For hybrid (local + remote) classrooms see `labstation/docs/hybrid-operations.md`, which outlines the professor-facing notices and grace windows enforced by `session guard`. Complement it with `labstation/docs/gateway-ui-guidelines.md` to mirror those rules in the Lab Gateway UI. Lab Gateway can toggle `labstation/data/local-mode.flag` to mark "local-use only" windows before launching remote reservations.
+> For hybrid (local + remote) classrooms see `docs/hybrid-operations.md`, which outlines the professor-facing notices and grace windows enforced by `session guard`. UI implementation guidance is maintained in private developer notes. Lab Gateway can toggle `labstation/data/local-mode.flag` to mark "local-use only" windows before launching remote reservations.
 
 #### Background command queue
 
@@ -123,11 +123,11 @@ reboot-timeout=20
 
 This queue gives Lab Gateway two integration choices: fire `LabStation.exe ...` directly over WinRM for synchronous operations, or drop a command file (via SMB/WinRM copy) and let the service pick it up asynchronously. The setup wizard and `winrm configure` command prepare the station-side WinRM listener and print the generated `LabGatewaySvc` credentials. Save those credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials for the host address.
 
-For hardware-specific BIOS guidance and WoL validation steps, see `labstation/docs/bios-wol-playbook.md`.
+For hardware-specific BIOS guidance and WoL validation steps, see `docs/bios-wol-playbook.md`.
 
 #### Telemetry drop for dashboards
 
-The same service loop now emits `labstation/data/telemetry/heartbeat.json` every minute. The payload mirrors `status.json`, adds the `operations` block (timestamps of the latest `prepare-session`, `release-session`, safeguard reboot, and forced logoff), and lives inside a folder that the backend can poll or collect via file share. See `labstation/docs/telemetry-consumption.md` for an end-to-end ingestion blueprint. Key fields now include:
+The same service loop now emits `labstation/data/telemetry/heartbeat.json` every minute. The payload mirrors `status.json`, adds the `operations` block (timestamps of the latest `prepare-session`, `release-session`, safeguard reboot, and forced logoff), and lives inside a folder that the backend can poll or collect via file share. Detailed ingestion guidance is maintained in private developer notes. Key fields now include:
 
 - `localSessionActive`: true when another local/console user is still connected.
 - `localModeEnabled`: reflects the presence of `data/local-mode.flag` so the backend knows the lab is intentionally reserved for in-person use.

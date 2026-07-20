@@ -57,4 +57,5 @@ These rules help hybrid stations keep sessions clean without ruling out occasion
 
 ## 8. Translating to the Gateway UI
 
-Pair these rules with `labstation/docs/gateway-ui-guidelines.md`, which details how to surface warnings, local-use toggles, and `session guard` quick actions directly in the Gateway frontend.
+UI implementation guidance for these rules is maintained in private developer
+notes; the public contract is the station behavior described above.
