@@ -41,7 +41,7 @@ All remote executions call the bundled binary: `C:\LabStation\LabStation.exe <co
 | `prepare-session` | `--user=<LABUSER>` (optional), `--guard-grace=<seconds>` (default 90), `--no-guard` to skip eviction, `--guard-message="text"` | Invokes `session guard` automatically (unless disabled), closes controller processes, purges LABUSER temp/cache folders, resets controller log. Run immediately before a reservation is assigned. | Cleans directories inside the selected profile, emits audit entries if someone is expelled, and logs to `labstation.log`. |
 | `release-session` | Same switches as `prepare-session`. `--reboot` triggers `shutdown /r /t <timeout> /f`. | Closes controller, logs off LABUSER, optionally schedules reboot. Run after reservation completes. | Forces logoff, optional reboot. |
 | `recovery reboot-if-needed` | `--force` bypasses health heuristics, `--timeout=<seconds>` overrides default 20s, `--reason=<text>` tags the order. | Evaluates `status.json` issues (RemoteApp/WoL/autostart/policy drift, lingering sessions) and only triggers a forced reboot when needed; `--force` handles manual overrides. | Writes a safeguard entry to `service-state.ini`, updates `telemetry/heartbeat.json`, and schedules `shutdown /r`. |
-| `power shutdown` / `power hibernate` | `--delay=<seconds>` (default 0), `--reason=<text>`, `--no-force`, `--skip-wake-check`, `--repair-wake=no`, `--require-wake`. | Re-validates Wake-on-LAN compliance (optionally reapplying adapter settings) and schedules a graceful shutdown or hibernate so the host can be powered off between reservations without breaking WoL. | Records `lastPowerAction` inside `service-state.ini`/telemetry and logs result to `labstation.log`. |
+| `power shutdown` / `power hibernate` | `--delay=<seconds>` (default 0), `--reason=<text>`, `--no-force`, `--skip-wake-check`, `--repair-wake=<yes|no>` (default `yes`; `--repair-wake` and `--no-repair-wake` are equivalent aliases), `--require-wake`. | Re-validates Wake-on-LAN compliance (optionally reapplying adapter settings) and schedules a graceful shutdown or hibernate so the host can be powered off between reservations without breaking WoL. | Records `lastPowerAction` inside `service-state.ini`/telemetry and logs result to `labstation.log`. |
 | `status-json` | `status-json [absolute-path]` | Refreshes diagnostics (RemoteApp, WoL, autostart, account/lockdown, sessions) and writes JSON to the provided path; without a path it writes the JSON document to stdout. | JSON file/document including `summary.ready`, `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`, and the `operations` block. |
 | `service start|stop|status|install|uninstall` | subcommand only | Manages the Lab Station background scheduled task when automation needs it (rare). | Task Scheduler entry `LabStation\BackgroundService`. |
 
@@ -117,16 +117,17 @@ ps = r'''
 $exe = 'C:\LabStation\LabStation.exe'
 $psi = New-Object Diagnostics.ProcessStartInfo
 $psi.FileName = $exe
-$psi.ArgumentList.Add('status-json')
-$psi.ArgumentList.Add('C:\LabStation\labstation\data\status.json')
+$psi.Arguments = 'status-json "C:\LabStation\labstation\data\status.json"'
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.UseShellExecute = $false
 $psi.CreateNoWindow = $true
 $proc = [Diagnostics.Process]::Start($psi)
-$stdout = $proc.StandardOutput.ReadToEnd()
-$stderr = $proc.StandardError.ReadToEnd()
+$stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+$stderrTask = $proc.StandardError.ReadToEndAsync()
 $proc.WaitForExit()
+$stdout = $stdoutTask.GetAwaiter().GetResult()
+$stderr = $stderrTask.GetAwaiter().GetResult()
 Get-Content -Raw 'C:\LabStation\labstation\data\status.json'
 exit $proc.ExitCode
 '''
@@ -148,4 +149,6 @@ print(status['summary']['state'])
 ## 7. Open items / future enhancements
 - **HTTPS certificate trust:** `winrm configure` exports the certificate used by the listener. Install that certificate on every Lab Gateway node, or replace it with a certificate issued by the organisation's trusted CA before enabling the host.
 - **Proactive alerts:** notifications on `ready=false` or stale heartbeat remain roadmap items; rely on ops-worker polling + dashboards until built-in alerts land.
-- **Completed**: ops-worker REST API simplifies integration vs raw WinRM (see `ops-worker/README.md`).
+
+## 8. Completed enhancements
+- **ops-worker REST API:** simplifies integration compared with raw WinRM (see `ops-worker/README.md`).
