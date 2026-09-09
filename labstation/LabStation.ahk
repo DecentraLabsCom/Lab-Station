@@ -560,10 +560,8 @@ LS_HandleFmuExecutorCommand(args) {
     }
 }
 
-global LS_SERVICE_LOOP_ACTIVE := true
-
 LS_ServiceLoop() {
-    global LS_SERVICE_LOOP_ACTIVE
+    global LS_SERVICE_LOOP_ACTIVE := true
     LS_LogInfo("Background loop started")
     OnExit(LS_StopServiceLoop)
     statusInterval := 60000

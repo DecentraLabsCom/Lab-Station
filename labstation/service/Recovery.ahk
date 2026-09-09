@@ -56,14 +56,16 @@ class LS_Recovery {
         summary := status["summary"]
         if (summary.Has("state") && summary["state"] != "ready")
             reasons.Push("status-needs-action")
-        if (status.Has("sessions") && status["sessions"]["hasOtherUsers"])
+        profile := status.Has("stationProfile") ? status["stationProfile"] : ""
+        isHybrid := (profile = "hybrid")
+        if (!isHybrid && status.Has("sessions") && status["sessions"]["hasOtherUsers"])
             reasons.Push("other-users-active")
         if (!status["remoteAppEnabled"])
             reasons.Push("remoteapp-disabled")
         if (!status["autoStartConfigured"])
             reasons.Push("autostart-missing")
         policy := status.Has("policy") ? status["policy"] : Map()
-        if (policy.Has("autoLogon") && !policy["autoLogon"]["enabled"])
+        if (!isHybrid && policy.Has("autoLogon") && !policy["autoLogon"]["enabled"])
             reasons.Push("autologon-disabled")
         if (policy.Has("remoteDesktopUsers")) {
             rds := policy["remoteDesktopUsers"]

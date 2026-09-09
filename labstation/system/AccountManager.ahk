@@ -366,15 +366,16 @@ foreach (`$user in `$localUsers) {
 }
 if (`$denySids.Count -eq 0) { [void]`$denySids.Add('*S-1-5-32-546') }
 `$tempCfg = Join-Path `$env:TEMP ('ls-deny-' + [guid]::NewGuid().Guid + '.inf')
-`$cfg = @`"
+`$cfg = @'
 [Unicode]
 Unicode=yes
 [Version]
-signature=`"`$CHICAGO`$`"
+signature="`$CHICAGO`$"
 Revision=1
 [Privilege Rights]
-SeDenyInteractiveLogonRight = {0}
-`"@ -f (`$denySids -join ',')
+SeDenyInteractiveLogonRight = __DENY_SIDS__
+'@
+`$cfg = `$cfg.Replace('__DENY_SIDS__', (`$denySids -join ','))
 `$cfg | Out-File -FilePath `$tempCfg -Encoding Unicode -Force
 `$dbPath = Join-Path `$env:TEMP 'ls-deny.sdb'
 & secedit /configure /db `$dbPath /cfg `$tempCfg /areas USER_RIGHTS /quiet | Out-Null

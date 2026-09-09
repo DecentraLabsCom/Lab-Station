@@ -21,7 +21,7 @@ class LS_WinRM {
         }
         localPassword := password && password != "" ? password : this.GeneratePassword()
         script := this.BuildConfigureScript(user, localPassword)
-        capture := LS_RunPowerShellCapture(script, "Configure WinRM for Lab Gateway")
+        capture := LS_RunPowerShellCapture(script, "Configure WinRM for Lab Gateway", 30000)
         exitCode := capture["exitCode"]
         status := exitCode = 0 ? this.GetStatus() : Map("ready", false)
         if (exitCode = 0 && status.Has("ready") && status["ready"]) {
@@ -50,7 +50,7 @@ try { $listenerText = (& winrm enumerate winrm/config/listener 2>$null) -join [E
 `$httpsListener = `$listenerText -match '(?im)Transport\s*=\s*HTTPS'
 `$httpsPort = `$listenerText -match '(?im)Port\s*=\s*5986'
 `$httpListener = `$listenerText -match '(?im)Transport\s*=\s*HTTP\s*$'
-`$certificateConfigured = `$listenerText -match '(?im)Certificate\s*=\s*\S+'
+`$certificateConfigured = `$listenerText -match '(?im)CertificateThumbprint\s*=\s*\S+'
 `$firewall = `$false
 try {
     $rule = Get-NetFirewallRule -Name 'WINRM-HTTPS-In-TCP*','LabStation-WinRM-HTTPS' -ErrorAction SilentlyContinue |
@@ -77,8 +77,8 @@ try {
 }
 $allowUnencrypted = $false
 $negotiateAuth = $false
-try { $allowUnencrypted = [bool](Get-Item WSMan:\localhost\Service\AllowUnencrypted -ErrorAction SilentlyContinue).Value } catch {}
-try { $negotiateAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\Negotiate -ErrorAction SilentlyContinue).Value } catch {}
+try { $allowUnencrypted = ((Get-Item WSMan:\localhost\Service\AllowUnencrypted -ErrorAction SilentlyContinue).Value -eq 'true') } catch {}
+try { $negotiateAuth = ((Get-Item WSMan:\localhost\Service\Auth\Negotiate -ErrorAction SilentlyContinue).Value -eq 'true') } catch {}
 [pscustomobject]@{
     serviceInstalled = [bool]$svc
     serviceRunning = ($svc.Status -eq 'Running')
@@ -93,7 +93,7 @@ try { $negotiateAuth = [bool](Get-Item WSMan:\localhost\Service\Auth\Negotiate -
     ntlmAuth = [bool]$negotiateAuth
 } | ConvertTo-Json -Compress
         )"
-        capture := LS_RunPowerShellCapture(script, "Query WinRM status")
+        capture := LS_RunPowerShellCapture(script, "Query WinRM status", 25000)
         if (capture["exitCode"] != 0 || Trim(capture["stdout"]) = "") {
             detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
             if (detail != "")
@@ -190,7 +190,12 @@ $certificate = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue
     Sort-Object NotAfter -Descending |
     Select-Object -First 1
 if (-not $certificate) {
-    $certificate = New-SelfSignedCertificate -DnsName ($dnsNames | Select-Object -Unique) -CertStoreLocation 'Cert:\LocalMachine\My' -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(2) -FriendlyName 'DecentraLabs Lab Station WinRM'
+    $sanParts = New-Object System.Collections.Generic.List[string]
+    foreach ($name in ($dnsNames | Select-Object -Unique)) {
+        if ($name -match '^\d+\.\d+\.\d+\.\d+$') { [void]$sanParts.Add('IPAddress=' + $name) } else { [void]$sanParts.Add('DNS=' + $name) }
+    }
+    $sanText = '2.5.29.17={text}' + ($sanParts -join '&')
+    $certificate = New-SelfSignedCertificate -TextExtension @($sanText) -CertStoreLocation 'Cert:\LocalMachine\My' -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(2) -FriendlyName 'DecentraLabs Lab Station WinRM' -Subject "CN=$env:COMPUTERNAME"
 }
 if (-not $certificate -or -not $certificate.Thumbprint) {
     throw 'Unable to create or locate a WinRM HTTPS certificate'

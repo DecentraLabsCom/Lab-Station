@@ -20,7 +20,8 @@ class LS_ServiceManager {
         } else {
             exe := Format('"{1}" "{2}" service-loop', A_AhkPath, LAB_STATION_ROOT "\LabStation.ahk")
         }
-        cmd := Format('schtasks /create /TN "{1}" /TR "{2}" /SC ONSTART /RL HIGHEST /RU SYSTEM /F', this.TaskName, exe)
+        escapedExe := StrReplace(exe, '"', '\"')
+        cmd := Format('schtasks /create /TN "{1}" /TR "{2}" /SC ONSTART /RL HIGHEST /RU SYSTEM /F', this.TaskName, escapedExe)
         result := LS_RunCommand(cmd, "Create Lab Station service task")
         if (result = 0) {
             LS_LogInfo("Lab Station background task installed")

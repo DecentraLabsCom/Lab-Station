@@ -209,7 +209,7 @@ class LS_EnergyAudit {
     static ParseLines(text) {
         items := []
         for line in StrSplit(Trim(text), "`n") {
-            trimmed := Trim(line)
+            trimmed := Trim(line, " `t`r")
             if (trimmed != "")
                 items.Push(trimmed)
         }

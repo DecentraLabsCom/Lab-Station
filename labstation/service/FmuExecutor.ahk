@@ -119,15 +119,16 @@ New-NetFirewallRule -Name 'LabStation-FMU-Executor' -DisplayName 'Lab Station FM
 
     static CheckHealth() {
         url := Format("http://127.0.0.1:{1}/internal/health", LAB_STATION_FMU_EXECUTOR_PORT)
-        script := Format("
+        script := "
         (
-try {{
-    $r = Invoke-RestMethod -Uri '{1}' -TimeoutSec 5 -ErrorAction Stop
-    $r | ConvertTo-Json -Compress
-}} catch {{
+try {
+    `$r = Invoke-RestMethod -Uri '__URL__' -TimeoutSec 5 -ErrorAction Stop
+    `$r | ConvertTo-Json -Compress
+} catch {
     Write-Output 'ERROR'
-}}
-        )", url)
+}
+        )"
+        script := StrReplace(script, "__URL__", url)
         capture := LS_RunPowerShellCapture(script, "FMU executor health check")
         output := Trim(capture["stdout"])
         if (output = "ERROR" || output = "" || capture["exitCode"] != 0) {
@@ -150,7 +151,7 @@ try {{
     static GetHealthSummary() {
         summary := Map()
         summary["available"] := this.IsAvailable()
-        summary["running"] := this.IsRunning()
+        summary["running"] := this.IsRunning() || this.CheckHealth()
         summary["pid"] := this._pid
         summary["port"] := LAB_STATION_FMU_EXECUTOR_PORT
         summary["tokenConfigured"] := this.TokenConfigured()

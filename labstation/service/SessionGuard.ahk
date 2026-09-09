@@ -63,7 +63,7 @@ class LS_SessionGuard {
         entries := []
         for rawLine in StrSplit(capture["stdout"], "`n") {
             line := Trim(StrReplace(rawLine, "`r"))
-            if (line = "" || InStr(line, "USERNAME") = 1)
+            if (line = "")
                 continue
             if (SubStr(line, 1, 1) = ">")
                 line := Trim(SubStr(line, 2))
@@ -71,10 +71,13 @@ class LS_SessionGuard {
             parts := StrSplit(normalized, "|")
             if (parts.Length < 4)
                 continue
+            candidateId := parts.Length >= 3 ? Trim(parts[3]) : ""
+            if (!RegExMatch(candidateId, "^\d+$"))
+                continue
             entry := Map()
             entry["user"] := Trim(parts[1])
             entry["session"] := Trim(parts[2])
-            entry["id"] := parts.Length >= 3 ? Trim(parts[3]) : ""
+            entry["id"] := candidateId
             entry["state"] := parts.Length >= 4 ? Trim(parts[4]) : ""
             entry["idle"] := parts.Length >= 5 ? Trim(parts[5]) : ""
             entries.Push(entry)
@@ -99,8 +102,7 @@ class LS_SessionGuard {
             LS_LogWarning("Session guard: cannot logoff session with empty ID")
             return false
         }
-        flag := force ? "/f" : ""
-        cmd := Format('logoff {1} {2}', sessionId, flag)
+        cmd := Format('logoff {1}', sessionId)
         exitCode := LS_RunCommand(cmd, "Logoff session " . sessionId)
         if (exitCode != 0) {
             LS_LogWarning("Session guard: unable to logoff session " . sessionId . " (exit=" . exitCode . ")")
