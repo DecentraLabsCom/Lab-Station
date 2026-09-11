@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [3.5.1] - 2026-09-11
 
 ### Fixed
 - WinRM HTTPS certificates now encode station IPv4 addresses as `IPAddress`
