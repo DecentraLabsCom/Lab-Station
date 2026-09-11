@@ -268,21 +268,70 @@ try { Set-WinRMConfigBool 'WSMan:\localhost\Service\Auth\Kerberos' $true 'winrm/
 $dnsNames = New-Object System.Collections.Generic.List[string]
 [void]$dnsNames.Add($env:COMPUTERNAME)
 [void]$dnsNames.Add('localhost')
+$ipAddresses = New-Object System.Collections.Generic.List[string]
 try {
     Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
-        ForEach-Object { [void]$dnsNames.Add($_.IPAddress) }
+        ForEach-Object {
+            if (-not $ipAddresses.Contains($_.IPAddress)) {
+                [void]$ipAddresses.Add($_.IPAddress)
+            }
+        }
 } catch {}
+
+$sanParts = @($dnsNames | ForEach-Object { 'DNS=' + $_ })
+$sanParts += @($ipAddresses | ForEach-Object { 'IPAddress=' + $_ })
+$sanExtension = '2.5.29.17={text}' + ($sanParts -join '&')
+
+function Test-WinRMCertificate([object]$Candidate, [string[]]$RequiredIpAddresses) {
+    if (-not $Candidate -or -not $Candidate.HasPrivateKey -or $Candidate.NotAfter -le (Get-Date).AddDays(30)) {
+        return $false
+    }
+    $san = $Candidate.Extensions |
+        Where-Object { $_.Oid.Value -eq '2.5.29.17' } |
+        Select-Object -First 1
+    if (-not $san) {
+        return $false
+    }
+    try {
+        $dnsNames = @($Candidate.DnsNameList | ForEach-Object {
+            if ($_.Unicode) { [string]$_.Unicode } else { [string]$_ }
+        })
+    } catch {
+        return $false
+    }
+    $formattedSan = $san.Format($true)
+    foreach ($ipAddress in $RequiredIpAddresses) {
+        if ($dnsNames -contains $ipAddress) {
+            # The legacy setup encoded IP literals as dNSName values.
+            return $false
+        }
+        if ($formattedSan -notmatch [regex]::Escape($ipAddress)) {
+            return $false
+        }
+    }
+    return $true
+}
+
 $certificate = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue |
     Where-Object {
         $_.HasPrivateKey -and
         $_.NotAfter -gt (Get-Date).AddDays(30) -and
-        $_.Subject -match ('CN=' + [regex]::Escape($env:COMPUTERNAME))
+        $_.Subject -match ('CN=' + [regex]::Escape($env:COMPUTERNAME)) -and
+        (Test-WinRMCertificate $_ @($ipAddresses))
     } |
     Sort-Object NotAfter -Descending |
     Select-Object -First 1
 if (-not $certificate) {
-    $certificate = New-SelfSignedCertificate -DnsName ($dnsNames | Select-Object -Unique) -CertStoreLocation 'Cert:\LocalMachine\My' -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(2) -FriendlyName 'DecentraLabs Lab Station WinRM'
+    $certificate = New-SelfSignedCertificate `
+        -Subject ('CN=' + $env:COMPUTERNAME) `
+        -TextExtension @($sanExtension) `
+        -CertStoreLocation 'Cert:\LocalMachine\My' `
+        -KeyAlgorithm RSA `
+        -KeyLength 2048 `
+        -HashAlgorithm SHA256 `
+        -NotAfter (Get-Date).AddYears(2) `
+        -FriendlyName 'DecentraLabs Lab Station WinRM'
 }
 if (-not $certificate -or -not $certificate.Thumbprint) {
     throw 'Unable to create or locate a WinRM HTTPS certificate'

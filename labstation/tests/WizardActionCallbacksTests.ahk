@@ -71,6 +71,14 @@ CheckNoNativeProbeAbort(A_ScriptDir "\..\system\AccountManager.ahk", &errors)
 CheckNoNativeProbeAbort(A_ScriptDir "\..\system\WinRM.ahk", &errors)
 CheckNoNativeProbeAbort(A_ScriptDir "\..\diagnostics\Status.ahk", &errors)
 
+winrmConfigureScript := LS_WinRM.BuildConfigureScript("LabGatewaySvc", "test-password")
+if InStr(winrmConfigureScript, "New-SelfSignedCertificate -DnsName ($dnsNames | Select-Object -Unique)") {
+    errors.Push("winrm: certificate generation must not encode IP addresses as DNS names")
+}
+if !InStr(winrmConfigureScript, "2.5.29.17={text}") || !InStr(winrmConfigureScript, "IPAddress=") {
+    errors.Push("winrm: certificate generation must include typed IP SAN entries")
+}
+
 guiSource := FileRead(A_ScriptDir "\..\ui\MainGui.ahk", "UTF-8")
 if InStr(guiSource, "Ready: ") || InStr(guiSource, "Needs attention") {
     errors.Push("gui: status panel must use State instead of Ready/Needs attention")

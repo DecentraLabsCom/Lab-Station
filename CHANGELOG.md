@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- WinRM HTTPS certificates now encode station IPv4 addresses as `IPAddress`
+  SAN entries instead of `DNS` names. Existing certificates with the legacy
+  encoding are regenerated during WinRM configuration.
+
 ## [3.5.0] - 2026-09-08
 
 ### Changed
