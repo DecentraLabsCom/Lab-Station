@@ -1,5 +1,33 @@
 # Changelog
 
+## [3.5.0] - 2026-09-08
+
+### Changed
+- Hardened WinRM readiness checks and Wake-on-LAN/NIC diagnostics across
+  Windows 10 and Windows 11, including disconnected and unsupported adapters.
+- Made command-line status output safe when the GUI executable has no usable
+  console handle.
+- Stabilized the AutoHotkey controller smoke test and CI test runner so GUI
+  startup is synchronized with the real application lifecycle and failures
+  propagate through process exit codes.
+
+## [3.4.1] - 2026-09-08
+
+### Fixed
+- Fixed the WinRM status fallback PowerShell syntax so listener checks execute correctly when the structured WSMan query is unavailable.
+
+## [3.4.0] - 2026-09-08
+
+### Fixed
+- WinRM listener readiness now reads the structured WSMan listener properties and recognizes `CertificateThumbprint` on Windows 10 and Windows 11, with a compatible textual fallback.
+
+## [3.3.0] - 2026-09-01
+
+### Fixed
+- WinRM setup now allows slow first-run operations enough time to complete on clean Windows installations and preserves both stdout and stderr in failure diagnostics.
+- Background service task installation now uses the native ScheduledTasks cmdlets with separate executable, arguments, and working directory fields, including paths containing spaces or apostrophes.
+- Security-policy diagnostics no longer pass shell-redirection tokens to `secedit` as native command arguments.
+
 ## [3.2.0] - 2026-08-13
 
 ### Added

@@ -11,11 +11,15 @@ SmokeTestMain()
 return
 
 SmokeTestMain() {
-    global PRODUCTION_MODE
+    global PRODUCTION_MODE, SILENT_ERRORS, STARTUP_TIMEOUT
     PRODUCTION_MODE := false  ; ensure INFO/DEBUG logs are written
+    SILENT_ERRORS := true      ; CI must receive failures through the exit code
 
-    class1 := "SmokeAppClassOne"
-    class2 := "SmokeAppClassTwo"
+    ; AHK v2 Gui() creates windows with the runtime class AutoHotkeyGUI. The
+    ; PID qualifier keeps the two test windows distinct without relying on
+    ; titles or custom classes which Gui() does not provide.
+    class1 := "AutoHotkeyGUI"
+    class2 := "AutoHotkeyGUI"
     tab1 := "Smoke App 1"
     tab2 := "Smoke App 2"
 
@@ -25,8 +29,11 @@ SmokeTestMain() {
         ExitApp 1
     }
 
-    appCommand1 := BuildFakeAppCommand(fakeAppPath, class1, tab1, "0x2B5797", "App 1 placeholder", 20)
-    appCommand2 := BuildFakeAppCommand(fakeAppPath, class2, tab2, "0x6441A5", "App 2 placeholder", 20)
+    ; Keep the fake windows alive longer than the controller's complete
+    ; startup budget, including slow CI/desktop sessions.
+    fakeLifetime := STARTUP_TIMEOUT * 4
+    appCommand1 := BuildFakeAppCommand(fakeAppPath, class1, tab1, "0x2B5797", "App 1 placeholder", fakeLifetime)
+    appCommand2 := BuildFakeAppCommand(fakeAppPath, class2, tab2, "0x6441A5", "App 2 placeholder", fakeLifetime)
 
     ResetSmokeLog()
 
@@ -34,8 +41,11 @@ SmokeTestMain() {
     Log("App1 Command: " . appCommand1, "DEBUG")
     Log("App2 Command: " . appCommand2, "DEBUG")
 
-    SetTimer(SmokeTestComplete, -8000)
     CreateDualAppContainer(class1, appCommand1, class2, appCommand2, tab1, tab2)
+    ; CreateDualAppContainer returns only after both windows and the
+    ; container have been initialized. Verify that lifecycle boundary rather
+    ; than racing it with a fixed-duration timer.
+    SmokeTestComplete()
 }
 
 BuildFakeAppCommand(path, className, title, color, message, lifetimeSec := 0) {

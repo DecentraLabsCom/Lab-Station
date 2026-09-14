@@ -18,7 +18,12 @@ class LS_SessionGuard {
         force := !options.Has("force") || options["force"]
         message := options.Has("message") && options["message"] != "" ? options["message"] : this.BuildDefaultMessage(grace)
 
-        sessions := this.QuerySessions()
+        try {
+            sessions := this.QuerySessions()
+        } catch as e {
+            LS_LogWarning("Session guard: unable to read sessions - " . e.Message)
+            return false
+        }
         targets := []
         for session in sessions {
             if (this.EqualsUser(session["user"], guardUser))
@@ -44,7 +49,7 @@ class LS_SessionGuard {
         }
 
         LS_LogInfo(Format("Session guard: waiting {1} seconds before forced logoff", grace))
-        Sleep grace * 1000
+        this.WaitForGrace(grace)
 
         result := true
         for session in targets {
@@ -54,14 +59,21 @@ class LS_SessionGuard {
         return result
     }
 
+    static WaitForGrace(seconds) {
+        Sleep seconds * 1000
+    }
+
     static QuerySessions() {
         capture := LS_RunCommandCapture("quser", "Enumerate sessions")
         if (capture["exitCode"] != 0) {
-            LS_LogWarning("Session guard: unable to read sessions (exit=" . capture["exitCode"] . ")")
-            return []
+            throw Error("Unable to read sessions (exit=" . capture["exitCode"] . ")")
         }
+        return this.ParseSessionOutput(capture["stdout"])
+    }
+
+    static ParseSessionOutput(output) {
         entries := []
-        for rawLine in StrSplit(capture["stdout"], "`n") {
+        for rawLine in StrSplit(output, "`n") {
             line := Trim(StrReplace(rawLine, "`r"))
             if (line = "")
                 continue

@@ -25,7 +25,9 @@ LS_RunPowerShell(script, description := "PowerShell command") {
     return exitCode
 }
 
-LS_RunPowerShellCapture(script, description := "PowerShell command", timeoutMs := 15000) {
+LS_RunPowerShellCapture(script, description := "PowerShell command", timeoutMs := 0) {
+    if (timeoutMs <= 0)
+        timeoutMs := LAB_STATION_COMMAND_TIMEOUT_MS
     tempScript := A_Temp "\LabStation-" . A_TickCount . "-capture.ps1"
     try FileDelete(tempScript)
     try {
@@ -55,7 +57,9 @@ LS_RunCommand(command, description := "command") {
     return RunWait(command, , "Hide")
 }
 
-LS_RunCommandCapture(command, description := "command", timeoutMs := 15000) {
+LS_RunCommandCapture(command, description := "command", timeoutMs := 0) {
+    if (timeoutMs <= 0)
+        timeoutMs := LAB_STATION_COMMAND_TIMEOUT_MS
     LS_LogInfo("Capturing command output - " . description)
     stdoutPath := A_Temp "\LabStation-" . A_TickCount . "-stdout.txt"
     stderrPath := A_Temp "\LabStation-" . A_TickCount . "-stderr.txt"
@@ -117,6 +121,17 @@ LS_RunCommandCapture(command, description := "command", timeoutMs := 15000) {
         exitCode := 124
     }
     return Map("exitCode", exitCode, "stdout", stdout, "stderr", stderr)
+}
+
+LS_CaptureDetail(capture) {
+    stdout := capture.Has("stdout") ? Trim(capture["stdout"]) : ""
+    stderr := capture.Has("stderr") ? Trim(capture["stderr"]) : ""
+    detail := ""
+    if (stderr != "")
+        detail := "stderr: " . stderr
+    if (stdout != "")
+        detail .= (detail != "" ? "`n" : "") . "stdout: " . stdout
+    return detail
 }
 
 LS_CmdQuote(value) {

@@ -31,18 +31,18 @@ color := opts.Has("color") ? opts["color"] : "0x1E1E1E"
 message := opts.Has("message") ? opts["message"] : "Smoke application placeholder"
 lifetimeSec := opts.Has("lifetime") && opts["lifetime"] != "" ? Integer(opts["lifetime"]) : 0
 
+; Gui() uses AutoHotkey's stable runtime window class. The smoke test combines
+; that class with each process ID when locating the windows.
 windowOptions := "+Resize -MaximizeBox +OwnDialogs"
-if (className != "")
-    windowOptions .= " +Class" . className
 
-gui := Gui(windowOptions)
-gui.BackColor := color
-gui.SetFont("s12", "Segoe UI")
-gui.AddText("xm ym w360 Wrap", message)
-gui.AddButton("xm y+20 w120", "Idle")
-gui.AddButton("x+10 yp w120", "Stop")
+fakeGui := Gui(windowOptions, title)
+fakeGui.BackColor := color
+fakeGui.SetFont("s12", "Segoe UI")
+fakeGui.AddText("xm ym w360 Wrap", message)
+fakeGui.AddButton("xm y+20 w120", "Idle")
+fakeGui.AddButton("x+10 yp w120", "Stop")
 
-gui.Show("w420 h260", title)
+fakeGui.Show("w420 h260")
 
 if (lifetimeSec > 0) {
     SetTimer(() => ExitApp(), -lifetimeSec * 1000)

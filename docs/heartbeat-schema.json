@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/DecentraLabsCom/Lab-Station/main/docs/heartbeat-schema.json",
+  "title": "Lab Station heartbeat document",
+  "description": "Schema for labstation/data/telemetry/heartbeat.json.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "schemaVersion",
+    "host",
+    "version",
+    "remoteAppEnabled",
+    "autoStartConfigured",
+    "wake",
+    "summary",
+    "operations",
+    "status"
+  ],
+  "properties": {
+    "timestamp": {"type": "string", "format": "date-time"},
+    "schemaVersion": {"type": "string", "pattern": "^1\\."},
+    "host": {"type": "string"},
+    "version": {"type": "string"},
+    "remoteAppEnabled": {"type": "boolean"},
+    "autoStartConfigured": {"type": "boolean"},
+    "wake": {"type": "object", "additionalProperties": true},
+    "summary": {
+      "type": "object",
+      "required": ["state", "ready", "issues"],
+      "properties": {
+        "state": {"type": "string"},
+        "ready": {"type": "boolean"},
+        "issues": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "operations": {"type": "object", "additionalProperties": true},
+    "status": {"$ref": "status-schema.json"}
+  },
+  "additionalProperties": true
+}

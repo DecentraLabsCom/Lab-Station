@@ -12,31 +12,75 @@ class LS_ServiceManager {
     static TaskName := "LabStation\BackgroundService"
 
     static Install() {
-        if (!LS_EnsureAdmin()) {
+        if (!this.EnsureAdmin()) {
             return false
         }
         if (A_IsCompiled) {
-            exe := Format('"{1}" service-loop', A_ScriptFullPath)
+            executable := A_ScriptFullPath
+            arguments := "service-loop"
+            workingDirectory := A_ScriptDir
         } else {
-            exe := Format('"{1}" "{2}" service-loop', A_AhkPath, LAB_STATION_ROOT "\LabStation.ahk")
+            executable := A_AhkPath
+            arguments := '"' . LAB_STATION_ROOT "\LabStation.ahk" . '" service-loop'
+            workingDirectory := LAB_STATION_ROOT
         }
-        escapedExe := StrReplace(exe, '"', '\"')
-        cmd := Format('schtasks /create /TN "{1}" /TR "{2}" /SC ONSTART /RL HIGHEST /RU SYSTEM /F', this.TaskName, escapedExe)
-        result := LS_RunCommand(cmd, "Create Lab Station service task")
+        script := this.BuildInstallScript(executable, arguments, workingDirectory)
+        capture := this.RunPowerShellCapture(
+            script,
+            "Create Lab Station service task",
+            LAB_STATION_LONG_COMMAND_TIMEOUT_MS
+        )
+        result := capture["exitCode"]
         if (result = 0) {
             LS_LogInfo("Lab Station background task installed")
             return true
         }
-        LS_LogError("Failed to install background task (exit=" . result . ")")
+        detail := LS_CaptureDetail(capture)
+        if (detail != "")
+            LS_LogError("Failed to install background task (exit=" . result . "): " . detail)
+        else
+            LS_LogError("Failed to install background task (exit=" . result . ")")
         return false
     }
 
+    static BuildInstallScript(executable, arguments, workingDirectory) {
+        escapedExecutable := this.EscapeForPSSingleQuote(executable)
+        escapedArguments := this.EscapeForPSSingleQuote(arguments)
+        escapedWorkingDirectory := this.EscapeForPSSingleQuote(workingDirectory)
+        template := "
+        (
+$ErrorActionPreference = 'Stop'
+$taskPath = '\LabStation\'
+$taskName = 'BackgroundService'
+$execute = '__TASK_EXECUTABLE__'
+$argumentList = '__TASK_ARGUMENTS__'
+$workingDirectory = '__TASK_WORKING_DIRECTORY__'
+
+if (-not (Get-Command -Name 'New-ScheduledTaskAction' -ErrorAction SilentlyContinue)) {
+    throw 'ScheduledTasks PowerShell cmdlets are not available'
+}
+
+$action = New-ScheduledTaskAction -Execute $execute -Argument $argumentList -WorkingDirectory $workingDirectory
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskPath $taskPath -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+Write-Output ('Registered scheduled task: ' + $taskPath + $taskName)
+        )"
+        template := StrReplace(template, "__TASK_EXECUTABLE__", escapedExecutable)
+        template := StrReplace(template, "__TASK_ARGUMENTS__", escapedArguments)
+        return StrReplace(template, "__TASK_WORKING_DIRECTORY__", escapedWorkingDirectory)
+    }
+
+    static EscapeForPSSingleQuote(value) {
+        return StrReplace(value, "'", "''")
+    }
+
     static Uninstall() {
-        if (!LS_EnsureAdmin()) {
+        if (!this.EnsureAdmin()) {
             return false
         }
         cmd := Format('schtasks /delete /TN "{1}" /F', this.TaskName)
-        result := LS_RunCommand(cmd, "Delete Lab Station service task")
+        result := this.RunCommand(cmd, "Delete Lab Station service task")
         if (result = 0) {
             LS_LogInfo("Background task removed")
             return true
@@ -47,19 +91,19 @@ class LS_ServiceManager {
 
     static Start() {
         cmd := Format('schtasks /run /TN "{1}"', this.TaskName)
-        result := LS_RunCommand(cmd, "Start Lab Station task")
+        result := this.RunCommand(cmd, "Start Lab Station task")
         return result = 0
     }
 
     static Stop() {
         cmd := Format('schtasks /end /TN "{1}"', this.TaskName)
-        result := LS_RunCommand(cmd, "Stop Lab Station task")
+        result := this.RunCommand(cmd, "Stop Lab Station task")
         return result = 0
     }
 
     static StatusText() {
         cmd := Format('schtasks /query /TN "{1}" /FO LIST /V', this.TaskName)
-        capture := LS_RunCommandCapture(cmd, "Query Lab Station task")
+        capture := this.RunCommandCapture(cmd, "Query Lab Station task")
         return capture["stdout"] ? capture["stdout"] : capture["stderr"]
     }
 
@@ -85,7 +129,7 @@ try {
     } | ConvertTo-Json -Compress
 }
         )"
-        capture := LS_RunPowerShellCapture(script, "Query Lab Station scheduled task")
+        capture := this.RunPowerShellCapture(script, "Query Lab Station scheduled task")
         if (capture["exitCode"] != 0 || Trim(capture["stdout"]) = "") {
             return Map("installed", false, "state", "Unknown", "running", false, "restartable", false)
         }
@@ -100,5 +144,21 @@ try {
         } catch {
             return Map("installed", false, "state", "Unknown", "running", false, "restartable", false)
         }
+    }
+
+    static EnsureAdmin() {
+        return LS_EnsureAdmin()
+    }
+
+    static RunCommand(command, description) {
+        return LS_RunCommand(command, description)
+    }
+
+    static RunCommandCapture(command, description) {
+        return LS_RunCommandCapture(command, description)
+    }
+
+    static RunPowerShellCapture(script, description, timeoutMs := 0) {
+        return LS_RunPowerShellCapture(script, description, timeoutMs)
     }
 }

@@ -2,6 +2,14 @@
 ; Lab Station - Lightweight command queue for background service
 ; ============================================================================
 #Requires AutoHotkey v2.0
+#Include ..\core\Config.ahk
+#Include ..\core\Logger.ahk
+#Include ..\core\Json.ahk
+#Include SessionManager.ahk
+#Include SessionGuard.ahk
+#Include Recovery.ahk
+#Include ..\diagnostics\Status.ahk
+#Include ..\system\PowerManager.ahk
 
 class LS_CommandQueue {
     static Initialized := false
@@ -40,10 +48,15 @@ class LS_CommandQueue {
             cmd["name"] := "unknown"
         }
         cmd["id"] := this.ResolveCommandId(parsed, path)
-        cmd["options"] := this.ExtractOptions(parsed)
+        cmd["options"] := Map()
         cmd["metadata"] := parsed
         cmd["source"] := path
-        result := parsed.Has("name") && parsed["name"] != "" ? this.Dispatch(cmd) : this.ResultState(false, 2, "Command name missing")
+        try {
+            cmd["options"] := this.ExtractOptions(parsed)
+            result := parsed.Has("name") && parsed["name"] != "" ? this.Dispatch(cmd) : this.ResultState(false, 2, "Command name missing")
+        } catch as e {
+            result := this.ResultState(false, 2, "Command failed: " . e.Message)
+        }
         this.WriteResult(cmd, result)
         this.Archive(path, cmd["id"])
     }
@@ -99,36 +112,30 @@ class LS_CommandQueue {
         }
         timeoutKey := parsed.Has("reboot-timeout") ? "reboot-timeout" : parsed.Has("reboottimeout") ? "reboottimeout" : ""
         if (timeoutKey != "" && parsed[timeoutKey] != "") {
-            value := Integer(parsed[timeoutKey])
-            if (value >= 0)
-                opts["rebootTimeout"] := value
+            opts["rebootTimeout"] := this.ParseNonNegativeInteger(parsed[timeoutKey], timeoutKey)
         }
         if (parsed.Has("path") && parsed["path"] != "")
             opts["path"] := parsed["path"]
         if (parsed.Has("timeout") && parsed["timeout"] != "") {
-            timeout := parsed["timeout"] + 0
-            if (timeout >= 0)
-                opts["timeout"] := timeout
+            opts["timeout"] := this.ParseNonNegativeInteger(parsed["timeout"], "timeout")
         }
         if (parsed.Has("reason") && parsed["reason"] != "")
             opts["reason"] := parsed["reason"]
         if (parsed.Has("delay") && parsed["delay"] != "") {
-            delay := parsed["delay"] + 0
-            if (delay >= 0)
-                opts["delay"] := delay
+            opts["delay"] := this.ParseNonNegativeInteger(parsed["delay"], "delay")
         }
         if (parsed.Has("force"))
-            opts["force"] := this.ParseBool(parsed["force"])
+            opts["force"] := this.ParseBool(parsed["force"], "force")
         if (parsed.Has("skip-wake-check"))
-            opts["skipWakeCheck"] := this.ParseBool(parsed["skip-wake-check"])
+            opts["skipWakeCheck"] := this.ParseBool(parsed["skip-wake-check"], "skip-wake-check")
         if (parsed.Has("repair-wake"))
-            opts["repairWake"] := this.ParseBool(parsed["repair-wake"])
+            opts["repairWake"] := this.ParseBool(parsed["repair-wake"], "repair-wake")
         if (parsed.Has("require-wake"))
-            opts["failOnWakeIssues"] := this.ParseBool(parsed["require-wake"])
+            opts["failOnWakeIssues"] := this.ParseBool(parsed["require-wake"], "require-wake")
         if (parsed.Has("guard"))
-            opts["guard"] := this.ParseBool(parsed["guard"])
+            opts["guard"] := this.ParseBool(parsed["guard"], "guard")
         if (parsed.Has("guard-grace") && parsed["guard-grace"] != "") {
-            grace := parsed["guard-grace"] + 0
+            grace := this.ParseNonNegativeInteger(parsed["guard-grace"], "guard-grace")
             if (grace > 0)
                 opts["guardGrace"] := grace
         }
@@ -138,17 +145,24 @@ class LS_CommandQueue {
             opts["guardMessage"] := parsed["guardmessage"]
         }
         if (parsed.Has("guard-notify"))
-            opts["guardNotify"] := this.ParseBool(parsed["guard-notify"])
+            opts["guardNotify"] := this.ParseBool(parsed["guard-notify"], "guard-notify")
         if (parsed.Has("grace") && parsed["grace"] != "") {
-            grace := parsed["grace"] + 0
+            grace := this.ParseNonNegativeInteger(parsed["grace"], "grace")
             if (grace > 0)
                 opts["grace"] := grace
         }
         if (parsed.Has("message") && parsed["message"] != "")
             opts["message"] := parsed["message"]
         if (parsed.Has("notify"))
-            opts["notify"] := this.ParseBool(parsed["notify"])
+            opts["notify"] := this.ParseBool(parsed["notify"], "notify")
         return opts
+    }
+
+    static ParseNonNegativeInteger(value, optionName) {
+        text := Trim(value)
+        if (!RegExMatch(text, "^[0-9]+$"))
+            throw Error("Invalid " . optionName . ": expected a non-negative integer")
+        return Integer(text)
     }
 
     static ParseCommandFile(path) {
@@ -237,8 +251,12 @@ class LS_CommandQueue {
         return sanitized
     }
 
-    static ParseBool(value) {
+    static ParseBool(value, optionName := "boolean option") {
         lower := StrLower(Trim(value))
-        return (lower = "1" || lower = "true" || lower = "yes" || lower = "on")
+        if (lower = "1" || lower = "true" || lower = "yes" || lower = "on")
+            return true
+        if (lower = "0" || lower = "false" || lower = "no" || lower = "off")
+            return false
+        throw Error("Invalid " . optionName . ": expected yes/no")
     }
 }

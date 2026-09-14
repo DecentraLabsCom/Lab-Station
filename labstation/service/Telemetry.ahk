@@ -12,7 +12,7 @@ class LS_Telemetry {
     static Publish(status := "") {
         data := IsObject(status) ? status : LS_Status.Collect()
         payload := this.BuildPayload(data)
-        this.WriteHeartbeat(payload)
+        return this.WriteHeartbeat(payload)
     }
 
     static BuildPayload(status) {
@@ -34,14 +34,21 @@ class LS_Telemetry {
     static WriteHeartbeat(payload) {
         try {
             LS_WriteJson(LAB_STATION_HEARTBEAT_FILE, payload)
-            if (LAB_STATION_LEGACY_HEARTBEAT_FILE != ""
-                && LAB_STATION_LEGACY_HEARTBEAT_FILE != LAB_STATION_HEARTBEAT_FILE) {
+        } catch as e {
+            LS_LogWarning("Unable to write telemetry heartbeat: " . e.Message)
+            return false
+        }
+        if (LAB_STATION_LEGACY_HEARTBEAT_FILE != ""
+            && LAB_STATION_LEGACY_HEARTBEAT_FILE != LAB_STATION_HEARTBEAT_FILE) {
+            try {
                 ; Preserve visibility for hosts upgraded from the old
                 ; executable-root data layout.
                 LS_WriteJson(LAB_STATION_LEGACY_HEARTBEAT_FILE, payload)
+            } catch as e {
+                LS_LogWarning("Unable to write legacy telemetry heartbeat: " . e.Message)
+                return false
             }
-        } catch as e {
-            LS_LogWarning("Unable to write telemetry heartbeat: " . e.Message)
         }
+        return true
     }
 }

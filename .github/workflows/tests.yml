@@ -35,7 +35,7 @@ jobs:
   smoke-tests:
     runs-on: windows-latest
     env:
-      AHK_VERSION: "2.0.26"
+      AHK_VERSION: "2.0.27"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -85,23 +85,51 @@ jobs:
 
       - name: Run LabStation wizard callback tests
         shell: powershell
-        run: |
-          & $Env:AHK_EXE labstation\tests\WizardActionCallbacksTests.ahk
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\WizardActionCallbacksTests.ahk
 
       - name: Run LabStation integration contract tests
         shell: powershell
-        run: |
-          & $Env:AHK_EXE labstation\tests\IntegrationContractTests.ahk
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\IntegrationContractTests.ahk
+
+      - name: Run LabStation reservation flow tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\ReservationFlowTests.ahk
+
+      - name: Run LabStation command queue tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\CommandQueueTests.ahk
+
+      - name: Run LabStation session guard tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\SessionGuardTests.ahk
+
+      - name: Run LabStation recovery tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\RecoveryTests.ahk
+
+      - name: Run LabStation power manager tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\PowerManagerTests.ahk
+
+      - name: Run LabStation service manager tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\ServiceManagerTests.ahk
+
+      - name: Run LabStation FMU executor tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\FmuExecutorTests.ahk
+
+      - name: Run LabStation telemetry tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\TelemetryTests.ahk
 
       - name: Run DualAppMode smoke test
         shell: powershell
-        run: |
-          & $Env:AHK_EXE controller\tests\SmokeTest_DualAppMode.ahk
+        run: .\scripts\run-ahk-test.ps1 controller\tests\SmokeTest_DualAppMode.ahk
 
       - name: Run argument parsing matrix
         shell: powershell
-        run: |
-          & $Env:AHK_EXE controller\tests\ArgumentParsingTests.ahk
+        run: .\scripts\run-ahk-test.ps1 controller\tests\ArgumentParsingTests.ahk
 
       - name: Upload smoke test log
         if: always()

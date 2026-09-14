@@ -46,17 +46,22 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 ### 🚀 Lab Station highlights
 
 - **Guided setup wizard**: Applies RemoteApp policy (`fAllowUnlistedRemotePrograms`), Wake-on-LAN tweaks, WinRM for Lab Gateway operations, autostart entries, and verifies admin privileges.
-- **One-off commands**: Run `remoteapp`, `wol`, `winrm`, `autostart`, `launch-app-control`, or `diagnostics` individually from the CLI without stepping through the wizard.
-- **Diagnostics export**: `status`/`status-json` produce both a human summary and a JSON blob (`labstation/data/status.json`) with RemoteApp/WoL/autostart health, NIC power compliance (`wake.nicPower`), power-plan timeouts (`power.sleep`/`power.hibernate`), plus hybrid fields (`localSessionActive`, `localModeEnabled`, `lastForcedLogoff`).
+- **One-off commands**: Run `remoteapp`, `wol`, `winrm`, `autostart`, `launch-app-control`, `diagnostics`, or `fmu-executor` individually from the CLI without stepping through the wizard.
+- **Diagnostics export**: `status` shows a human-readable summary. `status-json` writes JSON to stdout unless a destination path is supplied; `diagnostics` writes the report to `labstation/data/status.json` by default. The payload includes RemoteApp/WoL/autostart health, NIC power compliance (`wake.nicPower`), power-plan timeouts (`power.sleep`/`power.hibernate`), and hybrid fields (`localSessionActive`, `localModeEnabled`, `lastForcedLogoff`). The [versioned status schema](docs/status-json-schema.md) documents the machine-readable shape; the canonical validator definition remains in [`status-schema.json`](docs/status-schema.json).
 - **Tray UI**: Optional background tray icon showing live status, shortcuts to logs, wizard, and manual export.
-- **Background service**: `service install|start|stop|status` provisions a Windows Scheduled Task that keeps diagnostics fresh even when nobody is logged on.
+- **Background service**: `service install|start|stop|status|uninstall` provisions a Windows Scheduled Task that keeps diagnostics fresh even when nobody is logged on.
 - **Continuous telemetry**: The service now publishes a heartbeat at `labstation/data/telemetry/heartbeat.json` containing RemoteApp/WoL/autostart checks plus the timestamp of the latest cleanups so Lab Gateway can poll without a live WinRM hop. Compiled releases also mirror the legacy executable-root heartbeat during migration.
 - **Controlled power-down**: `power shutdown|hibernate` re-checks NIC/WoL readiness (and can reapply settings) before scheduling the OS power action, recording the order in `service-state.ini` and telemetry for auditing.
 - **Logging & data dir**: All operations log to `labstation/labstation.log` and persist data to `labstation/data/`.
 
+> **Security:** The `account` command accepts a password for local setup, but
+> command-line arguments can be visible in process listings and shell history.
+> Prefer the interactive wizard or a protected secret store, and never commit
+> passwords or FMU/WinRM tokens to source control or public URLs.
+
 ### 🖼️ UI tour
 
-The screenshots below show the current v3.2.0 desktop UI. Status values are
+The screenshots below show the current v3.5.0 desktop UI. Status values are
 read from the local workstation, so host names, connector state, and warnings
 will vary between installations.
 
@@ -102,24 +107,27 @@ profile keeps the station usable by local users as well.
 | --- | --- |
 | `setup` | Guided wizard that chains RemoteApp policy, Wake-on-LAN tweaks, WinRM setup, autostart registration, diagnostics export, and service prompt. |
 | `remoteapp` | Sets `fAllowUnlistedRemotePrograms` and related HKLM keys for RemoteApp. |
-| `wol` | Configures adapters and power plan settings required for Wake-on-LAN. |
-| `winrm [configure|status]` | Enables WinRM HTTPS on port 5986, exports the server certificate, opens the scoped HTTPS firewall rule, creates/updates `.\LabGatewaySvc`, and reports readiness. Trust the exported certificate on Lab Gateway and save the generated credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials. |
+| `wol` | Configures adapters and power plan settings required for Wake-on-LAN. Follow the [Windows 10/11 desktop NIC checklist](docs/bios-wol-playbook.md). |
+| `winrm [configure\|status]` | Enables WinRM HTTPS on port 5986, exports the server certificate, opens the scoped HTTPS firewall rule, creates/updates `.\LabGatewaySvc`, and reports readiness. Trust the exported certificate on Lab Gateway and save the generated credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials. |
 | `autostart [path]` | Registers AppControl (EXE or AHK) under HKLM\Run; optional custom path overrides bundle location. |
 | `launch-app-control [...]` | Pass-through launcher that proxies CLI args to the bundled controller. |
-| `account [create|autologon|lockdown|setup] [user] [password]` | Creates the lab account, refreshes autologon (DefaultUserName/Password), and `lockdown` now enforces `SeDenyInteractiveLogonRight` for every other local user. |
-| `status` / `status-json [dest]` | Generates the latest health summary; JSON defaults to `labstation/data/status.json`. |
-| `diagnostics [dest]` | Convenience alias of `status-json` for explicit exports. |
+| `account [create\|autologon\|lockdown\|setup] [user] [password]` | Creates the lab account, refreshes autologon (DefaultUserName/Password), and `lockdown` now enforces `SeDenyInteractiveLogonRight` for every other local user. |
+| `status` | Shows the latest health summary in a message box (or stdout in a headless session); it does not emit JSON. |
+| `status-json [path]` | Collects diagnostics and writes JSON to stdout when no path is supplied, or to the supplied path. |
+| `diagnostics [path]` | Exports diagnostics to the supplied path, or to `labstation/data/status.json` by default. |
 | `session guard [--grace=120] [--user=LABUSER]` | Warns local/console sessions, waits the grace period, forces logoff, and appends an audit entry to `data/telemetry/session-guard-events.jsonl`. |
 | `prepare-session [--user=LABUSER] [--guard-grace=90] [--no-guard]` | Runs `session guard` automatically (unless `--no-guard`), captures expulsions, and then wipes LABUSER temps/logs so a remote reservation can start pristine. |
 | `release-session [--user=LABUSER] [--reboot] [--reboot-timeout=15]` | Closes controller processes, logs off LABUSER, and optionally schedules a reboot when a reservation finishes. |
 | `recovery reboot-if-needed [--force] [--timeout=20]` | Evaluates RemoteApp/WoL/autostart + policy drift and only schedules a forced reboot when the host is unhealthy (or when `--force` is passed). |
-| `power shutdown [--delay=0] [--reason=text] [--no-force] [--skip-wake-check]`<br>`power hibernate [...]` | Validates WoL readiness (optionally reapplying NIC settings) and schedules a graceful shutdown or hibernate so Lab Gateway can power off hosts at the end of a reservation without breaking WoL. Detailed verification steps are maintained in private developer notes. |
+| `power shutdown [--delay=0] [--reason=text] [--no-force] [--skip-wake-check] [--repair-wake=<yes\|no>] [--require-wake]`<br>`power hibernate [...]` | Validates WoL readiness (optionally reapplying NIC settings) and schedules a graceful shutdown or hibernate so Lab Gateway can power off hosts at the end of a reservation without breaking WoL. See the [BIOS and WoL playbook](docs/bios-wol-playbook.md) for verification. |
 | `tray` | Starts the tray UI with shortcuts to logs, wizard, and manual exports. |
-| `energy audit [--json=path]` | Collects power plan, sleep/hibernate timers, NIC wake settings, and WoL readiness; optionally exports JSON for compliance. |
-| `service install|start|stop|status|uninstall` | Manages the Scheduled Task (`LabStationService`) that runs the `service-loop`. |
+| `energy audit [--json=path]` | Collects power plan, sleep/hibernate timers, NIC wake settings, and WoL readiness; optionally exports JSON for compliance. The [BIOS and WoL playbook](docs/bios-wol-playbook.md) explains the expected Windows 10/11 adapter values. |
+| `fmu-executor [start\|stop\|restart\|status]` | Supervises the Python FMU sidecar and reports its health. |
+| `gui` | Launches the Lab Station desktop control panel. |
+| `service install\|start\|stop\|status\|uninstall` | Manages the Scheduled Task (`LabStation\BackgroundService`) that runs the `service-loop`. |
 | `service-loop` | Internal command invoked by the service to refresh diagnostics every minute. |
 
-> For hybrid (local + remote) classrooms see `docs/hybrid-operations.md`, which outlines the professor-facing notices and grace windows enforced by `session guard`. UI implementation guidance is maintained in private developer notes. Lab Gateway can toggle `labstation/data/local-mode.flag` to mark "local-use only" windows before launching remote reservations.
+> For hybrid (local + remote) classrooms see `docs/hybrid-operations.md`, which distinguishes the hybrid profile (no LABUSER autologon) from the dedicated-server profile and explains the grace windows enforced by `session guard`. Lab Gateway can toggle `labstation/data/local-mode.flag` to signal "local-use only" windows; the Gateway is responsible for blocking or confirming remote reservations.
 
 #### Background command queue
 
@@ -134,7 +142,7 @@ reboot=true
 reboot-timeout=20
 ```
 
-- Supported `name` values today: `prepare-session`, `release-session`, `session-guard`, `status-json`, `reboot-if-needed`.
+- Supported `name` values today: `prepare-session`, `release-session`, `session-guard`, `status-json`, `reboot-if-needed`, `power-shutdown`, `power-hibernate`.
 - Optional keys: `user`, `reboot`, `reboot-timeout`, `path` (for `status-json`), guard-related switches (`guard=yes|no`, `guard-grace`, `guard-message`, `guard-notify`), plus `reason`, `force`, or `timeout` when scheduling `reboot-if-needed`.
 - Power commands: enqueue `name=power-shutdown` or `name=power-hibernate` with optional `delay`, `reason`, `force=yes|no`, `skip-wake-check=yes|no`, `repair-wake=yes|no`.
 - Results are written to `labstation/data/commands/results/<id>.json` together with the captured options and timestamps. Exit codes mirror the CLI: `0` success, `1` completed with warnings (prepare/release/guard reported something non-fatal), `2` hard failure (missing command, exceptions, or non-compliant power checks).
@@ -160,7 +168,7 @@ For hardware-specific BIOS guidance and WoL validation steps, see `docs/bios-wol
 
 #### Telemetry drop for dashboards
 
-The same service loop now emits `labstation/data/telemetry/heartbeat.json` every minute. The payload mirrors `status.json`, adds the `operations` block (timestamps of the latest `prepare-session`, `release-session`, safeguard reboot, and forced logoff), and lives inside a folder that the backend can poll or collect via file share. Detailed ingestion guidance is maintained in private developer notes. Key fields now include:
+The same service loop now emits `labstation/data/telemetry/heartbeat.json` every minute. The payload mirrors `status.json`, adds the `operations` block (timestamps of the latest `prepare-session`, `release-session`, safeguard reboot, and forced logoff), and lives inside a folder that the backend can poll or collect via file share. The [heartbeat schema](docs/heartbeat-schema.json) and [WinRM command contract](docs/winrm-command-contract.md) define the public ingestion surface. In a heartbeat, the status-specific fields below are under the top-level `status` object; `summary`, `wake`, and `operations` are also available at the top level.
 
 - `localSessionActive`: true when another local/console user is still connected.
 - `localModeEnabled`: reflects the presence of `data/local-mode.flag` so the backend knows the lab is intentionally reserved for in-person use.
@@ -172,6 +180,9 @@ The same service loop now emits `labstation/data/telemetry/heartbeat.json` every
 
 This means Lab Gateway can build dashboards or alerting off a simple file drop without invoking WinRM.
 
+For the reproducible build, test matrix, release contents, and sidecar
+deployment prerequisites, see [Development, build and verification](docs/development.md).
+
 ##### Session guard audit log
 
 Every forced logoff appends a JSON line to `labstation/data/telemetry/session-guard-events.jsonl` with the expelled user, session id, grace window, and timestamp. Ship or tail this file from the backend to maintain an audit trail of who was removed before each remote reservation.
@@ -181,6 +192,7 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
 ### 📥 Release downloads
 
 - **`LabStation.exe`** – compiled Lab Station CLI/tray/wizard. Drop it in any folder together with `AppControl.exe` and run it directly (no AutoHotkey runtime required).
+- **`LabStationPanel.exe`** – compiled desktop control-panel launcher.
 - **`AppControl.exe`** – standalone controller binary for setups that only need the RDP-aware launcher (also used by Lab Station under the hood).
 - **`WindowSpy.exe`** – helper from the AutoHotkey project, included for convenience to discover window classes, controls, and coordinates.
 
@@ -191,7 +203,7 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
 #### **Option 1: Download the executables**
 
 1. Create a folder (e.g., `C:\LabStation`).
-2. Download `LabStation.exe`, `AppControl.exe` **and** `WindowSpy.exe` from the latest release and place both files inside that folder.
+2. Download `LabStation.exe`, `LabStationPanel.exe`, `AppControl.exe` **and** `WindowSpy.exe` from the latest release and place all four files inside that folder.
 3. Run Lab Station directly:
 
   ```powershell
@@ -202,6 +214,29 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
   ```
 
 4. Lab Station will call the `AppControl.exe` that lives in the same folder whenever it needs to launch/configure the controller.
+
+#### **FMU Executor sidecar**
+
+The Python FMU Executor is a separate internal service; it is not embedded in
+the Windows executables or published as a release asset. Copy the repository's
+`fmu-executor/` directory to the station, install Python 3.12 and its
+requirements, and make that Python installation available on the machine PATH
+used by the `LabStation\BackgroundService` task:
+
+```powershell
+cd C:\LabStation\fmu-executor
+python -m pip install -r requirements.txt
+[Environment]::SetEnvironmentVariable('FMU_INTERNAL_TOKEN', '<random-shared-secret>', 'Machine')
+[Environment]::SetEnvironmentVariable('FMU_EXECUTOR_PORT', '8091', 'Machine')
+Stop-ScheduledTask -TaskName 'BackgroundService' -TaskPath '\LabStation\'
+Start-ScheduledTask -TaskName 'BackgroundService' -TaskPath '\LabStation\'
+```
+
+The supervisor reads `FMU_EXECUTOR_PORT` and applies the same port to its
+health checks and private-network firewall rule. Configure the identical port
+and shared token in Lab Gateway; never place either secret in source control,
+command history, or public URLs. See the [FMU Executor documentation](fmu-executor/README.md)
+for the API and provisioning contract.
 
 #### **Option 2: Run the scripts (AutoHotkey required)**
 
@@ -338,8 +373,8 @@ The script includes several configuration constants that can be modified in `con
 #### **Core Settings**
 
 * **`POLL_INTERVAL_MS`**: Fallback monitoring interval in milliseconds (default: **5000** = 5 seconds)
-* **`STARTUP_TIMEOUT`**: How long to wait for app window to appear (default: **6** seconds)
-* **`ACTIVATION_RETRIES`**: Number of retries for window activation when Groupy temporarily hides window (default: **5**)
+* **`STARTUP_TIMEOUT`**: How long to wait for app window to appear (default: **20** seconds)
+* **`ACTIVATION_RETRIES`**: Number of retries for window activation when Groupy temporarily hides window (default: **3**)
 * **`CloseOnEventIds`**: RDP event IDs that trigger app closure (default: `[23, 24, 39, 40]`)
   * `23`: Logoff, `24`: Disconnect, `39`: Session disconnect, `40`: Reconnect
 
@@ -353,8 +388,8 @@ The script includes several configuration constants that can be modified in `con
 
 #### **Debugging & Testing**
 
-* **`VERBOSE_LOGGING`**: Enable detailed polling logs (default: `true` for debugging, `false` for production)
-* **`SILENT_ERRORS`**: Suppress error MsgBox popups - log only (default: `false`)
+* **`VERBOSE_LOGGING`**: Enable detailed polling logs (default: `false`)
+* **`SILENT_ERRORS`**: Suppress error MsgBox popups - log only (default: `true`)
 * **`TEST_MODE`**: Activated via command-line parameter `@test` - test custom close after 5 seconds
 
 #### **Custom Close Methods**
@@ -497,15 +532,19 @@ Chrome_WidgetWin_1 "C:\Program Files\Google\Chrome\Application\chrome.exe" --app
 
 ### 📦 Architecture
 
-Lab Station is now the primary artifact and the legacy controller lives inside `controller/`:
+Lab Station is the primary artifact and AppControl remains available as a
+standalone controller:
 
 ```
 Lab Station/
 ├── labstation/                     # Lab Station CLI, services, diagnostics
 ├── controller/
-│   ├── AppControl.ahk          # Controller entry point
+│   ├── AppControl.ahk              # Controller entry point
 │   ├── lib/                        # Controller modules
 │   └── tests/                      # Controller-only smoke/regression tests
+├── fmu-executor/                   # Python FMU sidecar and API tests
+├── docs/                           # Operations, contracts, schemas, and build docs
+├── build.ps1                       # Windows executable build script
 └── remote-app/                     # Windows RemoteApp hardening notes
 ```
 

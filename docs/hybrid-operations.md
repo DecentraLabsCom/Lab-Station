@@ -4,35 +4,35 @@ This document summarizes what to expect when a station can be used both locally 
 
 ## 1. Key principles
 
-- Remote reservations always take precedence: before exposing the station through RemoteApp, Lab Station automatically runs `session guard` to evict local sessions.
-- The instructor receives a `msg` warning on screen that explains the reason and includes a configurable countdown (default 90 seconds) before the session is signed out.
+- Remote reservations require a clean remote session: `prepare-session` automatically runs `session guard` unless `--no-guard` is supplied.
+- The instructor receives a `msg` warning on screen that explains the reason and includes a configurable countdown (90 seconds by default for `prepare-session`; 120 seconds for standalone `session guard`) before the session is signed out.
 - If the instructor ignores the warning, the system forces the logoff to ensure the remote session starts with a clean state.
-- All forced logoffs are recorded under `labstation/logs` and reflected in `status.json` (`sessions.otherUsers`).
+- All forced logoffs are recorded in `labstation/labstation.log` and `data/telemetry/session-guard-events.jsonl`, and the latest event is reflected in `status.json`.
 
 ## 2. Recommended flow
 
 1. **Instructor in local mode**
-   - They can sign in with their usual account.
+   - They can sign in with their usual account; the hybrid profile does not configure LABUSER autologon.
    - If a remote reservation warning appears, they must save their work and sign out manually before the countdown expires.
 2. **Backend prepares the remote reservation**
    - Lab Gateway runs `prepare-session` (via WinRM or queue). This command now invokes `session guard` automatically.
    - After eviction, LABUSER’s temp files, caches, and logs are cleaned.
 3. **Remote reservation in progress**
-   - Only LABUSER remains signed in (autologon). The instructor should not sign in while remote reservations are active.
+   - Lab Gateway connects using LABUSER, which is a Remote Desktop Users account but is not automatically logged on by the hybrid profile. The instructor should not sign in while remote reservations are active.
 4. **Reservation end**
    - `release-session --reboot` closes controller processes, signs out LABUSER, and optionally reboots.
 
 ## 3. Grace parameters and messages
 
-- `--guard-grace=<seconds>`: time to wait before forcing logoff (90 default).
+- `--guard-grace=<seconds>`: time to wait before forcing logoff when passed to `prepare-session` (90 default; values below 30 are clamped to 30).
 - `--guard-message="text"`: custom text shown to the instructor.
-- `--guard-silent`: skips the warning and forces an immediate logoff (use only in emergencies).
+- `--guard-silent` / `--guard-notify=no`: suppresses the warning; it does not skip the grace period. Use `--guard-grace=30` for the shortest supported wait.
 
 These parameters can be passed to `prepare-session` via CLI or queue (e.g., `guard-grace=60`, `guard-message=Remote reservation confirmed`).
 
 ## 4. "Local mode" signaling
 
-- The backend can create `labstation/data/local-mode.flag` when an instructor declares exclusive in-person use. While this file exists, remote reservations should be blocked or require manual confirmation.
+- The backend can create `labstation/data/local-mode.flag` when an instructor declares exclusive in-person use. Lab Station exposes the flag; Lab Gateway must enforce the policy by blocking or requiring manual confirmation for remote reservations.
 - `status.json`/`telemetry/heartbeat.json` expose `localModeEnabled` so dashboards can reflect the state.
 
 The same state is visible in the Lab Station desktop panel. The **Local mode
@@ -67,5 +67,7 @@ These rules help hybrid stations keep sessions clean without ruling out occasion
 
 ## 8. Translating to the Gateway UI
 
-UI implementation guidance for these rules is maintained in private developer
-notes; the public contract is the station behavior described above.
+The Gateway UI should use the public `localModeEnabled`, `localSessionActive`,
+`summary.ready`, and `lastForcedLogoff` fields from the status/heartbeat
+contracts. The local-mode flag is a policy signal; Lab Station does not itself
+reject a reservation based on that flag.

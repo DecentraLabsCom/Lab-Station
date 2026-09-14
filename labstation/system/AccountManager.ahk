@@ -101,14 +101,18 @@ exit 0
         )"
         script := StrReplace(script, "__LABUSER__", escapedUser)
         script := StrReplace(script, "__LABUSER_PASSWORD__", escapedPassword)
-        capture := LS_RunPowerShellCapture(script, "Configure lab service account", 60000)
+        capture := LS_RunPowerShellCapture(
+            script,
+            "Configure lab service account",
+            LAB_STATION_LONG_COMMAND_TIMEOUT_MS
+        )
         exitCode := capture["exitCode"]
         if (exitCode = 0 && InStr(capture["stdout"], "LABSTATION_ACCOUNT_READY") > 0 && this.AccountExists(user)) {
             password := localPassword
             LS_LogInfo(Format("Account {1} created/updated", user))
             return true
         }
-        detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
+        detail := LS_CaptureDetail(capture)
         if (detail != "")
             LS_LogError(Format("Unable to create/configure account {1} (exit={2}): {3}", user, exitCode, detail))
         else

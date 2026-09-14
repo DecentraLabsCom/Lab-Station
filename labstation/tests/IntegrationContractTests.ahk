@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2.0
+#Include TestSupport.ahk
 #Include ..\core\Json.ahk
 #Include ..\core\Config.ahk
 #Include ..\system\WinRM.ahk
@@ -46,6 +47,14 @@ try {
     AssertContains("winrm", configureScript, "5986", &errors)
     AssertContains("winrm", configureScript, "AllowUnencrypted", &errors)
     AssertContains("winrm", configureScript, "Certificate", &errors)
+    AssertContains("winrm", winrmSource, "Get-WSManInstance -ResourceURI 'winrm/config/listener'", &errors)
+    AssertContains("winrm", winrmSource, "CertificateThumbprint", &errors)
+    ; The source contains literal AHK escape markers before PowerShell '$'.
+    AssertContains("winrm", winrmSource, "listenerBlocks", &errors)
+    AssertContains("winrm", winrmSource, "isEnabledBlock", &errors)
+    AssertContains("winrm", winrmSource, "function ConvertTo-BooleanValue", &errors)
+    AssertContains("winrm", winrmSource, "if (" . Chr(36) . "text -match '^(?i:true", &errors)
+    AssertNotContains("winrm", winrmSource, "[bool](Get-Item WSMan:\\localhost\\Service\\AllowUnencrypted", &errors)
     AssertContains("winrm", configureScript, "LabStation-WinRM-HTTPS", &errors)
     AssertNotContains("winrm", configureScript, "localport=5985", &errors)
 } catch as e {
@@ -54,7 +63,16 @@ try {
 
 try {
     statusSource := FileRead(A_ScriptDir . "\..\diagnostics\Status.ahk", "UTF-8")
+    energySource := FileRead(A_ScriptDir . "\..\system\EnergyAudit.ahk", "UTF-8")
+    wakeSource := FileRead(A_ScriptDir . "\..\system\WakeOnLan.ahk", "UTF-8")
     AssertContains("status", statusSource, 'summary["ready"]', &errors)
+    AssertNotContains("status", statusSource, ">nul 2>&1", &errors)
+    AssertContains("energy", energySource, "TrimStart([char]'*')", &errors)
+    AssertContains("energy", energySource, "advancedWakeOnMagicPacketRegistryValue", &errors)
+    AssertContains("wake", wakeSource, "-RegistryKeyword", &errors)
+    AssertContains("wake", wakeSource, "wake_armed", &errors)
+    AssertContains("wake", wakeSource, "Get-WakeAdvancedState", &errors)
+    AssertContains("wake", wakeSource, "LS_RunPowerShellCapture", &errors)
 } catch as e {
     errors.Push("status: contract threw - " . e.Message)
 }
@@ -62,6 +80,8 @@ try {
 try {
     entrypoint := FileRead(A_ScriptDir . "\..\LabStation.ahk", "UTF-8")
     AssertContains("cli", entrypoint, "LS_ShowMessage", &errors)
+    AssertContains("cli", entrypoint, "LS_WriteStdout", &errors)
+    AssertContains("cli", entrypoint, "status-json could not write to stdout", &errors)
     AssertContains("cli", entrypoint, "ExitApp(commandExitCode)", &errors)
 } catch as e {
     errors.Push("cli: contract threw - " . e.Message)
@@ -77,9 +97,9 @@ try {
 
 if (errors.Length > 0) {
     for _, message in errors
-        FileAppend(message . "`n", "*")
+        LS_TestOutput(message . "`n")
     ExitApp(1)
 }
 
-FileAppend("IntegrationContractTests passed`n", "*")
+LS_TestOutput("IntegrationContractTests passed`n")
 ExitApp(0)

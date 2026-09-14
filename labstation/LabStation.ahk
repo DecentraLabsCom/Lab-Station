@@ -5,9 +5,9 @@
 #SingleInstance Force
 
 ;@Ahk2Exe-SetName LabStation
-;@Ahk2Exe-SetVersion 3.2.0
-;@Ahk2Exe-SetFileVersion 3.2.0
-;@Ahk2Exe-SetProductVersion 3.2.0
+;@Ahk2Exe-SetVersion 3.5.0
+;@Ahk2Exe-SetFileVersion 3.5.0
+;@Ahk2Exe-SetProductVersion 3.5.0
 
 #Include core\Config.ahk
 #Include core\Logger.ahk
@@ -161,7 +161,9 @@ LS_HandleWinRMCommand(args) {
             text .= "HTTPS listener: " . (status.Has("httpsListener") && status["httpsListener"] ? "yes" : "no") . "`n"
             text .= "HTTPS port: " . (status.Has("httpsPort") && status["httpsPort"] ? "yes" : "no") . "`n"
             text .= "Certificate: " . (status.Has("certificateConfigured") && status["certificateConfigured"] ? "yes" : "no") . "`n"
-            text .= "Firewall enabled: " . (status.Has("firewallEnabled") && status["firewallEnabled"] ? "yes" : "no")
+            text .= "Firewall enabled: " . (status.Has("firewallEnabled") && status["firewallEnabled"] ? "yes" : "no") . "`n"
+            text .= "Allow unencrypted: " . (status.Has("allowUnencrypted") && status["allowUnencrypted"] ? "yes" : "no") . "`n"
+            text .= "Negotiate auth: " . (status.Has("negotiateAuth") && status["negotiateAuth"] ? "yes" : "no")
             LS_ShowMessage(text, "Lab Station - WinRM")
             return (status.Has("ready") && status["ready"]) ? 0 : 1
         default:
@@ -209,8 +211,10 @@ LS_RunStatusJsonCommand(args) {
     target := args.Length >= 1 ? args[1] : ""
     if (target = "") {
         status := LS_Status.Collect()
-        FileAppend(LS_ToJson(status), "*", "UTF-8")
-        return 0
+        if (LS_WriteStdout(LS_ToJson(status)))
+            return 0
+        LS_LogError("status-json could not write to stdout")
+        return 1
     }
     return LS_Status.ExportJson(target) ? 0 : 1
 }

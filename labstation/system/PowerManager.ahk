@@ -40,7 +40,7 @@ class LS_PowerManager {
         readiness := options["skipWakeCheck"] ? this.ReadinessSkipped() : this.ValidateWakeReadiness()
         if (!readiness["ok"] && options["repairWake"]) {
             LS_LogWarning("Wake readiness issues detected before power action. Reapplying WoL configuration...")
-            LS_WakeOnLan.Configure()
+            this.ConfigureWake()
             readiness := options["skipWakeCheck"] ? this.ReadinessSkipped() : this.ValidateWakeReadiness()
         }
         if (!readiness["ok"]) {
@@ -54,12 +54,20 @@ class LS_PowerManager {
         }
         command := this.BuildCommand(mode, options)
         description := mode = "hibernate" ? "Schedule hibernate" : "Schedule shutdown"
-        exitCode := LS_RunCommand(command, description)
+        exitCode := this.ScheduleCommand(command, description)
         success := (exitCode = 0)
         if (!success)
             LS_LogError(Format("Power action failed (exit={1})", exitCode))
         this.RecordPowerAction(success, mode, options, readiness)
         return success
+    }
+
+    static ConfigureWake() {
+        return LS_WakeOnLan.Configure()
+    }
+
+    static ScheduleCommand(command, description) {
+        return LS_RunCommand(command, description)
     }
 
     static LogRequest(mode, options) {
@@ -82,9 +90,30 @@ class LS_PowerManager {
             if (!nic.Has("wolReady") || !nic["wolReady"]) {
                 label := nic.Has("name") ? nic["name"] : "NIC"
                 issues.Push("NIC not WoL ready: " . label)
+            } else if (nic.Has("isOperational") && nic["isOperational"]
+                && (!nic.Has("queryFailed") || !nic["queryFailed"])
+                && !this.IsNicWakeArmed(nic, wake["armedDevices"])) {
+                label := nic.Has("name") ? nic["name"] : "NIC"
+                issues.Push("NIC not wake-armed: " . label)
             }
         }
         return Map("ok", issues.Length = 0, "issues", issues, "wake", wake, "nics", nics)
+    }
+
+    static IsNicWakeArmed(nic, armedDevices) {
+        names := []
+        if (nic.Has("name"))
+            names.Push(nic["name"])
+        if (nic.Has("interfaceDescription") && nic["interfaceDescription"] != "")
+            names.Push(nic["interfaceDescription"])
+        for device in armedDevices {
+            normalizedDevice := StrLower(Trim(device))
+            for name in names {
+                if (normalizedDevice = StrLower(Trim(name)))
+                    return true
+            }
+        }
+        return false
     }
 
     static ReadinessSkipped() {

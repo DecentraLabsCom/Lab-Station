@@ -5,7 +5,7 @@
 ```
 Lab Station/
 └── controller/
-    ├── AppControl.ahk         # Main entry point (~140 lines)
+    ├── AppControl.ahk         # Main entry point
     └── lib/                       # Library modules
         ├── Config.ahk             # Configuration and constants
         ├── Utils.ahk              # Utility functions
@@ -60,7 +60,7 @@ Lab Station/
 ### DualAppMode.ahk
 **Purpose:** Dual application container with tabs  
 **Functions:**
-- `CreateDualAppContainer(class1, path1, class2, path2)` - Main dual mode function
+- `CreateDualAppContainer(class1, command1, class2, command2, tab1Title?, tab2Title?)` - Main dual mode function
 - `SwitchTab_Container(tabCtrl, hwnd1, hwnd2)` - Tab switching logic
 - `ResizeApps_Container(tabCtrl, hwnd1, hwnd2, container, appContainer)` - Resize handling
 
@@ -71,13 +71,13 @@ Lab Station/
 AppControl.ahk "Notepad" "notepad.exe"
 
 # Single app mode with custom close
-AppControl.ahk "LVWindow" "myVI.exe" --close-coords="330,484"
+AppControl.ahk "LVWindow" "myVI.exe" @close-coords="330,484"
 
 # Dual app mode
-AppControl.ahk --dual "Class1" "App1.exe" "Class2" "App2.exe"
+AppControl.ahk @dual "Class1" "App1.exe" "Class2" "App2.exe"
 
 # Dual app mode with custom tabs
-AppControl.ahk --dual "Class1" "App1.exe" "Class2" "App2.exe" --tab1="Camera" --tab2="Viewer"
+AppControl.ahk @dual "Class1" "App1.exe" "Class2" "App2.exe" @tab1="Camera" @tab2="Viewer"
 ```
 
 ## 📝 Development Notes

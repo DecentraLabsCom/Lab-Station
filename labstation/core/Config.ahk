@@ -4,12 +4,24 @@
 #Requires AutoHotkey v2.0
 
 if (!IsSet(LAB_STATION_VERSION)) {
-    global LAB_STATION_VERSION := "3.2.0"
+    global LAB_STATION_VERSION := "3.5.0"
 }
 
 if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {
     ; Version of the telemetry/status JSON contract (heartbeat/status.json).
     global LAB_STATION_SCHEMA_VERSION := "1.0.0"
+}
+
+if (!IsSet(LAB_STATION_COMMAND_TIMEOUT_MS)) {
+    ; Native and PowerShell probes should tolerate a slow first run on a clean
+    ; Windows installation without blocking the service loop indefinitely.
+    global LAB_STATION_COMMAND_TIMEOUT_MS := 30000
+}
+
+if (!IsSet(LAB_STATION_LONG_COMMAND_TIMEOUT_MS)) {
+    ; Configuration flows can start services, load modules, create certificates
+    ; and apply security policy. Those operations legitimately take longer.
+    global LAB_STATION_LONG_COMMAND_TIMEOUT_MS := 120000
 }
 
 if (!IsSet(LAB_STATION_ROOT)) {
@@ -153,10 +165,33 @@ LS_IsHeadlessSession() {
     return cached
 }
 
+LS_WriteStdout(text) {
+    ; GUI-subsystem executables do not always inherit a usable stdout handle
+    ; when launched from Explorer, a service, or an IDE. FileAppend("*")
+    ; raises Win32 error 6 in that case, so keep the command path dialog-free.
+    try {
+        FileAppend(text, "*", "UTF-8")
+        return true
+    } catch {
+        ; When a console parent exists, attach to it and retry. This covers
+        ; direct invocations of the GUI executable from cmd or PowerShell.
+        try {
+            if DllCall("AttachConsole", "UInt", 0xFFFFFFFF, "Int") {
+                FileAppend(text, "*", "UTF-8")
+                return true
+            }
+        } catch {
+        }
+    }
+
+    OutputDebug("LabStation command output unavailable: stdout handle is not valid")
+    return false
+}
+
 LS_ShowMessage(message, title := "Lab Station", options := "OK") {
     if (LS_IsHeadlessSession()) {
         OutputDebug("LabStation headless result - " . title)
-        try FileAppend(message . "`n", "*", "UTF-8")
+        LS_WriteStdout(message . "`n")
         return ""
     }
     return MsgBox(message, title, options)

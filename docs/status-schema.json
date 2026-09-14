@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/DecentraLabsCom/Lab-Station/main/docs/status-schema.json",
+  "title": "Lab Station status document",
+  "description": "Schema for status-json output and the status member of the heartbeat document.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "timestamp",
+    "stationProfile",
+    "remoteAppEnabled",
+    "winrm",
+    "autoStartConfigured",
+    "wake",
+    "power",
+    "summary",
+    "operations",
+    "localSessionActive",
+    "localModeEnabled"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^1\\.",
+      "description": "Telemetry contract version. Current value is 1.0.0."
+    },
+    "timestamp": {"type": "string", "format": "date-time"},
+    "stationProfile": {"type": "string", "enum": ["server", "hybrid"]},
+    "identity": {"type": "object", "additionalProperties": true},
+    "remoteAppEnabled": {"type": "boolean"},
+    "winrm": {"$ref": "#/definitions/object"},
+    "autoStartConfigured": {"type": "boolean"},
+    "wake": {
+      "type": "object",
+      "properties": {
+        "armedCount": {"type": "integer", "minimum": 0},
+        "nicPower": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      },
+      "additionalProperties": true
+    },
+    "power": {"$ref": "#/definitions/object"},
+    "biosChecklist": {"$ref": "#/definitions/object"},
+    "policy": {"$ref": "#/definitions/object"},
+    "sessions": {"$ref": "#/definitions/object"},
+    "fmuExecutor": {
+      "type": "object",
+      "properties": {
+        "available": {"type": "boolean"},
+        "running": {"type": "boolean"},
+        "pid": {"type": "integer", "minimum": 0},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "tokenConfigured": {"type": "boolean"},
+        "consecutiveFailures": {"type": "integer", "minimum": 0},
+        "lastHealth": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "summary": {
+      "type": "object",
+      "required": ["state", "ready", "issues"],
+      "properties": {
+        "state": {"type": "string"},
+        "ready": {"type": "boolean"},
+        "issues": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "operations": {"$ref": "#/definitions/object"},
+    "lastForcedLogoff": {"$ref": "#/definitions/object"},
+    "localSessionActive": {"type": "boolean"},
+    "localModeEnabled": {"type": "boolean"}
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "object": {"type": "object", "additionalProperties": true}
+  }
+}

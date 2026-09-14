@@ -29,7 +29,8 @@ class LS_EnergyAudit {
         lines.Push(Format("Wake-armed devices: {1} ({2})", data["wakeDevices"]["armedCount"], this.JoinSample(data["wakeDevices"]["armedDevices"])))
         lines.Push("NIC power state:")
         for nic in data["nicPower"] {
-            verdict := nic["wolReady"] ? "ready" : "issues: " . LS_StrJoin(nic["complianceIssues"], "; ")
+            verdict := !nic["isOperational"] ? "not evaluated (inactive)"
+                : (nic["wolReady"] ? "ready" : "issues: " . LS_StrJoin(nic["complianceIssues"], "; "))
             lines.Push(Format("  - {1}: WakeOnMagicPacket={2}, WakeOnPattern={3}, AllowTurnOff={4} [{5}]", nic["name"], nic["wakeOnMagicPacket"], nic["wakeOnPattern"], nic["allowTurnOff"], verdict))
         }
         lines.Push("Recommendations:")
@@ -93,33 +94,76 @@ class LS_EnergyAudit {
     static GetNicPowerManagement() {
         script := "
         (
-        `$adapters = Get-NetAdapter -Physical -ErrorAction SilentlyContinue
+        `$adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue)
+        if (-not `$adapters) {
+            Write-Error 'No physical network adapters could be queried'
+            exit 1
+        }
         foreach (`$adapter in `$adapters) {
             `$pm = Get-NetAdapterPowerManagement -Name `$adapter.Name -ErrorAction SilentlyContinue
-            if (-not `$pm) { continue }
             `$advancedTable = @{}
-            Get-NetAdapterAdvancedProperty -Name `$adapter.Name -ErrorAction SilentlyContinue | ForEach-Object {
-                if (`$_.RegistryKeyword) {
-                    `$advancedTable[`$_.RegistryKeyword.ToLower()] = `$_.DisplayValue
+            Get-NetAdapterAdvancedProperty -Name `$adapter.Name -AllProperties -ErrorAction SilentlyContinue | ForEach-Object {
+                `$keyword = ([string]`$_.RegistryKeyword).Trim().TrimStart([char]'*').ToLowerInvariant()
+                if (`$keyword -ne '') {
+                    # Standardized NDIS keywords have a leading '*'. Keep the
+                    # normalized key and the raw registry value so detection
+                    # does not depend on the display language of Windows.
+                    `$advancedTable[`$keyword] = `$_
                 }
             }
             `$advWakeMagic = `$null
+            `$advWakeMagicRegistry = `$null
             if (`$advancedTable.ContainsKey('wakeonmagicpacket')) {
-                `$advWakeMagic = `$advancedTable['wakeonmagicpacket']
+                `$property = `$advancedTable['wakeonmagicpacket']
+                `$advWakeMagic = `$property.DisplayValue
+                `$advWakeMagicRegistry = (`$property.RegistryValue -join ',')
             }
             `$advWakePattern = `$null
+            `$advWakePatternRegistry = `$null
             if (`$advancedTable.ContainsKey('wakeonpattern')) {
-                `$advWakePattern = `$advancedTable['wakeonpattern']
+                `$property = `$advancedTable['wakeonpattern']
+                `$advWakePattern = `$property.DisplayValue
+                `$advWakePatternRegistry = (`$property.RegistryValue -join ',')
             }
+            `$safeName = ([string]`$adapter.Name) -replace '\|', ' '
+            `$safeMagic = ([string]`$pm.WakeOnMagicPacket) -replace '\|', ' '
+            `$safePattern = ([string]`$pm.WakeOnPattern) -replace '\|', ' '
+            `$safeSleep = ([string]`$pm.DeviceSleepOnDisconnect) -replace '\|', ' '
+            `$safeAllow = ([string]`$pm.AllowComputerToTurnOffDevice) -replace '\|', ' '
+            `$safeAdvMagic = ([string]`$advWakeMagic) -replace '\|', ' '
+            `$safeAdvPattern = ([string]`$advWakePattern) -replace '\|', ' '
             `$safeDescription = ([string]`$adapter.InterfaceDescription) -replace '\|', ' '
-            `$line = '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}|{9}' -f `$adapter.Name, `$pm.WakeOnMagicPacket, `$pm.WakeOnPattern, `$pm.DeviceSleepOnDisconnect, `$pm.AllowComputerToTurnOffDevice, `$advWakeMagic, `$advWakePattern, `$adapter.MacAddress, `$adapter.Status, `$safeDescription
+            `$line = '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}|{9}|{10}|{11}|{12}' -f `$safeName, `$safeMagic, `$safePattern, `$safeSleep, `$safeAllow, `$safeAdvMagic, `$safeAdvPattern, `$adapter.MacAddress, `$adapter.Status, `$safeDescription, `$advWakeMagicRegistry, `$advWakePatternRegistry, [bool]`$pm
             Write-Output `$line
         }
         )"
         capture := LS_RunPowerShellCapture(script, "Query NIC power settings")
         adapters := []
-        if (capture["exitCode"] != 0) {
-            LS_LogWarning("Energy audit: unable to read NIC power settings (exit=" . capture["exitCode"] . ")")
+        if (capture["exitCode"] != 0 || Trim(capture["stdout"]) = "") {
+            detail := LS_CaptureDetail(capture)
+            if (detail != "")
+                LS_LogWarning("Energy audit: unable to read NIC power settings (exit=" . capture["exitCode"] . "): " . detail)
+            else
+                LS_LogWarning("Energy audit: unable to read NIC power settings (exit=" . capture["exitCode"] . ")")
+            failure := Map(
+                "name", "NIC power settings",
+                "wakeOnMagicPacket", "",
+                "wakeOnPattern", "",
+                "allowTurnOff", "",
+                "status", "Up",
+                "interfaceDescription", "",
+                "advancedWakeOnMagicPacket", "",
+                "advancedWakeOnPattern", "",
+                "advancedWakeOnMagicPacketRegistryValue", "",
+                "advancedWakeOnPatternRegistryValue", "",
+                "powerManagementAvailable", false,
+                "isOperational", true,
+                "queryFailed", true,
+                "complianceIssues", ["Unable to query NIC power settings"],
+                "wolConfigReady", false,
+                "wolReady", false
+            )
+            adapters.Push(failure)
             return adapters
         }
         for rawLine in StrSplit(capture["stdout"], "`n") {
@@ -140,6 +184,10 @@ class LS_EnergyAudit {
             entry["macAddress"] := parts.Length >= 8 ? Trim(parts[8]) : ""
             entry["status"] := parts.Length >= 9 ? Trim(parts[9]) : ""
             entry["interfaceDescription"] := parts.Length >= 10 ? Trim(parts[10]) : ""
+            entry["advancedWakeOnMagicPacketRegistryValue"] := parts.Length >= 11 ? Trim(parts[11]) : ""
+            entry["advancedWakeOnPatternRegistryValue"] := parts.Length >= 12 ? Trim(parts[12]) : ""
+            entry["powerManagementAvailable"] := parts.Length < 13 || StrLower(Trim(parts[13])) = "true"
+            entry["isOperational"] := entry["status"] = "" || StrLower(entry["status"]) = "up"
             this.DecorateNicCompliance(entry)
             adapters.Push(entry)
         }
@@ -148,21 +196,80 @@ class LS_EnergyAudit {
 
     static DecorateNicCompliance(entry) {
         issues := []
-        if (!this.ValueIsEnabled(entry["wakeOnMagicPacket"]) && !this.ValueIsEnabled(entry["advancedWakeOnMagicPacket"]))
-            issues.Push("Wake on Magic Packet disabled")
-        if (this.ValueIsEnabled(entry["wakeOnPattern"]) || this.ValueIsEnabled(entry["advancedWakeOnPattern"]))
-            issues.Push("Wake on Pattern should be disabled")
-        if (this.ValueIsEnabled(entry["allowTurnOff"]))
+        magicState := this.ResolveSettingState([
+            entry["wakeOnMagicPacket"],
+            entry["advancedWakeOnMagicPacketRegistryValue"],
+            entry["advancedWakeOnMagicPacket"]
+        ], "wake")
+        patternState := this.ResolveSettingState([
+            entry["wakeOnPattern"],
+            entry["advancedWakeOnPatternRegistryValue"],
+            entry["advancedWakeOnPattern"]
+        ], "wake")
+        allowState := this.ResolveSettingState([entry["allowTurnOff"]], "allow")
+        if (magicState != "enabled")
+            issues.Push("Wake on Magic Packet disabled or unavailable")
+        if (patternState != "disabled")
+            issues.Push("Wake on Pattern enabled or unavailable")
+        if (allowState = "enabled")
             issues.Push("Allow computer to turn off is enabled")
+        else if (allowState = "unknown")
+            issues.Push("Allow computer to turn off could not be verified")
         entry["complianceIssues"] := issues
-        entry["wolReady"] := issues.Length = 0
+        entry["wolConfigReady"] := issues.Length = 0
+        ; Disconnected physical adapters are retained in diagnostics, but do
+        ; not make the station fail readiness. An active adapter with an
+        ; unsupported or unknown setting remains non-compliant.
+        entry["wolReady"] := !entry["isOperational"] || entry["wolConfigReady"]
     }
 
-    static ValueIsEnabled(value) {
-        if (!value)
-            return false
+    static ResolveSettingState(values, kind := "wake") {
+        hasEnabled := false
+        hasDisabled := false
+        hasUnsupported := false
+        for value in values {
+            state := this.ParseSettingState(value, kind)
+            if (state = "enabled")
+                hasEnabled := true
+            else if (state = "disabled")
+                hasDisabled := true
+            else if (state = "unsupported")
+                hasUnsupported := true
+        }
+        if (hasEnabled && hasDisabled)
+            return "conflict"
+        if (hasEnabled)
+            return "enabled"
+        if (hasDisabled)
+            return "disabled"
+        if (hasUnsupported)
+            return "unsupported"
+        return "unknown"
+    }
+
+    static ParseSettingState(value, kind := "wake") {
+        if (value = "")
+            return "unknown"
         normalized := StrLower(Trim(value))
-        return normalized = "enabled" || normalized = "true" || normalized = "on"
+        if (normalized = "enabled" || normalized = "true" || normalized = "on"
+            || normalized = "yes" || normalized = "si" || normalized = "sí"
+            || normalized = "habilitado" || normalized = "habilitada"
+            || normalized = "activado" || normalized = "activada")
+            return "enabled"
+        if (normalized = "disabled" || normalized = "false" || normalized = "off"
+            || normalized = "no" || normalized = "deshabilitado" || normalized = "deshabilitada"
+            || normalized = "desactivado" || normalized = "desactivada")
+            return "disabled"
+        if (normalized = "unsupported" || normalized = "not supported"
+            || normalized = "unavailable" || normalized = "n/a")
+            return "unsupported"
+        if RegExMatch(normalized, "^\d+$") {
+            number := normalized + 0
+            if (kind = "allow")
+                return number = 2 ? "enabled" : (number = 1 ? "disabled" : (number = 0 ? "unsupported" : "unknown"))
+            return number = 1 ? "enabled" : (number = 0 ? "disabled" : "unknown")
+        }
+        return "unknown"
     }
 
     static BuildRecommendations(data) {

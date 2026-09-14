@@ -21,7 +21,11 @@ class LS_WinRM {
         }
         localPassword := password && password != "" ? password : this.GeneratePassword()
         script := this.BuildConfigureScript(user, localPassword)
-        capture := LS_RunPowerShellCapture(script, "Configure WinRM for Lab Gateway", 30000)
+        capture := LS_RunPowerShellCapture(
+            script,
+            "Configure WinRM for Lab Gateway",
+            LAB_STATION_LONG_COMMAND_TIMEOUT_MS
+        )
         exitCode := capture["exitCode"]
         status := exitCode = 0 ? this.GetStatus() : Map("ready", false)
         if (exitCode = 0 && status.Has("ready") && status["ready"]) {
@@ -32,7 +36,7 @@ class LS_WinRM {
                 LS_LogInfo(certificateInfo)
             return true
         }
-        detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
+        detail := LS_CaptureDetail(capture)
         if (detail != "")
             LS_LogError("WinRM configuration failed or not ready (exit=" . exitCode . "): " . detail)
         else
@@ -46,39 +50,123 @@ class LS_WinRM {
 $ErrorActionPreference = 'Continue'
 $svc = Get-Service -Name WinRM -ErrorAction SilentlyContinue
 $listenerText = ''
+`$listenerObjects = @()
+try {
+    # Query the listener as a WSMan object first.  The object property is
+    # CertificateThumbprint on Windows client (including Windows 10 and 11),
+    # while older/localized winrm.exe text may expose a different label.
+    `$listenerObjects = @(Get-WSManInstance -ResourceURI 'winrm/config/listener' -Enumerate -ErrorAction Stop)
+} catch {}
 try { $listenerText = (& winrm enumerate winrm/config/listener 2>$null) -join [Environment]::NewLine } catch {}
-`$httpsListener = `$listenerText -match '(?im)Transport\s*=\s*HTTPS'
-`$httpsPort = `$listenerText -match '(?im)Port\s*=\s*5986'
-`$httpListener = `$listenerText -match '(?im)Transport\s*=\s*HTTP\s*$'
-`$certificateConfigured = `$listenerText -match '(?im)CertificateThumbprint\s*=\s*\S+'
+function ConvertTo-BooleanValue([object]$Value) {
+    # WSMan provider values are strings on Windows PowerShell 5.1.  Casting
+    # the string "false" directly to [bool] returns $true, so parse the
+    # documented textual values explicitly instead of relying on truthiness.
+    if ($Value -is [bool]) { return [bool]$Value }
+    if ($null -eq $Value) { return $null }
+    $text = ([string]$Value).Trim()
+    if ($text -match '^(?i:true|1|yes|enabled|on)$') { return $true }
+    if ($text -match '^(?i:false|0|no|disabled|off)$') { return $false }
+    return $null
+}
+function Test-ValidWinRMCertificate([string]$Thumbprint) {
+    if ([string]::IsNullOrWhiteSpace($Thumbprint)) { return $false }
+    $normalized = ($Thumbprint -replace '\s', '').ToUpperInvariant()
+    try {
+        return [bool](Get-ChildItem Cert:\LocalMachine\My -ErrorAction Stop |
+            Where-Object {
+                (($_.Thumbprint -replace '\s', '').ToUpperInvariant() -eq $normalized) -and
+                $_.HasPrivateKey -and
+                $_.NotAfter -gt (Get-Date)
+            } |
+            Select-Object -First 1)
+    } catch {
+        return $false
+    }
+}
+`$httpsListeners = @(`$listenerObjects | Where-Object {
+    [string]`$_.Transport -match '(?i)^HTTPS$' -and
+    (ConvertTo-BooleanValue `$_.Enabled) -eq `$true
+})
+`$httpsListener = `$httpsListeners.Count -gt 0
+`$httpsPort = @(`$httpsListeners | Where-Object { [string]`$_.Port -eq '5986' }).Count -gt 0
+`$certificateConfigured = `$false
+foreach (`$listener in `$httpsListeners) {
+    `$thumbprint = ([string]`$listener.CertificateThumbprint).Trim()
+    if ([string]::IsNullOrWhiteSpace(`$thumbprint)) {
+        `$thumbprint = ([string]`$listener.Certificate).Trim()
+    }
+    if (Test-ValidWinRMCertificate `$thumbprint) {
+        `$certificateConfigured = `$true
+        break
+    }
+}
+`$httpListener = @(`$listenerObjects | Where-Object { [string]`$_.Transport -match '(?i)^HTTP$' }).Count -gt 0
+# Fallback for systems where the WSMan PowerShell provider is unavailable.
+# Parse one listener block at a time so an enabled HTTP/HTTPS listener cannot
+# accidentally satisfy the status of a different, disabled listener.
+`$listenerBlocks = @()
+if (`$listenerText) {
+    `$listenerBlocks = @(`$listenerText -split '(?im)(?=^\s*Listener\s*$)' |
+        Where-Object { `$_ -match '\S' })
+}
+foreach (`$block in `$listenerBlocks) {
+    `$isHttpsBlock = `$block -match '(?im)^\s*Transport\s*=\s*HTTPS\s*$'
+    `$isHttpBlock = `$block -match '(?im)^\s*Transport\s*=\s*HTTP\s*$'
+    `$isEnabledBlock = `$block -match '(?im)^\s*Enabled\s*=\s*(?:true|yes|1|si|sí)\s*$'
+    if (`$isHttpsBlock -and `$isEnabledBlock) {
+        `$httpsListener = `$true
+        if (`$block -match '(?im)^\s*Port\s*=\s*5986\s*$') {
+            `$httpsPort = `$true
+        }
+        if (-not `$certificateConfigured -and
+            `$block -match '(?im)(?:CertificateThumbprint|Certificate)\s*=\s*(\S+)') {
+            `$certificateConfigured = Test-ValidWinRMCertificate `$Matches[1]
+        }
+    }
+    if (`$isHttpBlock -and `$isEnabledBlock) {
+        `$httpListener = `$true
+    }
+}
+function Test-WinRMFirewallRule([object]$Rule) {
+    if (-not `$Rule) { return `$false }
+    if ((ConvertTo-BooleanValue `$Rule.Enabled) -ne `$true) { return `$false }
+    if ([string]`$Rule.Direction -notmatch '(?i)^Inbound$') { return `$false }
+    try {
+        `$filters = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule `$Rule -ErrorAction Stop)
+        foreach (`$filter in `$filters) {
+            if ([string]`$filter.Protocol -notmatch '(?i)^TCP$|^6$') { continue }
+            `$localPort = ([string]`$filter.LocalPort).Trim()
+            if (`$localPort -eq 'Any' -or `$localPort -match '(^|[,\s])5986([,\s]|$)') {
+                return `$true
+            }
+        }
+    } catch {}
+    return `$false
+}
 `$firewall = `$false
 try {
-    $rule = Get-NetFirewallRule -Name 'WINRM-HTTPS-In-TCP*','LabStation-WinRM-HTTPS' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } |
-        Select-Object -First 1
-    if (-not $rule) {
-        $rule = Get-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction SilentlyContinue |
-            Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } |
-            Select-Object -First 1
+    `$rules = @(Get-NetFirewallRule -Name 'WINRM-HTTPS-In-TCP*','LabStation-WinRM-HTTPS' -ErrorAction SilentlyContinue)
+    `$rules += @(Get-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction SilentlyContinue)
+    foreach (`$rule in `$rules) {
+        if (Test-WinRMFirewallRule `$rule) {
+            `$firewall = `$true
+            break
+        }
     }
-    $firewall = [bool]$rule
 } catch {}
-if (-not $firewall) {
+if (-not `$firewall) {
     try {
-        $netsh = (& netsh advfirewall firewall show rule name=all 2>$null) -join [Environment]::NewLine
-        $firewall = ($netsh -match '5986') -and ($netsh -match '(?i)(Enabled|Habilitada|Habilitado)\s*:\s*(Yes|S[ií])')
+        `$netsh = (& netsh advfirewall firewall show rule name='Lab Station WinRM HTTPS' 2>$null) -join [Environment]::NewLine
+        `$firewall = (`$netsh -match '5986') -and (`$netsh -match '(?i)(Enabled|Habilitada|Habilitado)\s*:\s*(Yes|S[ií]|True|1)')
     } catch {}
 }
-if (-not $firewall) {
-try {
-    $httpsNetsh = (& netsh advfirewall firewall show rule name='Lab Station WinRM HTTPS' 2>$null) -join [Environment]::NewLine
-    $firewall = ($httpsNetsh -match '5986') -and ($httpsNetsh -match '(?i)(Enabled|Habilitada|Habilitado)')
-} catch {}
-}
-$allowUnencrypted = $false
-$negotiateAuth = $false
-try { $allowUnencrypted = ((Get-Item WSMan:\localhost\Service\AllowUnencrypted -ErrorAction SilentlyContinue).Value -eq 'true') } catch {}
-try { $negotiateAuth = ((Get-Item WSMan:\localhost\Service\Auth\Negotiate -ErrorAction SilentlyContinue).Value -eq 'true') } catch {}
+`$allowUnencrypted = `$null
+`$negotiateAuth = `$null
+`$ntlmAuth = `$null
+try { `$allowUnencrypted = ConvertTo-BooleanValue ((Get-Item WSMan:\localhost\Service\AllowUnencrypted -ErrorAction Stop).Value) } catch {}
+try { `$negotiateAuth = ConvertTo-BooleanValue ((Get-Item WSMan:\localhost\Service\Auth\Negotiate -ErrorAction Stop).Value) } catch {}
+try { `$ntlmAuth = ConvertTo-BooleanValue ((Get-Item WSMan:\localhost\Service\Auth\NTLM -ErrorAction Stop).Value) } catch {}
 [pscustomobject]@{
     serviceInstalled = [bool]$svc
     serviceRunning = ($svc.Status -eq 'Running')
@@ -88,14 +176,18 @@ try { $negotiateAuth = ((Get-Item WSMan:\localhost\Service\Auth\Negotiate -Error
     httpsPort = [bool]$httpsPort
     certificateConfigured = [bool]$certificateConfigured
     firewallEnabled = [bool]$firewall
-    allowUnencrypted = [bool]$allowUnencrypted
-    negotiateAuth = [bool]$negotiateAuth
-    ntlmAuth = [bool]$negotiateAuth
+    allowUnencrypted = $allowUnencrypted
+    negotiateAuth = $negotiateAuth
+    ntlmAuth = $ntlmAuth
 } | ConvertTo-Json -Compress
         )"
-        capture := LS_RunPowerShellCapture(script, "Query WinRM status", 25000)
+        capture := LS_RunPowerShellCapture(
+            script,
+            "Query WinRM status",
+            LAB_STATION_COMMAND_TIMEOUT_MS
+        )
         if (capture["exitCode"] != 0 || Trim(capture["stdout"]) = "") {
-            detail := Trim(capture["stderr"] != "" ? capture["stderr"] : capture["stdout"])
+            detail := LS_CaptureDetail(capture)
             if (detail != "")
                 LS_LogWarning("Unable to query WinRM status: " . detail)
             else
@@ -123,8 +215,8 @@ try { $negotiateAuth = ((Get-Item WSMan:\localhost\Service\Auth\Negotiate -Error
                 && status["httpsPort"]
                 && status["certificateConfigured"]
                 && status["firewallEnabled"]
-                && !status["allowUnencrypted"]
-                && status["negotiateAuth"]
+                && status["allowUnencrypted"] = false
+                && status["negotiateAuth"] = true
             )
             return status
         } catch as e {

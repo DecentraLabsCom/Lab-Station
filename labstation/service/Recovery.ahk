@@ -12,7 +12,7 @@
 class LS_Recovery {
     static RebootIfNeeded(options := Map()) {
         LS_LogInfo("Recovery: evaluating safeguard reboot request")
-        status := LS_Status.Collect()
+        status := this.CollectStatus()
         reasons := this.ResolveReasons(status, options)
         if (reasons.Length = 0) {
             message := "Healthy state detected; reboot skipped"
@@ -23,9 +23,9 @@ class LS_Recovery {
 
         timeout := options.Has("timeout") ? options["timeout"] : 20
         user := options.Has("user") ? options["user"] : ""
-        LS_SessionManager.CloseControllerProcesses()
-        LS_SessionManager.LogoffLabUser(user)
-        rebooted := LS_SessionManager.TriggerReboot(timeout)
+        this.CloseControllerProcesses()
+        this.LogoffLabUser(user)
+        rebooted := this.TriggerReboot(timeout)
         joinedReasons := LS_StrJoin(reasons, ", ")
         message := rebooted
             ? Format("Safeguard reboot scheduled ({1})", joinedReasons)
@@ -43,6 +43,22 @@ class LS_Recovery {
             "success", rebooted
         ))
         return Map("rebooted", rebooted, "reason", joinedReasons, "message", message, "success", rebooted)
+    }
+
+    static CollectStatus() {
+        return LS_Status.Collect()
+    }
+
+    static CloseControllerProcesses() {
+        return LS_SessionManager.CloseControllerProcesses()
+    }
+
+    static LogoffLabUser(user := "") {
+        return LS_SessionManager.LogoffLabUser(user)
+    }
+
+    static TriggerReboot(timeout := 0) {
+        return LS_SessionManager.TriggerReboot(timeout)
     }
 
     static ResolveReasons(status, options) {

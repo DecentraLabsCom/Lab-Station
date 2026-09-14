@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2.0
+#Include TestSupport.ahk
 #Include ..\setup\Wizard.ahk
 
 CheckSteps(modeName, steps, expectedLen, &errors) {
@@ -114,6 +115,54 @@ if (lines.Length != 1 || lines[1] != "LABUSER") {
     errors.Push("status: ParseLines must trim CR/LF from command output")
 }
 
+inactiveNic := Map(
+    "wakeOnMagicPacket", "Enabled",
+    "wakeOnPattern", "Enabled",
+    "allowTurnOff", "Enabled",
+    "advancedWakeOnMagicPacketRegistryValue", "",
+    "advancedWakeOnPatternRegistryValue", "",
+    "advancedWakeOnMagicPacket", "",
+    "advancedWakeOnPattern", "",
+    "status", "Disconnected",
+    "isOperational", false
+)
+LS_EnergyAudit.DecorateNicCompliance(inactiveNic)
+if (!inactiveNic["wolReady"]) {
+    errors.Push("energy: inactive NIC must not make station readiness fail")
+}
+
+unsupportedNic := Map(
+    "wakeOnMagicPacket", "Unsupported",
+    "wakeOnPattern", "Unsupported",
+    "allowTurnOff", "Unsupported",
+    "advancedWakeOnMagicPacketRegistryValue", "",
+    "advancedWakeOnPatternRegistryValue", "",
+    "advancedWakeOnMagicPacket", "",
+    "advancedWakeOnPattern", "",
+    "status", "Up",
+    "isOperational", true
+)
+LS_EnergyAudit.DecorateNicCompliance(unsupportedNic)
+if (unsupportedNic["wolReady"]) {
+    errors.Push("energy: active unsupported NIC must remain non-compliant")
+}
+
+registryFallbackNic := Map(
+    "wakeOnMagicPacket", "Unsupported",
+    "wakeOnPattern", "Unsupported",
+    "allowTurnOff", "Disabled",
+    "advancedWakeOnMagicPacketRegistryValue", "1",
+    "advancedWakeOnPatternRegistryValue", "0",
+    "advancedWakeOnMagicPacket", "",
+    "advancedWakeOnPattern", "",
+    "status", "Up",
+    "isOperational", true
+)
+LS_EnergyAudit.DecorateNicCompliance(registryFallbackNic)
+if (!registryFallbackNic["wolReady"]) {
+    errors.Push("energy: standardized registry values must be accepted as a NIC fallback")
+}
+
 sampleStatus := Map(
     "stationProfile", "hybrid",
     "identity", Map("labUserExists", true),
@@ -136,10 +185,10 @@ if (sampleSummary["state"] != "ready" || sampleSummary["issues"].Length != 0) {
 
 if (errors.Length > 0) {
     for _, msg in errors {
-        FileAppend(msg . "`n", "*")
+        LS_TestOutput(msg . "`n")
     }
     ExitApp(1)
 }
 
-FileAppend("WizardActionCallbacksTests passed`n", "*")
+LS_TestOutput("WizardActionCallbacksTests passed`n")
 ExitApp(0)

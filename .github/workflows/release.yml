@@ -11,10 +11,11 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: write
 
 env:
-  AHK_VERSION: "2.0.26"
+  AHK_VERSION: "2.0.27"
   AHK2EXE_VERSION: "Ahk2Exe1.1.37.02a2"
 
 jobs:
@@ -346,6 +347,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          function Stop-ProcessesForPath($exePath) {
+            $fullPath = (Resolve-Path $exePath).Path
+            $processName = Split-Path $fullPath -Leaf
+            Get-CimInstance Win32_Process -Filter "Name='$processName'" -ErrorAction SilentlyContinue |
+              Where-Object { $_.ExecutablePath -eq $fullPath } |
+              ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+              }
+          }
+
           function Assert-EmbeddedScript($exePath) {
             if (-not (Test-Path $exePath)) {
               throw "Executable missing: $exePath"
@@ -357,11 +368,17 @@ jobs:
             if (Test-Path $stdoutPath) { Remove-Item $stdoutPath -Force }
             if (Test-Path $stderrPath) { Remove-Item $stderrPath -Force }
 
-            $proc = Start-Process -FilePath $exePath -ArgumentList '/ErrorStdOut' -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             try {
-              Wait-Process -Id $proc.Id -Timeout 8 -ErrorAction Stop
-            } catch {
-              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              $proc = Start-Process -FilePath $exePath -ArgumentList '/ErrorStdOut' -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+              try {
+                Wait-Process -Id $proc.Id -Timeout 8 -ErrorAction Stop
+              } catch {
+              }
+            } finally {
+              if ($proc) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+              }
+              Stop-ProcessesForPath $exePath
             }
 
             $stderr = ''
@@ -376,6 +393,111 @@ jobs:
 
           Assert-EmbeddedScript (Join-Path $PWD 'dist/LabStation.exe')
           Assert-EmbeddedScript (Join-Path $PWD 'dist/LabStationPanel.exe')
+          Stop-ProcessesForPath (Join-Path $PWD 'dist/LabStation.exe')
+          Stop-ProcessesForPath (Join-Path $PWD 'dist/LabStationPanel.exe')
+
+      - name: Prepare executables for SignPath
+        shell: powershell
+        run: |
+          $inputDir = Join-Path $PWD 'signing-input'
+          New-Item -ItemType Directory -Force -Path $inputDir | Out-Null
+
+          foreach ($name in @(
+            'AppControl.exe',
+            'LabStation.exe',
+            'LabStationPanel.exe'
+          )) {
+            $source = Join-Path $PWD "dist/$name"
+            if (-not (Test-Path $source)) {
+              throw "Executable not found: $source"
+            }
+
+            Copy-Item -Path $source -Destination (Join-Path $inputDir $name) -Force
+          }
+
+      - name: Validate SignPath configuration
+        shell: powershell
+        run: |
+          $policySlug = ([string]$env:SIGNPATH_SIGNING_POLICY_SLUG).Trim()
+          if ([string]::IsNullOrWhiteSpace($policySlug)) {
+            throw 'Repository variable SIGNPATH_SIGNING_POLICY_SLUG is missing'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNPATH_API_TOKEN)) {
+            throw 'Repository secret SIGNPATH_API_TOKEN is missing'
+          }
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+
+      - name: Install SignPath PowerShell module
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-Module -Name SignPath -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
+          Import-Module SignPath -Force
+
+      - name: Sign executables with SignPath PowerShell integration
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module SignPath -Force
+
+          $inputDir = Join-Path $PWD 'signing-input'
+          $inputArtifact = Join-Path $PWD 'Lab-Station-signing-input.zip'
+          $signedArtifact = Join-Path $PWD 'Lab-Station-signing-output.zip'
+          $signedDir = Join-Path $PWD 'signed-artifact'
+          $files = Get-ChildItem -LiteralPath $inputDir -File
+
+          if ($files.Count -ne 3) {
+            throw "Expected 3 executables in $inputDir, found $($files.Count)"
+          }
+
+          Compress-Archive -Path $files.FullName -DestinationPath $inputArtifact -Force
+          New-Item -ItemType Directory -Force -Path $signedDir | Out-Null
+
+          Submit-SigningRequest `
+            -InputArtifactPath $inputArtifact `
+            -ApiToken $env:SIGNPATH_API_TOKEN `
+            -OrganizationId '50ce8c7b-c57f-406f-82bf-8b067125ed55' `
+            -ProjectSlug 'Lab_Station' `
+            -SigningPolicySlug $env:SIGNPATH_SIGNING_POLICY_SLUG `
+            -OutputArtifactPath $signedArtifact `
+            -WaitForCompletion `
+            -Force
+
+          Expand-Archive -LiteralPath $signedArtifact -DestinationPath $signedDir -Force
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+
+      - name: Replace release files with signed executables
+        shell: powershell
+        run: |
+          $expected = @(
+            'AppControl.exe',
+            'LabStation.exe',
+            'LabStationPanel.exe'
+          )
+
+          foreach ($name in $expected) {
+            $signed = Get-ChildItem -Path 'signed-artifact' -Recurse -File |
+              Where-Object { $_.Name -eq $name } |
+              Select-Object -First 1
+
+            if (-not $signed) {
+              throw "Signed artifact not found: $name"
+            }
+
+            $destination = Join-Path $PWD "dist/$name"
+            Copy-Item -Path $signed.FullName -Destination $destination -Force
+
+            $signature = Get-AuthenticodeSignature -FilePath $destination
+            if (-not $signature.SignerCertificate) {
+              throw "$name does not contain an Authenticode signature"
+            }
+
+            Write-Host "$name signed: $($signature.Status)"
+          }
 
       - name: Upload AppControl artifact
         uses: actions/upload-artifact@v7
@@ -417,5 +539,6 @@ jobs:
             dist/WindowSpy.exe
             dist/img/DecentraLabs.png
           tag_name: ${{ steps.release_meta.outputs.tag }}
+          prerelease: ${{ contains(steps.release_meta.outputs.tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

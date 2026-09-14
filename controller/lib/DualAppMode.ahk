@@ -200,7 +200,7 @@ PositionUWPApp(hwnd, x, y, width, height, maxRetries := 5) {
 }
 
 CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Application 1", tab2Title := "Application 2") {
-    global STARTUP_TIMEOUT, POLL_INTERVAL_MS
+    global STARTUP_TIMEOUT, POLL_INTERVAL_MS, SILENT_ERRORS
     
     Log("Initializing dual app container mode", "INFO")
     Log("Tab titles: '" . tab1Title . "' and '" . tab2Title . "'", "DEBUG")
@@ -212,13 +212,15 @@ CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Applica
     ; Validate that application files exist
     if !FileExist(appPath1) {
         Log("ERROR: Application 1 executable not found: " . appPath1, "ERROR")
-        MsgBox "Application 1 executable not found: " . appPath1
-        ExitApp
+        if !SILENT_ERRORS
+            MsgBox "Application 1 executable not found: " . appPath1
+        ExitApp(1)
     }
     if !FileExist(appPath2) {
         Log("ERROR: Application 2 executable not found: " . appPath2, "ERROR")
-        MsgBox "Application 2 executable not found: " . appPath2
-        ExitApp
+        if !SILENT_ERRORS
+            MsgBox "Application 2 executable not found: " . appPath2
+        ExitApp(1)
     }
     
     ; Create container GUI without title bar
@@ -245,8 +247,9 @@ CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Applica
         Run(command1, , , &pid1)
     } catch as e {
         Log("ERROR: Failed to launch App 1: " . e.message, "ERROR")
-        MsgBox "Failed to launch Application 1: " . command1 . "`n`nError: " . e.message
-        ExitApp
+        if !SILENT_ERRORS
+            MsgBox "Failed to launch Application 1: " . command1 . "`n`nError: " . e.message
+        ExitApp(1)
     }
     
     ; Check if App 1 is a launcher (jar, bat, script) - may spawn different process
@@ -261,8 +264,9 @@ CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Applica
         Run(command2, , , &pid2)
     } catch as e {
         Log("ERROR: Failed to launch App 2: " . e.message, "ERROR")
-        MsgBox "Failed to launch Application 2: " . command2 . "`n`nError: " . e.message
-        ExitApp
+        if !SILENT_ERRORS
+            MsgBox "Failed to launch Application 2: " . command2 . "`n`nError: " . e.message
+        ExitApp(1)
     }
     
     ; Check if App 2 is a launcher (jar, bat, script) - may spawn different process
@@ -284,8 +288,9 @@ CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Applica
         condition1 := () => !!(hwnd1 := FindWindowCandidate(class1, pid1, isLauncher1, "App 1"))
         if (!WaitUntil(condition1, STARTUP_TIMEOUT * 1000, APP_WINDOW_POLL_INTERVAL_MS)) {
             Log("ERROR: Application 1 window did not appear within timeout", "ERROR")
-            MsgBox "Application 1 window (class: " . class1 . ") did not appear within " . STARTUP_TIMEOUT . " seconds"
-            ExitApp
+            if !SILENT_ERRORS
+                MsgBox "Application 1 window (class: " . class1 . ") did not appear within " . STARTUP_TIMEOUT . " seconds"
+            ExitApp(1)
         }
         Log("Selected App 1 window via fallback: " . hwnd1, "DEBUG")
     } else {
@@ -308,8 +313,9 @@ CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Applica
         condition2 := () => !!(hwnd2 := FindWindowCandidate(class2, pid2, isLauncher2, "App 2"))
         if (!WaitUntil(condition2, STARTUP_TIMEOUT * 1000, APP_WINDOW_POLL_INTERVAL_MS)) {
             Log("ERROR: Application 2 window did not appear within timeout", "ERROR")
-            MsgBox "Application 2 window (class: " . class2 . ") did not appear within " . STARTUP_TIMEOUT . " seconds"
-            ExitApp
+            if !SILENT_ERRORS
+                MsgBox "Application 2 window (class: " . class2 . ") did not appear within " . STARTUP_TIMEOUT . " seconds"
+            ExitApp(1)
         }
         Log("Selected App 2 window via fallback: " . hwnd2, "DEBUG")
     } else {
