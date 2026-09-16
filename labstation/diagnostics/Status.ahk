@@ -501,7 +501,7 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         entries := []
         for rawLine in StrSplit(text, "`n") {
             line := Trim(StrReplace(rawLine, "`r"))
-            if (line = "" || InStr(line, "USERNAME") = 1)
+            if (line = "")
                 continue
             if (SubStr(line, 1, 1) = ">")
                 line := Trim(SubStr(line, 2))
@@ -509,10 +509,13 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             parts := StrSplit(normalized, "|")
             if (parts.Length < 4)
                 continue
+            candidateId := parts.Length >= 3 ? Trim(parts[3]) : ""
+            if (!RegExMatch(candidateId, "^\d+$"))
+                continue
             entry := Map()
             entry["user"] := Trim(parts[1])
             entry["session"] := parts.Length >= 2 ? Trim(parts[2]) : ""
-            entry["id"] := parts.Length >= 3 ? Trim(parts[3]) : ""
+            entry["id"] := candidateId
             entry["state"] := parts.Length >= 4 ? Trim(parts[4]) : ""
             entry["idle"] := parts.Length >= 5 ? Trim(parts[5]) : ""
             remaining := []

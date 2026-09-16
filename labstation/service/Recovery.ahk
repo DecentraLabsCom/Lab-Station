@@ -70,20 +70,22 @@ class LS_Recovery {
         if (options.Has("reason") && options["reason"] != "")
             reasons.Push(options["reason"])
         summary := status["summary"]
+        profile := status.Has("stationProfile") ? status["stationProfile"] : ""
+        isHybrid := (profile = "hybrid")
         if (summary.Has("state") && summary["state"] != "ready")
             reasons.Push("status-needs-action")
-        if (status.Has("sessions") && status["sessions"]["hasOtherUsers"])
+        if (!isHybrid && status.Has("sessions") && status["sessions"]["hasOtherUsers"])
             reasons.Push("other-users-active")
         if (!status["remoteAppEnabled"])
             reasons.Push("remoteapp-disabled")
         if (!status["autoStartConfigured"])
             reasons.Push("autostart-missing")
         policy := status.Has("policy") ? status["policy"] : Map()
-        if (policy.Has("autoLogon") && !policy["autoLogon"]["enabled"])
+        if (!isHybrid && policy.Has("autoLogon") && !policy["autoLogon"]["enabled"])
             reasons.Push("autologon-disabled")
         if (policy.Has("remoteDesktopUsers")) {
             rds := policy["remoteDesktopUsers"]
-            if (rds.Has("otherMembers") && rds["otherMembers"].Length > 0)
+            if (!isHybrid && rds.Has("otherMembers") && rds["otherMembers"].Length > 0)
                 reasons.Push("remote-desktop-users-drift")
         }
         return this.DistinctReasons(reasons)
