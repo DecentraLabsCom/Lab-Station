@@ -59,6 +59,7 @@ RunRecoveryTests() {
         TestFailedRebootIsReportedAndRecorded()
         TestForcedRecoveryShortCircuitsStatusReasons()
         TestReasonsAreDistinctAndCaseInsensitive()
+        TestHybridProfileAllowsAdditionalRemoteDesktopUsers()
     } catch as err {
         Fail("Unhandled recovery test exception: " . err.Message)
     }
@@ -129,6 +130,24 @@ TestReasonsAreDistinctAndCaseInsensitive() {
 
     Assert(reasons.Length = 2, "recovery removes duplicate and empty reasons")
     Assert(reasons[1] = "RemoteApp-Disabled" && reasons[2] = "Other-users-active", "recovery preserves the first spelling of each reason")
+}
+
+TestHybridProfileAllowsAdditionalRemoteDesktopUsers() {
+    status := Map(
+        "stationProfile", "hybrid",
+        "summary", Map("state", "ready", "issues", []),
+        "sessions", Map("hasOtherUsers", true),
+        "remoteAppEnabled", true,
+        "autoStartConfigured", true,
+        "policy", Map(
+            "autoLogon", Map("enabled", false),
+            "remoteDesktopUsers", Map("otherMembers", ["Instructor"])
+        )
+    )
+
+    reasons := LS_Recovery.ResolveReasons(status, Map())
+
+    Assert(reasons.Length = 0, "hybrid recovery does not reboot for local users or additional RDP members")
 }
 
 HealthyStatus() {

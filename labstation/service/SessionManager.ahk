@@ -153,13 +153,14 @@ class LS_SessionManager {
             return true
         }
         sanitized := StrReplace(path, "'", "''")
-        script := Format("
+        script := "
         (
-`$Path = '{1}'
-if (Test-Path `$Path) {{
+`$Path = '__PATH__'
+if (Test-Path `$Path) {
     Get-ChildItem -Path `$Path -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-}}
-        )", sanitized)
+}
+        )"
+        script := StrReplace(script, "__PATH__", sanitized)
         exitCode := LS_RunPowerShell(script, "Clean " . path)
         if (exitCode != 0) {
             LS_LogWarning(Format("Unable to clean {1} (exit={2})", path, exitCode))
@@ -194,25 +195,25 @@ if (`$p) {{ `$p.LocalPath }}
         if (!user || user = "") {
             user := LS_AccountManager.DefaultUser
         }
-        flag := force ? "/f" : ""
         sanitized := StrReplace(user, "'", "''")
-        script := Format("
+        script := "
         (
-`$User = '{1}'
-`$regex = '^\s*>?\s*' + [regex]::Escape(`$User) + '\s+\S+\s+(\d+)'
+`$User = '__USER__'
+`$regex = '^\s*>?\s*' + [regex]::Escape(`$User) + '\s+(?:\S+\s+)?(\d+)\s+\S+'
 `$lines = @()
-try {{ `$lines = quser }} catch {{}}
-`$found = `$false
-foreach (`$line in `$lines) {{
+try { `$lines = quser } catch {}
+`$loggedOff = `$false
+foreach (`$line in `$lines) {
     `$text = `$line.ToString()
-    if (`$text -match `$regex) {{
+    if (`$text -match `$regex) {
         `$sessionId = [int]`$Matches[1]
-        try {{ logoff `$sessionId {2} | Out-Null }} catch {{}}
-        `$found = `$true
-    }}
-}}
-if (`$found) {{ exit 0 }} else {{ exit 1 }}
-        )", sanitized, flag)
+        logoff `$sessionId 2>`$null
+        if (`$LASTEXITCODE -eq 0) { `$loggedOff = `$true }
+    }
+}
+if (`$loggedOff) { exit 0 } else { exit 1 }
+        )"
+        script := StrReplace(script, "__USER__", sanitized)
         exitCode := LS_RunPowerShell(script, "Logoff " . user)
         if (exitCode = 0) {
             return true
