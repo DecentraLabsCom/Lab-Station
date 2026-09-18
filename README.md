@@ -225,6 +225,7 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
 
 ### 📥 Release downloads
 
+- **`Lab-Station.zip`** – recommended package. Extracting it creates a `Lab Station` directory containing all executables and the branding image.
 - **`LabStation.exe`** – compiled Lab Station CLI/tray/wizard. Drop it in any folder together with `AppControl.exe` and run it directly (no AutoHotkey runtime required).
 - **`LabStationPanel.exe`** – compiled desktop control-panel launcher.
 - **`AppControl.exe`** – standalone controller binary for setups that only need the RDP-aware launcher (also used by Lab Station under the hood).
@@ -234,11 +235,10 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
 
 ### 🔧 Installation and Use
 
-#### **Option 1: Download the executables**
+#### **Option 1: Download the release package**
 
-1. Create a folder (e.g., `C:\LabStation`).
-2. Download `LabStation.exe`, `LabStationPanel.exe`, `AppControl.exe` **and** `WindowSpy.exe` from the latest release and place all four files inside that folder.
-3. Run Lab Station directly:
+1. Download `Lab-Station.zip` from the latest release and extract it. The archive creates a `Lab Station` directory containing `LabStation.exe`, `LabStationPanel.exe`, `AppControl.exe`, and `WindowSpy.exe`.
+2. Run Lab Station directly from that directory:
 
   ```powershell
   .\LabStation.exe setup
@@ -247,7 +247,10 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
   .\LabStation.exe tray
   ```
 
-4. Lab Station will call the `AppControl.exe` that lives in the same folder whenever it needs to launch/configure the controller.
+3. Lab Station will call the `AppControl.exe` that lives in the same folder whenever it needs to launch/configure the controller.
+
+The individual executable assets remain available when a single binary needs to
+be replaced manually.
 
 #### **FMU Executor sidecar**
 
