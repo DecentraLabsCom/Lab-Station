@@ -72,8 +72,10 @@ try {
     AssertContains("wake", wakeSource, "-RegistryKeyword", &errors)
     AssertContains("wake", wakeSource, "wake_armed", &errors)
     AssertContains("wake", wakeSource, "Get-WakeAdvancedState", &errors)
-    AssertContains("wake", wakeSource, "`$device.Enable = `$true", &errors)
-    AssertNotContains("wake", wakeSource, "`$device.Enable = `$false", &errors)
+    wakeDeviceEnableTrue := Chr(96) . Chr(36) . "device.Enable = " . Chr(96) . Chr(36) . "true"
+    wakeDeviceEnableFalse := Chr(96) . Chr(36) . "device.Enable = " . Chr(96) . Chr(36) . "false"
+    AssertContains("wake", wakeSource, wakeDeviceEnableTrue, &errors)
+    AssertNotContains("wake", wakeSource, wakeDeviceEnableFalse, &errors)
     AssertContains("wake", wakeSource, "LS_RunPowerShellCapture", &errors)
 } catch as e {
     errors.Push("status: contract threw - " . e.Message)
