@@ -83,6 +83,10 @@ jobs:
           $ahkExe = (Resolve-Path 'AutoHotkey/AutoHotkey64.exe').Path
           "AHK_EXE=$ahkExe" | Out-File -FilePath $Env:GITHUB_ENV -Append
 
+      - name: Test release package layout
+        shell: powershell
+        run: .\scripts\test-release-package.ps1
+
       - name: Run LabStation wizard callback tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\WizardActionCallbacksTests.ahk
