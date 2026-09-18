@@ -108,7 +108,7 @@ profile keeps the station usable by local users as well.
 | `setup` | Guided wizard that chains RemoteApp policy, Wake-on-LAN tweaks, WinRM setup, autostart registration, diagnostics export, and service prompt. |
 | `remoteapp` | Sets `fAllowUnlistedRemotePrograms` and related HKLM keys for RemoteApp. |
 | `wol` | Configures adapters and power plan settings required for Wake-on-LAN. Follow the [Windows 10/11 desktop NIC checklist](docs/bios-wol-playbook.md). |
-| `winrm [configure\|status]` | Enables WinRM HTTPS on port 5986, exports the server certificate, opens the scoped HTTPS firewall rule, creates/updates `.\LabGatewaySvc`, and reports readiness. Trust the exported certificate on Lab Gateway and save the generated credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials. |
+| `winrm [configure\|status]` | Enables WinRM HTTPS on port 5986, exports the public server certificate, opens the scoped HTTPS firewall rule, creates/updates `.\LabGatewaySvc`, and reports readiness. Save the generated credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials, then manage the certificate from the host card's `WinRM TLS trust` control. |
 | `autostart [path]` | Registers AppControl (EXE or AHK) under HKLM\Run; optional custom path overrides bundle location. |
 | `launch-app-control [...]` | Pass-through launcher that proxies CLI args to the bundled controller. |
 | `account [create\|autologon\|lockdown\|setup] [user] [password]` | Creates the lab account, refreshes autologon (DefaultUserName/Password), and `lockdown` now enforces `SeDenyInteractiveLogonRight` for every other local user. |
@@ -126,6 +126,40 @@ profile keeps the station usable by local users as well.
 | `gui` | Launches the Lab Station desktop control panel. |
 | `service install\|start\|stop\|status\|uninstall` | Manages the Scheduled Task (`LabStation\BackgroundService`) that runs the `service-loop`. |
 | `service-loop` | Internal command invoked by the service to refresh diagnostics every minute. |
+
+### WinRM certificate handoff to Lab Gateway
+
+Lab Station owns the HTTPS listener and exports its public certificate. Lab
+Gateway owns the trust decision. The current flow is per host and does not
+install the certificate as a global Windows or container trust override:
+
+1. Run `LabStation.exe winrm configure` as an administrator.
+2. Select the public export at
+   `C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer`.
+3. In Lab Manager -> `Lab Station Ops`, save the WinRM account separately in
+   `WinRM Credentials`.
+4. Open the host card's `WinRM TLS trust`, preview the certificate, compare its
+   SHA-1 with the thumbprint printed by Lab Station, confirm the SHA-256
+   fingerprint, and save it.
+5. Use `Verify connection` and confirm a recent heartbeat.
+
+The managed certificate is stored by ops-worker in the Gateway's persistent
+`ops-data` mount at:
+
+```text
+ops-data/winrm-certificates/<lower-case-winrm-trust-ref>/server.cer
+```
+
+ops-worker materializes `server.pem` next to the public certificate for the
+validated host session and records metadata in `metadata.json`. If the host
+does not define `winrm_trust_ref`, the Gateway derives it from the host name.
+For bootstrap or recovery, copy only `server.cer` to that directory and call
+the protected `POST /ops/api/hosts/reload` endpoint or restart ops-worker.
+Never copy a private key, disable TLS verification, or use `TrustedHosts` as a
+substitute for certificate validation. `winrm configure` remains independent
+of Gateway availability; there is no automatic `winrm enroll` command in the
+current contract. See the [WinRM command contract](docs/winrm-command-contract.md)
+for the complete API and recovery procedure.
 
 > For hybrid (local + remote) classrooms see `docs/hybrid-operations.md`, which distinguishes the hybrid profile (no LABUSER autologon) from the dedicated-server profile and explains the grace windows enforced by `session guard`. Lab Gateway can toggle `labstation/data/local-mode.flag` to signal "local-use only" windows; the Gateway is responsible for blocking or confirming remote reservations.
 
@@ -162,7 +196,7 @@ reboot-timeout=20
   ```
 - Processed instructions are archived to `labstation/data/commands/processed/` so the backend can audit what happened; results stay in `.../results/` for collection.
 
-This queue gives Lab Gateway two integration choices: fire `LabStation.exe ...` directly over WinRM for synchronous operations, or drop a command file (via SMB/WinRM copy) and let the service pick it up asynchronously. The setup wizard and `winrm configure` command prepare the station-side WinRM listener and print the generated `LabGatewaySvc` credentials. Save those credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials for the host address.
+This queue gives Lab Gateway two integration choices: fire `LabStation.exe ...` directly over WinRM for synchronous operations, or drop a command file (via SMB/WinRM copy) and let the service pick it up asynchronously. The setup wizard and `winrm configure` command prepare the station-side WinRM listener, export `C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer`, and print the generated `LabGatewaySvc` credentials. Save the credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials for the host, then save the certificate through that host's `WinRM TLS trust` control.
 
 For hardware-specific BIOS guidance and WoL validation steps, see `docs/bios-wol-playbook.md`.
 
