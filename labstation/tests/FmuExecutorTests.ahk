@@ -23,6 +23,7 @@ class RecordingFmuExecutor extends LS_FmuExecutor {
     static _consecutiveFailures := 0
     static _maxFailures := 3
     static _lastHealthResult := Map()
+    static _lastHealthOk := false
     static available := false
     static tokenReady := false
     static processRunning := false
@@ -65,6 +66,7 @@ class RecordingFmuExecutor extends LS_FmuExecutor {
         this._consecutiveFailures := 0
         this._maxFailures := 3
         this._lastHealthResult := Map()
+        this._lastHealthOk := false
     }
 
     static IsAvailable() {
@@ -162,6 +164,8 @@ RunFmuExecutorTests() {
         TestCleanTempStateUsesTheExecutorTempFolder()
         TestTerminateAllSessionsRestartsRunningExecutor()
         TestHealthSummaryMirrorsOperationalState()
+        TestHealthSummaryFallsBackToSidecarHealth()
+        TestHealthSummaryRejectsUnhealthyLiveProcess()
     } catch as err {
         Fail("Unhandled FMU executor test exception: " . err.Message)
     }
@@ -309,7 +313,7 @@ TestHealthCheckParsesSuccessAndTracksFailures() {
     RecordingFmuExecutor.Reset()
     RecordingFmuExecutor.captureResult := Map(
         "exitCode", 0,
-        "stdout", "{" . Chr(34) . "status" . Chr(34) . ":" . Chr(34) . "ok" . Chr(34) . "," . Chr(34) . "fmuCount" . Chr(34) . ":2}",
+        "stdout", "{" . Chr(34) . "status" . Chr(34) . ":" . Chr(34) . "UP" . Chr(34) . "," . Chr(34) . "fmuCount" . Chr(34) . ":2}",
         "stderr", ""
     )
 
@@ -405,14 +409,44 @@ TestHealthSummaryMirrorsOperationalState() {
     RecordingFmuExecutor.tokenReady := true
     RecordingFmuExecutor.processRunning := true
     RecordingFmuExecutor._pid := 8080
-    RecordingFmuExecutor._consecutiveFailures := 2
-    RecordingFmuExecutor._lastHealthResult := Map("status", "degraded")
+    RecordingFmuExecutor._lastHealthCheck := A_TickCount
+    RecordingFmuExecutor._lastHealthOk := true
+    RecordingFmuExecutor._consecutiveFailures := 0
+    RecordingFmuExecutor._lastHealthResult := Map("status", "UP")
 
     summary := RecordingFmuExecutor.GetHealthSummary()
 
     Assert(summary["available"] && summary["running"] && summary["tokenConfigured"], "FMU health summary reports availability, process and token state")
     Assert(summary["pid"] = 8080 && summary["port"] = 18091, "FMU health summary reports PID and configured port")
-    Assert(summary["consecutiveFailures"] = 2 && summary["lastHealth"]["status"] = "degraded", "FMU health summary reports health history")
+    Assert(summary["consecutiveFailures"] = 0 && summary["lastHealth"]["status"] = "UP", "FMU health summary reports health history")
+}
+
+TestHealthSummaryFallsBackToSidecarHealth() {
+    RecordingFmuExecutor.Reset()
+    RecordingFmuExecutor.available := true
+    RecordingFmuExecutor.captureResult := Map(
+        "exitCode", 0,
+        "stdout", "{" . Chr(34) . "status" . Chr(34) . ":" . Chr(34) . "UP" . Chr(34) . "}",
+        "stderr", ""
+    )
+
+    summary := RecordingFmuExecutor.GetHealthSummary()
+
+    Assert(summary["running"], "FMU health summary detects an executor started by another process")
+    Assert(RecordingFmuExecutor.captureCalls.Length = 1, "cross-process FMU status performs a health probe")
+}
+
+TestHealthSummaryRejectsUnhealthyLiveProcess() {
+    RecordingFmuExecutor.Reset()
+    RecordingFmuExecutor.available := true
+    RecordingFmuExecutor.processRunning := true
+    RecordingFmuExecutor._pid := 8080
+    RecordingFmuExecutor.captureResult := Map("exitCode", 0, "stdout", "ERROR", "stderr", "")
+
+    summary := RecordingFmuExecutor.GetHealthSummary()
+
+    Assert(!summary["running"], "FMU health summary rejects a live process with an unhealthy endpoint")
+    Assert(RecordingFmuExecutor.captureCalls.Length = 1, "live FMU status probes the endpoint when health is unknown")
 }
 
 Assert(condition, message) {

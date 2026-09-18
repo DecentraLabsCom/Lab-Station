@@ -143,18 +143,18 @@ LS_IsHeadlessSession() {
         return cached
 
     station := DllCall("GetProcessWindowStation", "Ptr")
-    flags := Buffer(8, 0)
+    flags := Buffer(16, 0)
     required := 0
     if (station && DllCall(
         "GetUserObjectInformation",
         "Ptr", station,
-        "Int", 2,
+        "Int", 1,
         "Ptr", flags,
         "UInt", flags.Size,
         "UInt*", &required
     )) {
         ; WSF_VISIBLE is set for the interactive WinSta0 window station.
-        cached := (NumGet(flags, 0, "UInt") & 0x1) = 0
+        cached := (NumGet(flags, 8, "UInt") & 0x1) = 0
         initialized := true
         return cached
     }
@@ -216,13 +216,13 @@ NormalizePath(path) {
 }
 
 PathGet(path) {
-    return (SubStr(path, 1, 2) = "\\" ? path : FileExist(path) ? (GetFullPathName(path)) : path)
+    return (SubStr(path, 1, 2) = "\\" ? path : GetFullPathName(path))
 }
 
 GetFullPathName(path) {
     buf := Buffer(32768)
-    size := DllCall("GetFullPathName", "str", path, "UInt", buf.Size, "str", buf, "ptr", 0, "UInt")
-    if (size = 0 || size > buf.Size) {
+    size := DllCall("GetFullPathName", "Str", path, "UInt", buf.Size // 2, "Ptr", buf, "Ptr", 0, "UInt")
+    if (size = 0 || size * 2 > buf.Size) {
         return path
     }
     return StrGet(buf, size)

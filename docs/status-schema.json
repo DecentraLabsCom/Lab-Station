@@ -47,6 +47,7 @@
       "properties": {
         "available": {"type": "boolean"},
         "running": {"type": "boolean"},
+        "processRunning": {"type": "boolean"},
         "pid": {"type": "integer", "minimum": 0},
         "port": {"type": "integer", "minimum": 1, "maximum": 65535},
         "tokenConfigured": {"type": "boolean"},

@@ -71,7 +71,30 @@ CheckNoNativeProbeAbort(A_ScriptDir "\..\system\AccountManager.ahk", &errors)
 CheckNoNativeProbeAbort(A_ScriptDir "\..\system\WinRM.ahk", &errors)
 CheckNoNativeProbeAbort(A_ScriptDir "\..\diagnostics\Status.ahk", &errors)
 
+accountScript := LS_AccountManager.BuildDenyInteractiveScript("LABUSER")
+if !InStr(accountScript, 'signature="$CHICAGO$"') {
+    errors.Push("account: generated secedit INF must preserve the literal CHICAGO signature")
+}
+if !InStr(accountScript, "SeDenyInteractiveLogonRight = __DENY_SIDS__") {
+    errors.Push("account: generated secedit INF must retain its runtime SID placeholder")
+}
+if InStr(accountScript, "SeDenyInteractiveLogonRight = {0}") {
+    errors.Push("account: generated secedit INF must not use an unresolved Format placeholder")
+}
+
+sessionEntries := LS_Status.ParseSessionEntries(
+    " USUARIO              NOMBRESESION      ID  ESTADO  TIEMPO OCIOSO  INICIO`n"
+    . "LABUSER                rdp-tcp#1           7  Activo       .  8/25/2026 09:00 AM`n"
+)
+if (sessionEntries.Length != 1 || sessionEntries[1]["id"] != "7") {
+    errors.Push("status: session parser must ignore localized headers and keep numeric IDs")
+}
+
 winrmConfigureScript := LS_WinRM.BuildConfigureScript("LabGatewaySvc", "test-password")
+winrmSource := FileRead(A_ScriptDir "\..\system\WinRM.ahk", "UTF-8")
+if !InStr(winrmSource, "Test-WinRMCertificate") {
+    errors.Push("winrm: certificate reuse must validate SANs and current IP addresses")
+}
 if InStr(winrmConfigureScript, "New-SelfSignedCertificate -DnsName ($dnsNames | Select-Object -Unique)") {
     errors.Push("winrm: certificate generation must not encode IP addresses as DNS names")
 }
@@ -139,6 +162,38 @@ if (!inactiveNic["wolReady"]) {
     errors.Push("energy: inactive NIC must not make station readiness fail")
 }
 
+enabledPowerManagementNic := Map(
+    "wakeOnMagicPacket", "Enabled",
+    "wakeOnPattern", "Disabled",
+    "allowTurnOff", "Enabled",
+    "advancedWakeOnMagicPacketRegistryValue", "",
+    "advancedWakeOnPatternRegistryValue", "",
+    "advancedWakeOnMagicPacket", "",
+    "advancedWakeOnPattern", "",
+    "status", "Up",
+    "isOperational", true
+)
+LS_EnergyAudit.DecorateNicCompliance(enabledPowerManagementNic)
+if (!enabledPowerManagementNic["wolReady"] || enabledPowerManagementNic["complianceIssues"].Length != 0) {
+    errors.Push("energy: enabled adapter power management must be WoL compliant")
+}
+
+disabledPowerManagementNic := Map(
+    "wakeOnMagicPacket", "Enabled",
+    "wakeOnPattern", "Disabled",
+    "allowTurnOff", "Disabled",
+    "advancedWakeOnMagicPacketRegistryValue", "",
+    "advancedWakeOnPatternRegistryValue", "",
+    "advancedWakeOnMagicPacket", "",
+    "advancedWakeOnPattern", "",
+    "status", "Up",
+    "isOperational", true
+)
+LS_EnergyAudit.DecorateNicCompliance(disabledPowerManagementNic)
+if (disabledPowerManagementNic["wolReady"] || !InStr(disabledPowerManagementNic["complianceIssues"][1], "Allow computer to turn off")) {
+    errors.Push("energy: disabled adapter power management must remain non-compliant")
+}
+
 unsupportedNic := Map(
     "wakeOnMagicPacket", "Unsupported",
     "wakeOnPattern", "Unsupported",
@@ -158,7 +213,7 @@ if (unsupportedNic["wolReady"]) {
 registryFallbackNic := Map(
     "wakeOnMagicPacket", "Unsupported",
     "wakeOnPattern", "Unsupported",
-    "allowTurnOff", "Disabled",
+    "allowTurnOff", "Enabled",
     "advancedWakeOnMagicPacketRegistryValue", "1",
     "advancedWakeOnPatternRegistryValue", "0",
     "advancedWakeOnMagicPacket", "",

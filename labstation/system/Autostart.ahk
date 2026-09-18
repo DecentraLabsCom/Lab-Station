@@ -47,6 +47,9 @@ class LS_Autostart {
             }
         }
 
+        if (SubStr(appPath, 1, 1) != '"' && InStr(appPath, " ")) {
+            appPath := Format('"{1}"', appPath)
+        }
         command := appPath
         if (onlyUser && onlyUser != "") {
             command := Format('cmd /c if /i "%USERNAME%"=="{1}" ( {2} )', onlyUser, command)
