@@ -42,7 +42,9 @@ In **Power Management**:
 
 - Enable **Allow this device to wake the computer**.
 - If available, enable **Only allow a magic packet to wake the computer**.
-- Disable **Allow the computer to turn off this device to save power**.
+- Enable **Allow the computer to turn off this device to save power**. This
+  keeps Windows power management active so the NIC can expose and honor the
+  wake controls below.
 
 In **Advanced** (the exact names depend on the NIC driver):
 
@@ -74,7 +76,7 @@ For the active adapter, the expected power-management values are:
 ```text
 WakeOnMagicPacket              : Enabled
 WakeOnPattern                  : Disabled
-AllowComputerToTurnOffDevice  : Disabled
+AllowComputerToTurnOffDevice  : Enabled
 ```
 
 The adapter's **interface description** (which may be different from the
@@ -173,7 +175,7 @@ the diagnostic.
   Get-NetAdapterPowerManagement -Name "Intel*" | Format-List
   .\LabStation.exe energy audit
   ```
-- Review audit recommendations; all HP adapters should show `WakeOnMagicPacket = Enabled` and `AllowComputerToTurnOffDevice = Disabled`.
+- Review audit recommendations; all HP adapters should show `WakeOnMagicPacket = Enabled` and `AllowComputerToTurnOffDevice = Enabled`.
 
 ## 5. Lenovo ThinkStation/ThinkCentre (P340, M920)
 

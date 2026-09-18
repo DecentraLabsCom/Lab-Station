@@ -162,6 +162,38 @@ if (!inactiveNic["wolReady"]) {
     errors.Push("energy: inactive NIC must not make station readiness fail")
 }
 
+enabledPowerManagementNic := Map(
+    "wakeOnMagicPacket", "Enabled",
+    "wakeOnPattern", "Disabled",
+    "allowTurnOff", "Enabled",
+    "advancedWakeOnMagicPacketRegistryValue", "",
+    "advancedWakeOnPatternRegistryValue", "",
+    "advancedWakeOnMagicPacket", "",
+    "advancedWakeOnPattern", "",
+    "status", "Up",
+    "isOperational", true
+)
+LS_EnergyAudit.DecorateNicCompliance(enabledPowerManagementNic)
+if (!enabledPowerManagementNic["wolReady"] || enabledPowerManagementNic["complianceIssues"].Length != 0) {
+    errors.Push("energy: enabled adapter power management must be WoL compliant")
+}
+
+disabledPowerManagementNic := Map(
+    "wakeOnMagicPacket", "Enabled",
+    "wakeOnPattern", "Disabled",
+    "allowTurnOff", "Disabled",
+    "advancedWakeOnMagicPacketRegistryValue", "",
+    "advancedWakeOnPatternRegistryValue", "",
+    "advancedWakeOnMagicPacket", "",
+    "advancedWakeOnPattern", "",
+    "status", "Up",
+    "isOperational", true
+)
+LS_EnergyAudit.DecorateNicCompliance(disabledPowerManagementNic)
+if (disabledPowerManagementNic["wolReady"] || !InStr(disabledPowerManagementNic["complianceIssues"][1], "Allow computer to turn off")) {
+    errors.Push("energy: disabled adapter power management must remain non-compliant")
+}
+
 unsupportedNic := Map(
     "wakeOnMagicPacket", "Unsupported",
     "wakeOnPattern", "Unsupported",
@@ -181,7 +213,7 @@ if (unsupportedNic["wolReady"]) {
 registryFallbackNic := Map(
     "wakeOnMagicPacket", "Unsupported",
     "wakeOnPattern", "Unsupported",
-    "allowTurnOff", "Disabled",
+    "allowTurnOff", "Enabled",
     "advancedWakeOnMagicPacketRegistryValue", "1",
     "advancedWakeOnPatternRegistryValue", "0",
     "advancedWakeOnMagicPacket", "",
