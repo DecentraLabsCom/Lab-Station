@@ -6,9 +6,9 @@
 
 ;@Ahk2Exe-SetMainIcon img\favicon.ico
 ;@Ahk2Exe-SetName LabStationPanel
-;@Ahk2Exe-SetVersion 3.5.0
-;@Ahk2Exe-SetFileVersion 3.5.0
-;@Ahk2Exe-SetProductVersion 3.5.0
+;@Ahk2Exe-SetVersion 3.5.1
+;@Ahk2Exe-SetFileVersion 3.5.1
+;@Ahk2Exe-SetProductVersion 3.5.1
 
 ; Embed logo for compiled builds so the GUI can find it.
 TryExtractLogo() {

@@ -124,7 +124,7 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.5.0")
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.5.1")
     myGui.RefreshButton.Focus()
 
     myGui.OnEvent("Close", LS_GuiClose_Handler)

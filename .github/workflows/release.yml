@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  AHK_VERSION: "2.0.27"
+  AHK_VERSION: "2.0.28"
   AHK2EXE_VERSION: "Ahk2Exe1.1.37.02a2"
 
 jobs:

@@ -10,7 +10,7 @@
 | Item | Value |
 | --- | --- |
 | Transport | WinRM over HTTPS (`https://<hostname>:5986/wsman`) inside the managed/private network, using NTLM/Negotiate. Plain HTTP/5985 is deliberately disabled. |
-| Listener config | `LabStation.exe setup` or `LabStation.exe winrm configure` creates/reuses a server-auth certificate, exports it to `C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer`, configures the HTTPS listener, disables `AllowUnencrypted`, enables Negotiate, and opens only the HTTPS firewall rule. |
+| Listener config | `LabStation.exe setup` or `LabStation.exe winrm configure` creates/reuses a server-auth certificate, exports it to `C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer`, configures the HTTPS listener, disables `AllowUnencrypted`, enables Negotiate, and opens only the HTTPS firewall rule. The certificate contains station IPv4 addresses as typed `IPAddress` SAN entries, not DNS names. |
 | Client trust | Import the exported `.cer` into the Lab Gateway host's trusted root/certificate store (or use a certificate issued by the organisation's trusted CA). The Gateway validates the server certificate; `TrustedHosts` is not a substitute for certificate trust. |
 | Rate limits | Default WinRM quotas (150 concurrent operations) are sufficient; stick to a max of 2 parallel commands per host. |
 | Logging | All Lab Station actions continue to log to `C:\LabStation\labstation\labstation.log`; service data artifacts (including `heartbeat.json` and `status.json`) live under `C:\LabStation\labstation\data\...`; WinRM transcripts stay on the gateway. |
