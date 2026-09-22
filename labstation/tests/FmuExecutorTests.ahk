@@ -143,6 +143,25 @@ class RecordingPythonFmuExecutor extends LS_FmuExecutor {
     }
 }
 
+class ProcessProbeFmuExecutor extends LS_FmuExecutor {
+    static captureResult := Map("exitCode", 0, "stdout", "1", "stderr", "")
+    static captureCalls := []
+
+    static Reset() {
+        this.captureResult := Map("exitCode", 0, "stdout", "1", "stderr", "")
+        this.captureCalls := []
+    }
+
+    static RunPowerShellCapture(script, description, timeoutMs := 15000) {
+        this.captureCalls.Push(Map(
+            "script", script,
+            "description", description,
+            "timeoutMs", timeoutMs
+        ))
+        return this.captureResult
+    }
+}
+
 RunFmuExecutorTests() {
     global ORIGINAL_EXECUTOR_DIR, ORIGINAL_EXECUTOR_PORT, ORIGINAL_EXECUTOR_LOG
     global LAB_STATION_FMU_EXECUTOR_DIR, LAB_STATION_FMU_EXECUTOR_PORT, LAB_STATION_FMU_EXECUTOR_LOG, TEST_ROOT
@@ -155,6 +174,7 @@ RunFmuExecutorTests() {
         TestStartStopsBeforeLaunchWhenFirewallFails()
         TestStartReportsLaunchFailure()
         TestStartDoesNotDuplicateRunningExecutor()
+        TestProcessExistsBuildsRunnablePowerShell()
         TestStopIsIdempotentAndClearsPid()
         TestRestartStopsWaitsAndStarts()
         TestHealthCheckParsesSuccessAndTracksFailures()
@@ -277,6 +297,21 @@ TestStartDoesNotDuplicateRunningExecutor() {
 
     Assert(result, "FMU start is idempotent when the child is already running")
     Assert(RecordingFmuExecutor.launchCalls.Length = 0, "FMU start does not launch a duplicate child")
+}
+
+TestProcessExistsBuildsRunnablePowerShell() {
+    ProcessProbeFmuExecutor.Reset()
+
+    Assert(ProcessProbeFmuExecutor._ProcessExists(4242), "FMU process probe accepts a successful PowerShell marker")
+    Assert(ProcessProbeFmuExecutor.captureCalls.Length = 1, "FMU process probe invokes PowerShell once")
+
+    script := ProcessProbeFmuExecutor.captureCalls[1]["script"]
+    Assert(InStr(script, "try {") > 0 && InStr(script, "} catch {") > 0, "FMU process probe generates single-brace PowerShell blocks")
+    Assert(InStr(script, "{{") = 0 && InStr(script, "}}") = 0, "FMU process probe does not leak Format brace escapes")
+    Assert(InStr(script, "Get-Process -Id 4242") > 0, "FMU process probe substitutes the PID")
+
+    ProcessProbeFmuExecutor.captureResult := Map("exitCode", 0, "stdout", "0", "stderr", "")
+    Assert(!ProcessProbeFmuExecutor._ProcessExists(4242), "FMU process probe rejects a negative PowerShell marker")
 }
 
 TestStopIsIdempotentAndClearsPid() {

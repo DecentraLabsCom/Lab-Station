@@ -101,6 +101,12 @@ if InStr(winrmConfigureScript, "New-SelfSignedCertificate -DnsName ($dnsNames | 
 if !InStr(winrmConfigureScript, "2.5.29.17={text}") || !InStr(winrmConfigureScript, "IPAddress=") {
     errors.Push("winrm: certificate generation must include typed IP SAN entries")
 }
+if !InStr(winrmConfigureScript, "$certParams = @{") || !InStr(winrmConfigureScript, "New-SelfSignedCertificate @certParams") {
+    errors.Push("winrm: certificate generation must use splatted parameters")
+}
+if InStr(winrmConfigureScript, "New-SelfSignedCertificate " . Chr(96)) {
+    errors.Push("winrm: certificate generation must not depend on backtick continuations")
+}
 
 guiSource := FileRead(A_ScriptDir "\..\ui\MainGui.ahk", "UTF-8")
 if InStr(guiSource, "Ready: ") || InStr(guiSource, "Needs attention") {

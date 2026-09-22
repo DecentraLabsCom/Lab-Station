@@ -259,15 +259,16 @@ if (Test-Path `$Path) {{
     }
 
     static _ProcessExists(pid) {
-        script := Format("
+        script := "
         (
-try {{
-    $p = Get-Process -Id {1} -ErrorAction Stop
+try {
+    $p = Get-Process -Id __PID__ -ErrorAction Stop
     Write-Output '1'
-}} catch {{
+} catch {
     Write-Output '0'
-}}
-        )", pid)
+}
+        )"
+        script := StrReplace(script, "__PID__", pid)
         capture := this.RunPowerShellCapture(script, "Check PID " . pid)
         return InStr(Trim(capture["stdout"]), "1") > 0
     }
