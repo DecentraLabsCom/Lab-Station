@@ -61,13 +61,15 @@ foreach ($test in $tests) {
 
 ## Release contents and sidecars
 
-The release workflow publishes `LabStation.exe`, `LabStationPanel.exe`,
-`AppControl.exe`, `WindowSpy.exe`, and the branding image. The Python FMU
-Executor is intentionally a separately deployed internal sidecar: copy the
-`fmu-executor/` directory, install its requirements, configure the machine
-environment variables, and start it through the Lab Station supervisor. See
-[`FMU Executor`](../fmu-executor/README.md) for its port, token, API, and
-provisioning rules.
+The release workflow publishes the individual `LabStation.exe`,
+`LabStationPanel.exe`, `AppControl.exe`, and `WindowSpy.exe` assets, plus a
+`Lab-Station.zip` package. Extracting that package creates a `Lab Station/`
+directory containing all four executables and the branding image, ready to be
+copied to a station as one unit. The Python FMU Executor is intentionally a
+separately deployed internal sidecar: copy the `fmu-executor/` directory,
+install its requirements, configure the machine environment variables, and
+start it through the Lab Station supervisor. See [`FMU Executor`](../fmu-executor/README.md)
+for its port, token, API, and provisioning rules.
 
 Never commit or pass passwords and internal tokens through source files,
 public URLs, shell history, or unprotected command arguments. Prefer the setup

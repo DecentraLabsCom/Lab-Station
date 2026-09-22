@@ -54,11 +54,15 @@ The status document can also include the following diagnostic blocks:
 | `biosChecklist` | BIOS/UEFI Wake-on-LAN checks shown to the operator. |
 | `policy` | Autologon, Remote Desktop Users and interactive-logon policy state. |
 | `sessions` | Current sessions and lab-user state. |
-| `fmuExecutor` | FMU Executor availability, health and configured port. Secrets are represented only by boolean state. |
+| `fmuExecutor` | FMU Executor availability, endpoint health, local process state and configured port. Secrets are represented only by boolean state. |
 | `lastForcedLogoff` | The latest forced-logoff record, when one exists. |
 
 Unknown fields are allowed so that diagnostics can grow without invalidating
 consumers that only use the stable fields above.
+
+For `fmuExecutor`, `running` means the sidecar health endpoint returned
+`status=UP`; `processRunning` only describes the locally supervised process
+when Lab Station has a PID for it.
 
 ## Stable nested fields
 

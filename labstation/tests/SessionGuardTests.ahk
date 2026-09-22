@@ -166,7 +166,7 @@ TestSessionQueryFailureIsReported() {
 }
 
 TestSessionOutputParsing() {
-    output := " USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME`n"
+    output := " USUARIO              NOMBRESESION      ID  ESTADO  TIEMPO OCIOSO  INICIO`n"
         . ">DOMAIN\\Teacher         console             2  Active      .  8/25/2026 10:00 AM`n"
         . "LABUSER                rdp-tcp#1           3  Disc         5  8/25/2026 09:00 AM`n"
         . "malformed line`n"

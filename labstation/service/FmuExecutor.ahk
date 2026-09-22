@@ -39,6 +39,7 @@ class LS_FmuExecutor {
     static _consecutiveFailures := 0
     static _maxFailures := 3
     static _lastHealthResult := Map()
+    static _lastHealthOk := false
 
     ; ── lifecycle ────────────────────────────────────────────
 
@@ -87,6 +88,9 @@ class LS_FmuExecutor {
             pid := this.LaunchProcess(command, LAB_STATION_FMU_EXECUTOR_DIR, "Hide")
             this._pid := pid
             this._consecutiveFailures := 0
+            this._lastHealthCheck := 0
+            this._lastHealthOk := false
+            this._lastHealthResult := Map()
             LS_LogInfo(Format("FMU executor: started (PID={1})", pid))
             return true
         } catch as e {
@@ -96,8 +100,12 @@ class LS_FmuExecutor {
     }
 
     static Stop() {
-        if (this._pid = 0)
+        if (this._pid = 0) {
+            this._lastHealthCheck := 0
+            this._lastHealthOk := false
+            this._lastHealthResult := Map()
             return true
+        }
         LS_LogInfo(Format("FMU executor: stopping (PID={1})", this._pid))
         try {
             this.StopProcess(this._pid)
@@ -105,6 +113,9 @@ class LS_FmuExecutor {
         }
         this._pid := 0
         this._consecutiveFailures := 0
+        this._lastHealthCheck := 0
+        this._lastHealthOk := false
+        this._lastHealthResult := Map()
         return true
     }
 
@@ -127,29 +138,40 @@ New-NetFirewallRule -Name 'LabStation-FMU-Executor' -DisplayName 'Lab Station FM
     ; ── health probing ──────────────────────────────────────
 
     static CheckHealth() {
+        this._lastHealthCheck := A_TickCount
         url := Format("http://127.0.0.1:{1}/internal/health", LAB_STATION_FMU_EXECUTOR_PORT)
-        script := Format("
+        script := "
         (
-try {{
-    $r = Invoke-RestMethod -Uri '{1}' -TimeoutSec 5 -ErrorAction Stop
-    $r | ConvertTo-Json -Compress
-}} catch {{
+try {
+    `$r = Invoke-RestMethod -Uri '__URL__' -TimeoutSec 5 -ErrorAction Stop
+    `$r | ConvertTo-Json -Compress
+} catch {
     Write-Output 'ERROR'
-}}
-        )", url)
+}
+        )"
+        script := StrReplace(script, "__URL__", url)
         capture := this.RunPowerShellCapture(script, "FMU executor health check")
         output := Trim(capture["stdout"])
         if (output = "ERROR" || output = "" || capture["exitCode"] != 0) {
+            this._lastHealthOk := false
             this._consecutiveFailures += 1
             this._lastHealthResult := Map("status", "unreachable", "failures", this._consecutiveFailures)
             return false
         }
         try {
             parsed := LS_ParseJson(output)
+            if (!parsed.Has("status") || StrUpper(Trim(parsed["status"])) != "UP") {
+                this._lastHealthOk := false
+                this._consecutiveFailures += 1
+                this._lastHealthResult := Map("status", "unhealthy", "failures", this._consecutiveFailures)
+                return false
+            }
             this._consecutiveFailures := 0
+            this._lastHealthOk := true
             this._lastHealthResult := parsed
             return true
         } catch {
+            this._lastHealthOk := false
             this._consecutiveFailures += 1
             this._lastHealthResult := Map("status", "parse-error", "failures", this._consecutiveFailures)
             return false
@@ -158,8 +180,12 @@ try {{
 
     static GetHealthSummary() {
         summary := Map()
-        summary["available"] := this.IsAvailable()
-        summary["running"] := this.IsRunning()
+        available := this.IsAvailable()
+        if (available && (this._lastHealthCheck = 0 || A_TickCount - this._lastHealthCheck >= this._healthInterval))
+            this.CheckHealth()
+        summary["available"] := available
+        summary["running"] := available && this._lastHealthOk
+        summary["processRunning"] := this.IsRunning()
         summary["pid"] := this._pid
         summary["port"] := LAB_STATION_FMU_EXECUTOR_PORT
         summary["tokenConfigured"] := this.TokenConfigured()
@@ -233,15 +259,16 @@ if (Test-Path `$Path) {{
     }
 
     static _ProcessExists(pid) {
-        script := Format("
+        script := "
         (
-try {{
-    $p = Get-Process -Id {1} -ErrorAction Stop
+try {
+    $p = Get-Process -Id __PID__ -ErrorAction Stop
     Write-Output '1'
-}} catch {{
+} catch {
     Write-Output '0'
-}}
-        )", pid)
+}
+        )"
+        script := StrReplace(script, "__PID__", pid)
         capture := this.RunPowerShellCapture(script, "Check PID " . pid)
         return InStr(Trim(capture["stdout"]), "1") > 0
     }

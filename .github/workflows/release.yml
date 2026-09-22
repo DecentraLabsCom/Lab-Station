@@ -499,6 +499,13 @@ jobs:
             Write-Host "$name signed: $($signature.Status)"
           }
 
+      - name: Create Lab Station release package
+        shell: powershell
+        run: |
+          .\scripts\package-release.ps1 `
+            -DistPath (Join-Path $PWD 'dist') `
+            -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip')
+
       - name: Upload AppControl artifact
         uses: actions/upload-artifact@v7
         with:
@@ -529,10 +536,17 @@ jobs:
           name: WindowSpy
           path: dist/WindowSpy.exe
 
+      - name: Upload Lab Station package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Lab-Station-package
+          path: dist/Lab-Station.zip
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
+            dist/Lab-Station.zip
             dist/AppControl.exe
             dist/LabStation.exe
             dist/LabStationPanel.exe

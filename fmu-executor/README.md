@@ -16,6 +16,23 @@ station service; expose the configured port only to the Lab Gateway network and
 configure the same non-empty `FMU_INTERNAL_TOKEN` in the Station process
 environment and Gateway's `FMU_STATION_INTERNAL_TOKEN`.
 
+When Lab Station starts the sidecar through `LabStation\BackgroundService`,
+Windows Task Scheduler runs that task as `SYSTEM`. A per-user Python install or
+user-scoped `pip install` is not visible to that account. Install the
+requirements into a machine-wide Python environment (or a virtual environment
+under the Lab Station installation directory) and make sure the interpreter and
+packages are readable by `SYSTEM`. Verify the installation in a SYSTEM shell
+before starting the task, for example:
+
+```powershell
+psexec -accepteula -s -i powershell.exe
+python -m pip install -r C:\LabStation\fmu-executor\requirements.txt
+python -c "import uvicorn"
+```
+
+The Python interpreter used by the task must resolve the same environment; do
+not rely on packages installed only for the interactive administrator account.
+
 The same integration is visible from the Lab Station **Connectors** panel,
 which reports the FMU endpoint, local model directory, port, token status, and
 the Gateway environment expected for station mode:

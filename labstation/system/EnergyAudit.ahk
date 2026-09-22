@@ -211,10 +211,8 @@ class LS_EnergyAudit {
             issues.Push("Wake on Magic Packet disabled or unavailable")
         if (patternState != "disabled")
             issues.Push("Wake on Pattern enabled or unavailable")
-        if (allowState = "enabled")
-            issues.Push("Allow computer to turn off is enabled")
-        else if (allowState = "unknown")
-            issues.Push("Allow computer to turn off could not be verified")
+        if (allowState != "enabled")
+            issues.Push("Allow computer to turn off is disabled or unavailable")
         entry["complianceIssues"] := issues
         entry["wolConfigReady"] := issues.Length = 0
         ; Disconnected physical adapters are retained in diagnostics, but do
@@ -286,7 +284,7 @@ class LS_EnergyAudit {
             recs.Push("No wake-armed devices detected. Re-run LabStation.exe wol or review BIOS settings.")
         for nic in data["nicPower"] {
             if (!nic["wolReady"]) {
-                recs.Push("Enable WakeOnMagicPacket and disable 'Allow computer to turn off this device' for " . nic["name"] . ".")
+                recs.Push("Enable WakeOnMagicPacket and allow the computer to turn off this device for " . nic["name"] . ".")
             }
         }
         return recs
@@ -316,7 +314,7 @@ class LS_EnergyAudit {
     static ParseLines(text) {
         items := []
         for line in StrSplit(Trim(text), "`n") {
-            trimmed := Trim(line)
+            trimmed := Trim(line, " `t`r")
             if (trimmed != "")
                 items.Push(trimmed)
         }
