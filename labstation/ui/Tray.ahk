@@ -14,7 +14,7 @@ LS_StartTrayUI() {
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Show status", LS_Tray_ShowStatus)
     A_TrayMenu.Add("Export report", LS_Tray_ExportStatus)
-    A_TrayMenu.Add("Run wizard", LS_RunSetupWizard)
+    A_TrayMenu.Add("Run wizard", (*) => LS_RunSetupWizard())
     A_TrayMenu.Add("Open log", LS_Tray_OpenLog)
     A_TrayMenu.Add() ; separator
     A_TrayMenu.Add("Exit", LS_Tray_Exit)

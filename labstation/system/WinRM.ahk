@@ -323,15 +323,17 @@ $certificate = Get-ChildItem Cert:\LocalMachine\My -ErrorAction SilentlyContinue
     Sort-Object NotAfter -Descending |
     Select-Object -First 1
 if (-not $certificate) {
-    $certificate = New-SelfSignedCertificate `
-        -Subject ('CN=' + $env:COMPUTERNAME) `
-        -TextExtension @($sanExtension) `
-        -CertStoreLocation 'Cert:\LocalMachine\My' `
-        -KeyAlgorithm RSA `
-        -KeyLength 2048 `
-        -HashAlgorithm SHA256 `
-        -NotAfter (Get-Date).AddYears(2) `
-        -FriendlyName 'DecentraLabs Lab Station WinRM'
+$certParams = @{
+        Subject = ('CN=' + $env:COMPUTERNAME)
+        TextExtension = @($sanExtension)
+        CertStoreLocation = 'Cert:\LocalMachine\My'
+        KeyAlgorithm = 'RSA'
+        KeyLength = 2048
+        HashAlgorithm = 'SHA256'
+        NotAfter = (Get-Date).AddYears(2)
+        FriendlyName = 'DecentraLabs Lab Station WinRM'
+    }
+    $certificate = New-SelfSignedCertificate @certParams
 }
 if (-not $certificate -or -not $certificate.Thumbprint) {
     throw 'Unable to create or locate a WinRM HTTPS certificate'
