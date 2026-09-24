@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.5.2] - 2026-09-24
+
+### Added
+- Added cooperative AppControl close coordination for `prepare-session` and
+  `release-session`, including presence, request, result, timeout, and stale
+  marker handling.
+
+### Changed
+- Reservation cleanup now asks the interactive controller to close the
+  configured application normally instead of force-killing AppControl.
+- Extended station status, heartbeat, diagnostics, and test coverage for the
+  current Lab Gateway operations contract.
+
 ## [3.5.1] - 2026-09-11
 
 ### Fixed
