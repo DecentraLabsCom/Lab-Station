@@ -11,9 +11,15 @@ Lab Station exposes two related JSON documents with the same
 
 The status document contains the station profile, RemoteApp and WinRM state,
 autostart, Wake-on-LAN and power compliance, sessions, FMU Executor health,
-the `summary.ready` verdict, operation timestamps, `localModeEnabled`, and the
-latest `lastForcedLogoff`. The heartbeat adds `host` and application `version`
-for file-drop consumers.
+the complete `summary.ready` verdict, capability-specific `readiness`,
+operation timestamps, `localModeEnabled`, and the latest `lastForcedLogoff`.
+The heartbeat adds `host` and application `version` for file-drop consumers.
+
+`readiness.physicalLab` describes whether the station can serve a physical
+laboratory. `readiness.fmu` describes whether the optional FMU Executor is
+available and healthy. A missing or unhealthy FMU Executor can therefore leave
+the physical-lab capability ready while keeping the FMU capability unready;
+consumers should select the capability that matches their resource type.
 
 Use the Markdown schema guide for the field contract and the machine-readable
 schemas when validating ingestion:

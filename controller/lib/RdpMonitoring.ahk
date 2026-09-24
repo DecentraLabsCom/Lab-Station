@@ -176,6 +176,7 @@ CheckSessionEvents(*) {
             Log("NEW EVENT DETECTED! Closing due to event ID: " . evId . " (RecordId " . current . ")")
             ForceCloseWindow(target)
         }
+        ControllerClearPresence()
         ExitApp
     }
 }
@@ -206,6 +207,7 @@ OnSessionChange(wParam, lParam, msg, hwnd) {
             Log("WM_WTSSESSION_CHANGE: early close on wParam=" . wParam . " (pre-disconnect)")
             ForceCloseWindow(target)
         }
+        ControllerClearPresence()
         ExitApp
     }
 }
@@ -223,6 +225,7 @@ OnQueryEndSession(wParam, lParam, msg, hwnd) {
         Log("WM_QUERYENDSESSION received: attempting early close", "DEBUG")
         ForceCloseWindow(target)
     }
+    ControllerClearPresence()
     ExitApp
 }
 

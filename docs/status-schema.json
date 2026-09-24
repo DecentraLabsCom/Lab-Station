@@ -13,6 +13,7 @@
     "autoStartConfigured",
     "wake",
     "power",
+    "readiness",
     "summary",
     "operations",
     "localSessionActive",
@@ -56,6 +57,15 @@
       },
       "additionalProperties": true
     },
+    "readiness": {
+      "type": "object",
+      "required": ["physicalLab", "fmu"],
+      "properties": {
+        "physicalLab": {"$ref": "#/definitions/capabilityReadiness"},
+        "fmu": {"$ref": "#/definitions/capabilityReadiness"}
+      },
+      "additionalProperties": false
+    },
     "summary": {
       "type": "object",
       "required": ["state", "ready", "issues"],
@@ -73,6 +83,16 @@
   },
   "additionalProperties": true,
   "definitions": {
-    "object": {"type": "object", "additionalProperties": true}
+    "object": {"type": "object", "additionalProperties": true},
+    "capabilityReadiness": {
+      "type": "object",
+      "required": ["ready", "issues"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "ready": {"type": "boolean"},
+        "issues": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    }
   }
 }

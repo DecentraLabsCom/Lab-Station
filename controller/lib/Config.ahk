@@ -53,3 +53,29 @@ global TEST_MODE := false
 ; RDP event monitoring
 global CloseOnEventIds := [23, 24, 39, 40]
 global WTS_NOTIFICATIONS_ACTIVE := false  ; Track if WTS notifications are working
+
+; Cooperative close handshake shared with the Lab Station service. The
+; compiled controller lives at the project root; source execution lives in
+; controller/, so resolve the canonical labstation/data directory from both.
+global CONTROLLER_CLOSE_REQUEST_START_TICK := A_TickCount
+global CONTROLLER_CLOSE_REQUEST_POLL_MS := 250
+global CONTROLLER_CLOSE_REQUEST_LAST_TOKEN := ""
+global CONTROLLER_CLOSE_REQUEST_HANDLED := false
+global CONTROLLER_CLOSE_PRESENCE_TOKEN := ""
+global CONTROLLER_DATA_DIR := ControllerResolveDataDir()
+global CONTROLLER_PRESENCE_FILE := CONTROLLER_DATA_DIR "\controller-presence.txt"
+global CONTROLLER_CLOSE_REQUEST_FILE := CONTROLLER_DATA_DIR "\controller-close.request"
+global CONTROLLER_CLOSE_RESULT_FILE := CONTROLLER_DATA_DIR "\controller-close.result"
+
+ControllerResolveDataDir() {
+    candidates := [
+        A_ScriptDir "\labstation\data",
+        A_ScriptDir "\..\labstation\data",
+        A_ScriptDir "\..\data"
+    ]
+    for candidate in candidates {
+        if (DirExist(candidate))
+            return candidate
+    }
+    return candidates[2]
+}

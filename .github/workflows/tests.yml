@@ -99,6 +99,10 @@ jobs:
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\ReservationFlowTests.ahk
 
+      - name: Run LabStation controller close protocol tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\ControllerCloseRequestTests.ahk
+
       - name: Run LabStation command queue tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\CommandQueueTests.ahk

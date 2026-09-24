@@ -43,6 +43,7 @@ $tests = @(
   'labstation\tests\WizardActionCallbacksTests.ahk',
   'labstation\tests\IntegrationContractTests.ahk',
   'labstation\tests\ReservationFlowTests.ahk',
+  'labstation\tests\ControllerCloseRequestTests.ahk',
   'labstation\tests\CommandQueueTests.ahk',
   'labstation\tests\SessionGuardTests.ahk',
   'labstation\tests\RecoveryTests.ahk',

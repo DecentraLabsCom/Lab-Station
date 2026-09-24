@@ -39,6 +39,7 @@ need and tolerate additional properties.
 | `autoStartConfigured` | boolean | Whether AppControl is configured to start automatically. |
 | `wake` | object | Wake-on-LAN device and NIC diagnostics. |
 | `power` | object | Active power plan and sleep/hibernate compliance. |
+| `readiness` | object | Capability-specific readiness for `physicalLab` and `fmu`. |
 | `summary` | object | Aggregated readiness result and issue list. |
 | `operations` | object | Recent service operations and their outcomes. |
 | `localSessionActive` | boolean | Whether a local or console user other than the lab user is active. |
@@ -63,6 +64,13 @@ consumers that only use the stable fields above.
 For `fmuExecutor`, `running` means the sidecar health endpoint returned
 `status=UP`; `processRunning` only describes the locally supervised process
 when Lab Station has a PID for it.
+
+The `readiness` object separates capabilities that can be used independently:
+`readiness.physicalLab.ready` covers the station and its physical-lab access
+requirements, while `readiness.fmu.ready` also requires the optional FMU
+Executor to be configured and running. FMU diagnostics therefore do not make a
+physical laboratory unavailable. The aggregate `summary` remains the complete
+station diagnostic verdict and can still include issues for both capabilities.
 
 ## Stable nested fields
 
@@ -98,6 +106,10 @@ Gateway can determine whether the station remains safe to power down and wake.
     "activePlan": "Balanced",
     "sleepCompliant": true,
     "hibernateCompliant": true
+  },
+  "readiness": {
+    "physicalLab": { "ready": true, "issues": [] },
+    "fmu": { "available": false, "ready": false, "issues": [] }
   },
   "summary": { "state": "ready", "ready": true, "issues": [] },
   "operations": {},

@@ -514,6 +514,8 @@ CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Applica
         lastId := 0
         SetTimer(CheckSessionEvents, POLL_INTERVAL_MS)
     }
+
+    ControllerSetupCloseRequestMonitoring()
     
     Log("Dual app container initialization complete - monitoring session events", "INFO")
     

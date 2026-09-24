@@ -75,6 +75,24 @@ if (!IsSet(LAB_STATION_DATA_DIR)) {
     EnsureDir(LAB_STATION_DATA_DIR)
 }
 
+if (!IsSet(LAB_STATION_CONTROLLER_CLOSE_TIMEOUT_MS)) {
+    ; AppControl closes the configured lab application cooperatively before
+    ; release-session continues with the remaining cleanup.
+    global LAB_STATION_CONTROLLER_CLOSE_TIMEOUT_MS := 15000
+}
+
+if (!IsSet(LAB_STATION_CONTROLLER_PRESENCE_FILE)) {
+    global LAB_STATION_CONTROLLER_PRESENCE_FILE := LAB_STATION_DATA_DIR "\controller-presence.txt"
+}
+
+if (!IsSet(LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE)) {
+    global LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE := LAB_STATION_DATA_DIR "\controller-close.request"
+}
+
+if (!IsSet(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE)) {
+    global LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE := LAB_STATION_DATA_DIR "\controller-close.result"
+}
+
 if (!IsSet(LAB_STATION_STATUS_FILE)) {
     global LAB_STATION_STATUS_FILE := LAB_STATION_DATA_DIR "\status.json"
 }

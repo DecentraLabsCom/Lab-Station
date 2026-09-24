@@ -4,6 +4,7 @@
 #Include ..\lib\Config.ahk
 #Include ..\lib\Utils.ahk
 #Include ..\lib\WindowClosing.ahk
+#Include ..\lib\CloseRequest.ahk
 #Include ..\lib\RdpMonitoring.ahk
 #Include ..\lib\DualAppMode.ahk
 

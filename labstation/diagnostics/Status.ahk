@@ -30,6 +30,7 @@ class LS_Status {
         data["policy"] := this.GetPolicyInformation(data["identity"], rights)
         data["sessions"] := this.GetSessionInformation(data["identity"])
         data["fmuExecutor"] := this.GetFmuExecutorStatus()
+        data["readiness"] := this.BuildCapabilityReadiness(data)
         data["summary"] := this.BuildSummary(data)
         ops := LS_ServiceState.GetOperationsSummary()
         data["operations"] := ops
@@ -544,7 +545,7 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         return LS_FmuExecutor.GetHealthSummary()
     }
 
-    static BuildSummary(data) {
+    static CollectStationIssues(data) {
         issues := []
         profile := data.Has("stationProfile") ? data["stationProfile"] : "server"
         dedicated := profile != "hybrid"
@@ -583,6 +584,11 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("Sleep timeout is not disabled")
         if (!data["power"]["hibernateCompliant"])
             issues.Push("Hibernate timeout is not disabled")
+        return issues
+    }
+
+    static CollectFmuIssues(data) {
+        issues := []
         if (data.Has("fmuExecutor") && data["fmuExecutor"]["available"]) {
             fmu := data["fmuExecutor"]
             if (fmu.Has("tokenConfigured") && !fmu["tokenConfigured"])
@@ -590,6 +596,34 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             if (!fmu["running"])
                 issues.Push("FMU executor is not running")
         }
+        return issues
+    }
+
+    static BuildCapabilityReadiness(data) {
+        stationIssues := this.CollectStationIssues(data)
+        fmuIssues := this.CollectFmuIssues(data)
+        fmuAvailable := data.Has("fmuExecutor") && data["fmuExecutor"]["available"]
+        return Map(
+            "physicalLab", Map(
+                "ready", stationIssues.Length = 0,
+                "issues", stationIssues
+            ),
+            "fmu", Map(
+                "available", fmuAvailable,
+                "ready", fmuAvailable && fmuIssues.Length = 0,
+                "issues", fmuIssues
+            )
+        )
+    }
+
+    static BuildSummary(data) {
+        stationIssues := this.CollectStationIssues(data)
+        fmuIssues := this.CollectFmuIssues(data)
+        issues := []
+        for issue in stationIssues
+            issues.Push(issue)
+        for issue in fmuIssues
+            issues.Push(issue)
         summary := Map()
         summary["state"] := issues.Length > 0 ? "needs-action" : "ready"
         summary["ready"] := issues.Length = 0

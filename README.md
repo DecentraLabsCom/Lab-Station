@@ -117,7 +117,7 @@ profile keeps the station usable by local users as well.
 | `diagnostics [path]` | Exports diagnostics to the supplied path, or to `labstation/data/status.json` by default. |
 | `session guard [--grace=120] [--user=LABUSER]` | Warns local/console sessions, waits the grace period, forces logoff, and appends an audit entry to `data/telemetry/session-guard-events.jsonl`. |
 | `prepare-session [--user=LABUSER] [--guard-grace=90] [--no-guard]` | Runs `session guard` automatically (unless `--no-guard`), captures expulsions, and then wipes LABUSER temps/logs so a remote reservation can start pristine. |
-| `release-session [--user=LABUSER] [--reboot] [--reboot-timeout=15]` | Closes controller processes, logs off LABUSER, and optionally schedules a reboot when a reservation finishes. |
+| `release-session [--user=LABUSER] [--reboot] [--reboot-timeout=15]` | Requests AppControl to close the configured application cooperatively, logs off LABUSER, and optionally schedules a reboot when a reservation finishes. |
 | `recovery reboot-if-needed [--force] [--timeout=20]` | Evaluates RemoteApp/WoL/autostart + policy drift and only schedules a forced reboot when the host is unhealthy (or when `--force` is passed). |
 | `power shutdown [--delay=0] [--reason=text] [--no-force] [--skip-wake-check] [--repair-wake=<yes\|no>] [--require-wake]`<br>`power hibernate [...]` | Validates WoL readiness (optionally reapplying NIC settings) and schedules a graceful shutdown or hibernate so Lab Gateway can power off hosts at the end of a reservation without breaking WoL. See the [BIOS and WoL playbook](docs/bios-wol-playbook.md) for verification. |
 | `tray` | Starts the tray UI with shortcuts to logs, wizard, and manual exports. |
@@ -206,6 +206,7 @@ The same service loop now emits `labstation/data/telemetry/heartbeat.json` every
 
 - `localSessionActive`: true when another local/console user is still connected.
 - `localModeEnabled`: reflects the presence of `data/local-mode.flag` so the backend knows the lab is intentionally reserved for in-person use.
+- `readiness.physicalLab` and `readiness.fmu`: capability-specific readiness. FMU Executor issues affect only `fmu`; they do not make a physical laboratory unavailable.
 - `lastForcedLogoff`: metadata (timestamp, user, sessionId) for the most recent `session guard` eviction, sourced from `service-state.ini`.
 - `lastPowerAction`: records the last shutdown/hibernate order (mode, delay, wake readiness) so dashboards can prove who powered the host down.
 - `wake.nicPower`: per-adapter verdict showing `macAddress`, `status`, `wakeOnMagicPacket`, `allowTurnOff`, and `wolReady` so NIC misconfigurations surface in dashboards and Lab Gateway can suggest the Wake-on-LAN MAC.

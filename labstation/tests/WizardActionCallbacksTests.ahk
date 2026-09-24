@@ -252,6 +252,25 @@ if (sampleSummary["state"] != "ready" || sampleSummary["issues"].Length != 0) {
     errors.Push("status: another logged-on user must not create a needs-action issue")
 }
 
+sampleStatus["fmuExecutor"] := Map("available", true, "tokenConfigured", false, "running", false)
+sampleReadiness := LS_Status.BuildCapabilityReadiness(sampleStatus)
+if (!sampleReadiness["physicalLab"]["ready"]) {
+    errors.Push("status: FMU issues must not block physical-lab readiness")
+}
+if (sampleReadiness["fmu"]["ready"] || sampleReadiness["fmu"]["issues"].Length != 2) {
+    errors.Push("status: FMU readiness must retain its executor issues")
+}
+
+statusSource := FileRead(A_ScriptDir "\\..\\diagnostics\\Status.ahk", "UTF-8")
+if !InStr(statusSource, 'data["readiness"] := this.BuildCapabilityReadiness(data)') {
+    errors.Push("status: exported diagnostics must include capability readiness")
+}
+
+telemetrySource := FileRead(A_ScriptDir "\\..\\service\\Telemetry.ahk", "UTF-8")
+if !InStr(telemetrySource, 'payload["readiness"] := status["readiness"]') {
+    errors.Push("telemetry: heartbeat must publish capability readiness")
+}
+
 if (errors.Length > 0) {
     for _, msg in errors {
         LS_TestOutput(msg . "`n")

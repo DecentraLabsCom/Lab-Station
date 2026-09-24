@@ -12,6 +12,7 @@
     "remoteAppEnabled",
     "autoStartConfigured",
     "wake",
+    "readiness",
     "summary",
     "operations",
     "status"
@@ -24,6 +25,7 @@
     "remoteAppEnabled": {"type": "boolean"},
     "autoStartConfigured": {"type": "boolean"},
     "wake": {"type": "object", "additionalProperties": true},
+    "readiness": {"$ref": "status-schema.json#/definitions/readiness"},
     "summary": {
       "type": "object",
       "required": ["state", "ready", "issues"],

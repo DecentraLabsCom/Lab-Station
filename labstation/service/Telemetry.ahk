@@ -25,6 +25,7 @@ class LS_Telemetry {
         payload["remoteAppEnabled"] := status["remoteAppEnabled"]
         payload["autoStartConfigured"] := status["autoStartConfigured"]
         payload["wake"] := status["wake"]
+        payload["readiness"] := status["readiness"]
         payload["summary"] := status["summary"]
         payload["operations"] := operations
         payload["status"] := status

@@ -123,6 +123,10 @@ SampleStatus(operations := Map()) {
         "power", Map("sleepCompliant", true, "hibernateCompliant", true),
         "policy", Map(),
         "sessions", Map("hasOtherUsers", false),
+        "readiness", Map(
+            "physicalLab", Map("ready", true, "issues", []),
+            "fmu", Map("available", false, "ready", false, "issues", [])
+        ),
         "summary", Map("state", "ready", "ready", true, "issues", []),
         "operations", operations,
         "localSessionActive", false,

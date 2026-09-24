@@ -20,7 +20,7 @@ This document summarizes what to expect when a station can be used both locally 
 3. **Remote reservation in progress**
    - Lab Gateway connects using LABUSER, which is a Remote Desktop Users account but is not automatically logged on by the hybrid profile. The instructor should not sign in while remote reservations are active.
 4. **Reservation end**
-   - `release-session --reboot` closes controller processes, signs out LABUSER, and optionally reboots.
+   - `release-session` closes the configured application through AppControl, signs out LABUSER, and does not reboot unless `--reboot` is explicitly supplied.
 
 ## 3. Grace parameters and messages
 
@@ -49,7 +49,7 @@ capture it.
 
 - Follow the schedule/calendar published by Lab Gateway.
 - Save work frequently when a reservation start is approaching.
-- Never power the station off manually; `release-session --reboot` already ensures a clean reboot.
+- Use the Gateway power action when the station should be powered off; `release-session` cleans up the application/session but does not reboot by default.
 - Report recurring eviction messages so reservation windows can be tuned.
 
 ## 6. Suggested messaging
