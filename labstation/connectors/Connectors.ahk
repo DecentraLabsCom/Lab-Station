@@ -9,9 +9,10 @@ class LS_ConnectorRegistry {
     static List() {
         return [
             this.Fmi(),
-            this.GuacamoleApp(),
+            this.RemoteApp(),
             this.Planned("opc-ua", "OPC-UA", "Industrial equipment connector"),
-            this.Planned("tango", "TANGO", "Scientific control systems connector")
+            this.Planned("tango", "TANGO", "Scientific control systems connector"),
+            this.Planned("epics", "EPICS", "Scientific control systems connector")
         ]
     }
 
@@ -52,19 +53,25 @@ class LS_ConnectorRegistry {
         )
     }
 
-    static GuacamoleApp() {
+    static RemoteApp() {
         appControl := LS_ConnectorRegistry.AppControlPath()
-        available := appControl != ""
+        launcherAvailable := appControl != ""
+        remoteAppPolicyEnabled := LS_IsRemoteAppPolicyEnabled()
+        available := launcherAvailable && remoteAppPolicyEnabled
+        state := !launcherAvailable ? "missing" : (remoteAppPolicyEnabled ? "available" : "needs-action")
         details := []
-        details.Push("Controller path: " . (available ? appControl : "Not found"))
-        details.Push("Launch mode: Guacamole Remote App")
-        details.Push("AppControl autostart is disabled; configure Program, Working directory, and Parameters in Guacamole.")
+        details.Push("Launcher path: " . (launcherAvailable ? appControl : "Not found"))
+        details.Push("Launcher: " . (launcherAvailable ? "available" : "missing"))
+        details.Push("RemoteApp policy: " . (remoteAppPolicyEnabled ? "enabled" : "missing"))
+        details.Push("Registry: HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services\fAllowUnlistedRemotePrograms")
+        details.Push("Launch mode: Remote App")
+        details.Push("Configure Program, Working directory, and Parameters in the Gateway's Remote App connection.")
         details.Push("RemoteApp and LABUSER readiness remain part of Station diagnosis.")
         return Map(
-            "id", "guacamole-app",
-            "label", "Guacamole App",
-            "summary", "Local lab application launched inside remote Guacamole/RDP sessions.",
-            "state", available ? "available" : "missing",
+            "id", "remote-app",
+            "label", "Remote App",
+            "summary", "Local lab application launcher used by the Gateway's Remote App connection.",
+            "state", state,
             "enabled", available,
             "planned", false,
             "details", details,
@@ -98,10 +105,10 @@ class LS_ConnectorRegistry {
     }
 
     static AppControlPath() {
-        exe := LAB_STATION_CONTROLLER_DIR "\AppControl.exe"
+        exe := LAB_STATION_REMOTE_APP_DIR "\AppControl.exe"
         if (FileExist(exe))
             return exe
-        script := LAB_STATION_CONTROLLER_DIR "\AppControl.ahk"
+        script := LAB_STATION_REMOTE_APP_DIR "\AppControl.ahk"
         if (FileExist(script))
             return script
         return ""
@@ -129,8 +136,8 @@ class LS_ConnectorRegistry {
         target := ""
         if (id = "fmi")
             target := this.FmiRoot()
-        else if (id = "guacamole-app")
-            target := LAB_STATION_CONTROLLER_DIR
+        else if (id = "remote-app")
+            target := LAB_STATION_REMOTE_APP_DIR
         if (target = "")
             return false
         try {

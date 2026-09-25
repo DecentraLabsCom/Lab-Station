@@ -55,17 +55,17 @@ errors := []
 
 try {
     serverSteps := LS_WizardServerSteps()
-    CheckSteps("server", serverSteps, 7, &errors)
+    CheckSteps("server", serverSteps, 8, &errors)
 } catch as e {
     errors.Push("server: exception while building steps - " . e.Message)
 }
 
 try {
     hybridSteps := LS_WizardHybridSteps()
-    CheckSteps("hybrid", hybridSteps, 7, &errors)
+    CheckSteps("hybrid", hybridSteps, 8, &errors)
     if (IsSet(serverSteps) && serverSteps.Length >= 2 && hybridSteps.Length >= 2
         && serverSteps[2]["label"] != hybridSteps[2]["label"]) {
-        errors.Push("wizard: dedicated and hybrid profiles must share the Guacamole AppControl launch policy")
+        errors.Push("wizard: dedicated and hybrid profiles must share the Remote App AppControl launch policy")
     }
 } catch as e {
     errors.Push("hybrid: exception while building steps - " . e.Message)
@@ -77,6 +77,9 @@ if InStr(wizardSource, "LS_WizardAutostart") {
 }
 if !InStr(wizardSource, "LS_WizardClearLegacyAppControlAutostart") {
     errors.Push("wizard: setup must remove legacy AppControl autostart")
+}
+if !InStr(wizardSource, "LS_WizardEnsureRemoteAppLauncher") || !InStr(wizardSource, "LAB_STATION_REMOTE_APP_DIR") {
+    errors.Push("wizard: setup must place AppControl.exe in the canonical remote-app directory")
 }
 
 CheckNoNativeProbeAbort(A_ScriptDir "\..\system\AccountManager.ahk", &errors)
@@ -178,10 +181,13 @@ if !RegExMatch(guiSource, "s)LS_GuiEndRefresh\(gui\).*ServiceRestartButton\.Enab
 
 connectorSource := FileRead(A_ScriptDir "\..\connectors\Connectors.ahk", "UTF-8")
 connectorsPanelSource := FileRead(A_ScriptDir "\..\ui\ConnectorsPanel.ahk", "UTF-8")
-for expected in ['"fmi"', '"guacamole-app"', '"opc-ua"', '"tango"'] {
+for expected in ['"fmi"', '"remote-app"', '"opc-ua"', '"tango"', '"epics"'] {
     if !InStr(connectorSource, expected) {
         errors.Push("connectors: registry missing " . expected)
     }
+}
+if !InStr(connectorSource, 'this.Planned("epics", "EPICS"') {
+    errors.Push("connectors: EPICS must be a separate planned connector")
 }
 for expected in ["FMU_BACKEND_MODE=station", "FMU_STATION_BASE_URL=", "FMU_STATION_INTERNAL_TOKEN="] {
     if !InStr(connectorSource, expected) {
@@ -190,6 +196,77 @@ for expected in ["FMU_BACKEND_MODE=station", "FMU_STATION_BASE_URL=", "FMU_STATI
 }
 if !InStr(connectorsPanelSource, "LS_ConnectorsPanelSelect") || !InStr(connectorsPanelSource, "LS_ConnectorsPanelRefresh") {
     errors.Push("connectors: panel must support selection and refresh")
+}
+if !InStr(connectorSource, '"label", "Remote App"') {
+    errors.Push("connectors: local interactive surface must be labelled Remote App")
+}
+if !InStr(connectorSource, "LS_IsRemoteAppPolicyEnabled()") || !InStr(connectorSource, "fAllowUnlistedRemotePrograms") {
+    errors.Push("connectors: Remote App availability must include the Windows policy check")
+}
+if !InStr(connectorsPanelSource, "+Wrap ReadOnly") {
+    errors.Push("connectors: detail fields must wrap text inside the panel")
+}
+
+; Verify the wizard migrates a release-style root launcher into remote-app.
+originalProjectRoot := LAB_STATION_PROJECT_ROOT
+originalRemoteAppDir := LAB_STATION_REMOTE_APP_DIR
+originalLogPath := LAB_STATION_LOG
+wizardTestRoot := A_Temp "\LabStation-RemoteAppWizardTests-" A_TickCount
+try {
+    DirCreate(wizardTestRoot)
+    FileAppend("fixture", wizardTestRoot "\AppControl.exe", "UTF-8")
+    LAB_STATION_PROJECT_ROOT := wizardTestRoot
+    LAB_STATION_REMOTE_APP_DIR := wizardTestRoot "\remote-app"
+    LAB_STATION_LOG := wizardTestRoot "\wizard.log"
+
+    if (!LS_WizardEnsureRemoteAppLauncher()) {
+        errors.Push("wizard: remote-app launcher migration failed")
+    }
+    if (!FileExist(wizardTestRoot "\remote-app\AppControl.exe")) {
+        errors.Push("wizard: migrated AppControl.exe is missing from remote-app")
+    }
+    if (FileExist(wizardTestRoot "\AppControl.exe")) {
+        errors.Push("wizard: root AppControl.exe was not moved")
+    }
+} catch as e {
+    errors.Push("wizard: remote-app launcher migration threw - " . e.Message)
+} finally {
+    LAB_STATION_PROJECT_ROOT := originalProjectRoot
+    LAB_STATION_REMOTE_APP_DIR := originalRemoteAppDir
+    LAB_STATION_LOG := originalLogPath
+    try DirDelete(wizardTestRoot, true)
+}
+
+; An already packaged canonical launcher must not be overwritten by a stray
+; root-level build artifact.
+originalProjectRoot := LAB_STATION_PROJECT_ROOT
+originalRemoteAppDir := LAB_STATION_REMOTE_APP_DIR
+originalLogPath := LAB_STATION_LOG
+wizardPackagedRoot := A_Temp "\LabStation-RemoteAppPackagedTests-" A_TickCount
+try {
+    DirCreate(wizardPackagedRoot "\remote-app")
+    FileAppend("root-build", wizardPackagedRoot "\AppControl.exe", "UTF-8")
+    FileAppend("packaged-release", wizardPackagedRoot "\remote-app\AppControl.exe", "UTF-8")
+    LAB_STATION_PROJECT_ROOT := wizardPackagedRoot
+    LAB_STATION_REMOTE_APP_DIR := wizardPackagedRoot "\remote-app"
+    LAB_STATION_LOG := wizardPackagedRoot "\wizard.log"
+
+    if (!LS_WizardEnsureRemoteAppLauncher()) {
+        errors.Push("wizard: packaged remote-app launcher was not accepted")
+    }
+    if (FileRead(wizardPackagedRoot "\remote-app\AppControl.exe") != "packaged-release") {
+        errors.Push("wizard: packaged AppControl.exe was unexpectedly overwritten")
+    }
+    if (!FileExist(wizardPackagedRoot "\AppControl.exe")) {
+        errors.Push("wizard: root build artifact was unexpectedly moved")
+    }
+} catch as e {
+    errors.Push("wizard: packaged remote-app launcher check threw - " . e.Message)
+} finally {
+    LAB_STATION_PROJECT_ROOT := originalProjectRoot
+    LAB_STATION_REMOTE_APP_DIR := originalRemoteAppDir
+    LAB_STATION_LOG := originalLogPath
+    try DirDelete(wizardPackagedRoot, true)
 }
 
 if (!LS_Status.EqualsUser("LABUSER`r`n", "LABUSER")) {

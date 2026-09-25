@@ -164,8 +164,8 @@ LS_HandleWinRMCommand(args) {
 }
 
 LS_LaunchAppControl(args) {
-    controllerExe := LAB_STATION_CONTROLLER_DIR "\AppControl.exe"
-    controllerScript := LAB_STATION_CONTROLLER_DIR "\AppControl.ahk"
+    controllerExe := LAB_STATION_REMOTE_APP_DIR "\AppControl.exe"
+    controllerScript := LAB_STATION_REMOTE_APP_DIR "\AppControl.ahk"
     if (FileExist(controllerExe)) {
         Run Format('"{1}" {2}', controllerExe, LS_BuildCliFromArgs(args))
         return true

@@ -11,7 +11,7 @@ description: Windows Lab Station assistant (RemoteApp, WOL, diagnostics) with bu
 The project is split into two first-class components:
 
 - **Lab Station** (`labstation/`): Windows hardening assistant that configures RemoteApp policies, Wake-on-LAN, diagnostics export, tray UI, and a background monitoring service.
-- **AppControl** (`controller/`): The single-instance AutoHotkey controller that launches lab apps, keeps them foregrounded, and closes them automatically on session changes.
+- **AppControl** (`remote-app/`): The single-instance AutoHotkey controller that launches lab apps, keeps them foregrounded, and closes them automatically on session changes.
 
 Lab Station is the default entrypoint and bundles AppControl. Use AppControl directly only when you need the raw controller.
 
@@ -79,9 +79,9 @@ corresponding Gateway configuration.
 
 *FMI/FMU connector: station endpoint, FMU directory, port, and shared-token configuration.*
 
-![Guacamole App connector panel](docs/images/labstation-connectors-guacamole.png)
+![Remote App connector panel](docs/images/labstation-connectors-guacamole.png)
 
-*Guacamole App connector: bundled AppControl path and RemoteApp readiness.*
+*Remote App connector: bundled AppControl path and RemoteApp readiness.*
 
 The **Run Setup Wizard** action starts with the station-profile selector. The
 dedicated-server profile enables the locked-down autologon flow; the hybrid
@@ -98,7 +98,7 @@ profile keeps the station usable by local users as well.
 - **Command-line flexibility**: Accepts plain executable paths or full commands with arguments, automatically adding kiosk flags for major browsers.
 - **Custom close automation**: Supports ClassNN-based buttons, client coordinates, and a `@test` mode to validate custom close routines.
 - **Window hardening**: Maximizes, foregrounds, strips minimize/close controls, and retries activation to guard against Groupy/overlay quirks.
-- **Verbose logging**: Emits actionable telemetry (`controller/tests/AppControl.log` or alongside the EXE) for smoke tests and production troubleshooting.
+- **Verbose logging**: Emits actionable telemetry (`remote-app/tests/AppControl.log` or alongside the EXE) for smoke tests and production troubleshooting.
 
 ### 🧰 Lab Station CLI reference
 
@@ -278,7 +278,7 @@ for the API and provisioning contract.
 #### **Option 2: Run the scripts (AutoHotkey required)**
 
 1. Install AutoHotkey v2.
-2. Clone or download this repository (or copy the `labstation/` and `controller/` folders).
+2. Clone or download this repository (or copy the `labstation/` and `remote-app/` folders).
 3. From that folder, run the scripts directly:
 
   ```powershell
@@ -286,7 +286,7 @@ for the API and provisioning contract.
   "C:\Program Files\AutoHotkey\v2\AutoHotkey.exe" labstation\LabStation.ahk status
 
   # Controller only
-  "C:\Program Files\AutoHotkey\v2\AutoHotkey.exe" controller\AppControl.ahk "Chrome_WidgetWin_1" "C:\Path\To\App.exe"
+  "C:\Program Files\AutoHotkey\v2\AutoHotkey.exe" remote-app\AppControl.ahk "Chrome_WidgetWin_1" "C:\Path\To\App.exe"
   ```
 
 4. (Optional) Compile your own binaries with Ahk2Exe following the same steps as the release workflow.
@@ -382,7 +382,7 @@ REM Stays unchanged (--kiosk already present)
 ```
 
 **To disable automatic browser enhancement:**
-Edit `controller\lib\Config.ahk` and set:
+Edit `remote-app\lib\Config.ahk` and set:
 ```ahk
 global AUTO_BROWSER_KIOSK := false
 ```
@@ -405,7 +405,7 @@ global AUTO_BROWSER_KIOSK := false
 
 ### ⚙️ Configuration
 
-The script includes several configuration constants that can be modified in `controller\lib\Config.ahk`:
+The script includes several configuration constants that can be modified in `remote-app\lib\Config.ahk`:
 
 #### **Core Settings**
 
@@ -581,20 +581,20 @@ standalone controller:
 ```
 Lab Station/
 ├── labstation/                     # Lab Station CLI, services, diagnostics
-├── controller/
+├── remote-app/
 │   ├── AppControl.ahk              # Controller entry point
 │   ├── lib/                        # Controller modules
-│   └── tests/                      # Controller-only smoke/regression tests
+│   ├── tests/                      # Controller-only smoke/regression tests
+│   └── windows-configuration.md    # RemoteApp hardening notes
 ├── fmu-executor/                   # Python FMU sidecar and API tests
 ├── docs/                           # Operations, contracts, schemas, and build docs
 ├── build.ps1                       # Windows executable build script
-└── remote-app/                     # Windows RemoteApp hardening notes
 ```
 
-Inside `controller/lib/` the modules remain the same:
+Inside `remote-app/lib/` the modules remain the same:
 
 ```
-controller/lib/
+remote-app/lib/
 ├── Config.ahk                  # Configuration and constants
 ├── Utils.ahk                   # Utility functions
 ├── WindowClosing.ahk           # Window closing logic
@@ -604,19 +604,19 @@ controller/lib/
 └── README.md                   # Module documentation
 ```
 
-See `controller/lib/README.md` for detailed module documentation.
+See `remote-app/lib/README.md` for detailed module documentation.
 
 ### ✅ Smoke Tests
 
-The `controller/tests/` folder contains a lightweight smoke test that launches **DualAppMode** with two simulated applications and verifies key log markers. Run it with AutoHotkey v2 (64-bit recommended):
+The `remote-app/tests/` folder contains a lightweight smoke test that launches **DualAppMode** with two simulated applications and verifies key log markers. Run it with AutoHotkey v2 (64-bit recommended):
 
 ```powershell
-"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" controller\tests\SmokeTest_DualAppMode.ahk
+"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" remote-app\tests\SmokeTest_DualAppMode.ahk
 ```
 
 The harness:
 
 - Launches two `FakeApp.ahk` instances with predictable window classes.
 - Starts `CreateDualAppContainer` with those apps and waits ~8 seconds.
-- Checks `controller\tests\AppControl.log` for the expected lifecycle messages.
+- Checks `remote-app\tests\AppControl.log` for the expected lifecycle messages.
 - Returns exit code **0** on success (non-zero otherwise) so you can wire it into CI or scripted regression checks.

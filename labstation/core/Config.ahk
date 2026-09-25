@@ -48,21 +48,19 @@ if (!IsSet(LAB_STATION_LEGACY_DATA_DIR)) {
     global LAB_STATION_LEGACY_DATA_DIR := A_IsCompiled ? LAB_STATION_PROJECT_ROOT "\data" : ""
 }
 
-if (!IsSet(LAB_STATION_CONTROLLER_DIR)) {
-    global LAB_STATION_CONTROLLER_DIR := LAB_STATION_PROJECT_ROOT "\controller"
+if (!IsSet(LAB_STATION_REMOTE_APP_DIR)) {
+    ; The Remote App launcher has one canonical location in every layout.
+    ; Development uses remote-app\AppControl.ahk; releases use
+    ; remote-app\AppControl.exe.
+    global LAB_STATION_REMOTE_APP_DIR := LAB_STATION_PROJECT_ROOT "\remote-app"
 }
 
-if (!DirExist(LAB_STATION_CONTROLLER_DIR)) {
-    candidates := [
-        LAB_STATION_PROJECT_ROOT,
-        LAB_STATION_ROOT,
-        LAB_STATION_PROJECT_ROOT "\dist"
-    ]
-    for candidate in candidates {
-        if (FileExist(candidate "\AppControl.exe") || FileExist(candidate "\AppControl.ahk")) {
-            LAB_STATION_CONTROLLER_DIR := candidate
-            break
-        }
+LS_IsRemoteAppPolicyEnabled() {
+    basePath := "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+    try {
+        return RegRead(basePath, "fAllowUnlistedRemotePrograms") = 1
+    } catch {
+        return false
     }
 }
 

@@ -5,7 +5,6 @@ $distPath = Join-Path $testRoot 'dist'
 $outputPath = Join-Path $distPath 'Lab-Station.zip'
 $packageScript = Join-Path $PSScriptRoot 'package-release.ps1'
 $expectedExecutables = @(
-    'AppControl.exe',
     'LabStation.exe',
     'LabStationPanel.exe',
     'WindowSpy.exe'
@@ -27,6 +26,7 @@ try {
     foreach ($name in $expectedExecutables) {
         Set-Content -LiteralPath (Join-Path $distPath $name) -Value "test-$name" -NoNewline
     }
+    Set-Content -LiteralPath (Join-Path $distPath 'AppControl.exe') -Value 'test-AppControl.exe' -NoNewline
 
     $logoDir = Join-Path $distPath 'img'
     New-Item -ItemType Directory -Path $logoDir -Force | Out-Null
@@ -44,6 +44,8 @@ try {
             Assert-Condition ($entryNames -contains "Lab Station/$name") "Missing packaged executable: $name"
             Assert-Condition (-not ($entryNames -contains $name)) "Executable leaked outside Lab Station/: $name"
         }
+        Assert-Condition ($entryNames -contains 'Lab Station/remote-app/AppControl.exe') 'Missing packaged Remote App launcher.'
+        Assert-Condition (-not ($entryNames -contains 'Lab Station/AppControl.exe')) 'AppControl leaked outside remote-app/.'
         Assert-Condition ($entryNames -contains 'Lab Station/img/DecentraLabs.png') 'Missing packaged logo.'
     } finally {
         $archive.Dispose()

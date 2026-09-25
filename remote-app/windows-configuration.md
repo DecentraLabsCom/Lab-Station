@@ -6,6 +6,10 @@ The recommended method is to run `LabStation.exe remoteapp` as Administrator.
 If the registry must be configured manually, use `reg.exe` (also from an
 elevated PowerShell or Command Prompt):
 
+The Lab Station Connectors panel reports Remote App as **Available** only when
+the launcher is present in `remote-app\` and this registry value is `1`. It
+reports **Needs attention** when the launcher exists but the policy is missing.
+
 ```powershell
 reg.exe ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fAllowUnlistedRemotePrograms /t REG_DWORD /d 1 /f
 reg.exe QUERY "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fAllowUnlistedRemotePrograms

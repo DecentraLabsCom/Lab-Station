@@ -100,13 +100,7 @@ class LS_Status {
     }
 
     static CheckRemoteAppPolicy() {
-        basePath := "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
-        try {
-            value := RegRead(basePath, "fAllowUnlistedRemotePrograms")
-            return value = 1
-        } catch {
-            return false
-        }
+        return LS_IsRemoteAppPolicyEnabled()
     }
 
     static CheckLegacyAppControlAutostart() {

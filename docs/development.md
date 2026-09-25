@@ -21,7 +21,10 @@ base runtime, then writes these files to the repository root:
 
 If AutoHotkey is installed elsewhere, set `AHK2EXE_PATH` for the compiler and
 `AHK_BASE_PATH` (or `AHK_EXE`) for the base runtime. The build produces
-`AppControl.exe`, `LabStation.exe`, and `LabStationPanel.exe`.
+`AppControl.exe`, `LabStation.exe`, and `LabStationPanel.exe` at the repository
+root. The setup wizard moves the launcher into the canonical
+`remote-app\AppControl.exe` location, and release packaging places it there
+directly.
 
 ## Run tests
 
@@ -51,8 +54,8 @@ $tests = @(
   'labstation\tests\ServiceManagerTests.ahk',
   'labstation\tests\FmuExecutorTests.ahk',
   'labstation\tests\TelemetryTests.ahk',
-  'controller\tests\SmokeTest_DualAppMode.ahk',
-  'controller\tests\ArgumentParsingTests.ahk'
+  'remote-app\tests\SmokeTest_DualAppMode.ahk',
+  'remote-app\tests\ArgumentParsingTests.ahk'
 )
 foreach ($test in $tests) {
   .\scripts\run-ahk-test.ps1 $test
@@ -65,9 +68,10 @@ foreach ($test in $tests) {
 The release workflow publishes the individual `LabStation.exe`,
 `LabStationPanel.exe`, `AppControl.exe`, and `WindowSpy.exe` assets, plus a
 `Lab-Station.zip` package. Extracting that package creates a `Lab Station/`
-directory containing all four executables and the branding image, ready to be
+directory containing `LabStation.exe`, `LabStationPanel.exe`, `WindowSpy.exe`,
+the `remote-app\AppControl.exe` launcher, and the branding image, ready to be
 copied to a station as one unit. The Python FMU Executor is intentionally a
-separately deployed internal sidecar: copy the `fmu-executor/` directory,
+separately deployed internal sidecar: copy the sibling `fmu-executor/` directory,
 install its requirements, configure the machine environment variables, and
 start it through the Lab Station supervisor. See [`FMU Executor`](../fmu-executor/README.md)
 for its port, token, API, and provisioning rules.

@@ -4,7 +4,7 @@
 
 ```
 Lab Station/
-└── controller/
+└── remote-app/
     ├── AppControl.ahk         # Main entry point
     └── lib/                       # Library modules
         ├── Config.ahk             # Configuration and constants

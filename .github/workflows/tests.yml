@@ -133,16 +133,16 @@ jobs:
 
       - name: Run DualAppMode smoke test
         shell: powershell
-        run: .\scripts\run-ahk-test.ps1 controller\tests\SmokeTest_DualAppMode.ahk
+        run: .\scripts\run-ahk-test.ps1 remote-app\tests\SmokeTest_DualAppMode.ahk
 
       - name: Run argument parsing matrix
         shell: powershell
-        run: .\scripts\run-ahk-test.ps1 controller\tests\ArgumentParsingTests.ahk
+        run: .\scripts\run-ahk-test.ps1 remote-app\tests\ArgumentParsingTests.ahk
 
       - name: Upload smoke test log
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: smoke-logs
-          path: controller/tests/AppControl.log
+          path: remote-app/tests/AppControl.log
           if-no-files-found: ignore

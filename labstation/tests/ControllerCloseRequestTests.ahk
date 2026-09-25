@@ -1,9 +1,9 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
-#Include ..\..\controller\lib\Config.ahk
-#Include ..\..\controller\lib\Utils.ahk
-#Include ..\..\controller\lib\WindowClosing.ahk
-#Include ..\..\controller\lib\CloseRequest.ahk
+#Include ..\..\remote-app\lib\Config.ahk
+#Include ..\..\remote-app\lib\Utils.ahk
+#Include ..\..\remote-app\lib\WindowClosing.ahk
+#Include ..\..\remote-app\lib\CloseRequest.ahk
 #Include ..\service\SessionGuard.ahk
 #Include ..\service\FmuExecutor.ahk
 #Include ..\service\SessionManager.ahk

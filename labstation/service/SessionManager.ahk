@@ -221,7 +221,7 @@ class LS_SessionManager {
     }
 
     static ResetControllerLogs() {
-        logPath := LAB_STATION_CONTROLLER_DIR "\AppControl.log"
+        logPath := LAB_STATION_REMOTE_APP_DIR "\AppControl.log"
         try {
             if (FileExist(logPath)) {
                 FileDelete(logPath)

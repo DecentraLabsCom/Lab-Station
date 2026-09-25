@@ -558,7 +558,8 @@ class TestWsSimOutputsContract:
                     "options": {"startTime": 0, "stopTime": 5, "stepSize": 0.01},
                 }))
                 init_resp = json.loads(ws.receive_text())
-                assert init_resp["type"] == "sim.initialized"
+                assert init_resp["type"] == "sim.state"
+                assert init_resp["state"] == "initialized"
 
                 # Get outputs
                 ws.send_text(json.dumps({
@@ -567,9 +568,9 @@ class TestWsSimOutputsContract:
                 }))
                 resp = json.loads(ws.receive_text())
                 assert resp["type"] == "sim.outputs"
-                assert "time" in resp
-                assert "outputs" in resp
-                assert isinstance(resp["outputs"], dict)
+                assert "simTime" in resp
+                assert "values" in resp
+                assert isinstance(resp["values"], dict)
 
     def test_subscription_outputs_shape(self, client, _isolate_config):
         """Subscription events expose the fields consumed by the Gateway proxy."""
@@ -604,7 +605,8 @@ class TestWsSimOutputsContract:
                     "options": {"startTime": 0, "stopTime": 5, "stepSize": 0.01},
                 }))
                 init_resp = json.loads(ws.receive_text())
-                assert init_resp["type"] == "sim.initialized"
+                assert init_resp["type"] == "sim.state"
+                assert init_resp["state"] == "initialized"
 
                 ws.send_text(json.dumps({
                     "type": "sim.subscribeOutputs",

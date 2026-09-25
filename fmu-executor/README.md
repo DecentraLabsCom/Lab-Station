@@ -52,6 +52,11 @@ the Gateway environment expected for station mode:
 | `FMU_MAX_SESSIONS` | `4` | Effective max concurrent FMU executions (one-shot, stream and realtime) |
 | `FMU_ATTACH_GRACE_SECONDS` | `120` | How long a disconnected realtime session remains attachable before its FMU state is terminated |
 | `FMU_EXECUTOR_TEMP` | `<FMU_ROOT>/.tmp` | Temp dir for FMU extraction |
+| `FMU_EXECUTION_MODE` | `process` | One-shot/stream execution boundary: `process` (recommended) or `in-process` (diagnostics) |
+| `FMU_EXECUTION_TIMEOUT_SECONDS` | `3600` | Deadline for an isolated one-shot/stream worker |
+| `FMU_OMSIMULATOR_ENABLED` | `false` | Enables OMSimulator discovery for the future composition backend; does not switch current execution automatically |
+| `FMU_OMSIMULATOR_COMMAND` | `OMSimulator` | OMSimulator executable or command name |
+| `FMU_OMSIMULATOR_TIMEOUT_SECONDS` | `3600` | Reserved timeout for the future OMSimulator adapter |
 | `FMU_LOG_LEVEL` | `INFO` | Log level |
 
 For the Windows scheduled task, set the token as a machine-level environment
@@ -90,6 +95,55 @@ All endpoints require `X-Internal-Session-Token` header (except `/internal/healt
 
 `catalog` and `describe` also require the `X-FMU-Access-Key` header. The
 `access_key` path segment is URL-encoded when it contains nested directories.
+
+`GET /internal/fmu/backends` reports the active FMPy backend and the planned
+OMSimulator backend. The same information is included in `/internal/health`.
+
+## Runtime capabilities
+
+The executor uses FMPy `0.3.32` through `instantiate_fmu`, so the Station
+runtime selects the FMI 2 or FMI 3 Co-Simulation implementation from the FMU
+model description. Realtime input/output handling includes scalar and array
+variables for the FMI numeric types, Boolean, String, Binary and Clock where
+the FMU runtime exposes the corresponding API. Binary values use base64 in the
+JSON contract, and FMI 3 `Int64`/`UInt64` outputs are serialized as strings to
+avoid loss of precision in JavaScript clients.
+
+One-shot and NDJSON streaming simulations run in a spawned worker process by
+default. Realtime sessions remain in the Station process because they need a
+long-lived interactive state. Set `FMU_EXECUTION_MODE=in-process` only for
+diagnostics or environments where native FMU isolation is managed elsewhere.
+
+The realtime session advertises `start`, `pause`, `resume`, `reset`, `step`,
+input/output and reconnect capabilities. `reset` recreates the FMU instance
+with the original initialization options and inputs.
+
+### FMI conformance baseline
+
+| Capability | Station status | Scope |
+|---|---|---|
+| FMI 2 Co-Simulation | Supported | Realtime, one-shot and stream |
+| FMI 3 Co-Simulation | Supported | Realtime, one-shot and stream |
+| Scalar Real/Float32/Float64, integer, Boolean, String | Supported | Inputs and outputs |
+| FMI 3 arrays | Supported | Fixed-size arrays resolved by FMPy |
+| FMI 3 Binary and Clock | Supported | JSON uses base64 for Binary |
+| FMI 2/FMI 3 Model Exchange | Planned | Requires a solver/composition boundary; not claimed by the Station realtime API |
+| FMI 3 Scheduled Execution | Planned | Not exposed by the current Station contract |
+| SSP/multi-FMU composition | Planned | OMSimulator adapter |
+
+This table is the contract baseline for adding real FMU fixtures to the
+conformance suite; a new type must not be advertised as supported only because
+its model description can be parsed.
+
+### OMSimulator (future composition backend)
+
+OMSimulator is not a mandatory dependency of the Windows Station runtime and
+is not used for ordinary single-FMU requests today. The executor exposes its
+planned status and reserves `options.backend: "omsimulator"` for a future
+adapter that will execute SSP/multi-FMU compositions and Model Exchange
+scenarios. Until that adapter is implemented, such a request returns HTTP
+`501`; this keeps the backend choice explicit rather than silently pretending
+that a single-FMU FMPy execution was a composed model.
 
 ### HTTP simulation payloads
 
@@ -142,11 +196,15 @@ The main request/response types are:
 | `session.create` | `session.created` | Creates and loads a session; returns `sessionId`, expiry, and capabilities |
 | `session.attach` | `session.attached` | Reconnects a detached session during `FMU_ATTACH_GRACE_SECONDS` after validating the original context |
 | `model.describe` | `model.description` | Returns normalized model metadata |
-| `sim.initialize` | `sim.initialized` | Optional `options.startTime`, `stopTime`, `stepSize`, and `parameters` |
-| `sim.step` | `sim.stepped` | Optional `stepSize` |
-| `sim.runUntil` | `sim.stepped` | Required `targetTime`; optional `stepSize` |
-| `sim.setInputs` | `sim.inputsSet` | `values` map keyed by model variable name |
-| `sim.getOutputs` | `sim.outputs` | Optional `valueReferences` array |
+| `sim.initialize` | `sim.state` | Optional `options.startTime`, `stopTime`, `stepSize`, and `parameters` |
+| `sim.start` | `sim.state` | Starts automatic stepping until `stopTime` |
+| `sim.pause` | `sim.state` | Pauses automatic stepping while retaining FMU state |
+| `sim.resume` | `sim.state` | Resumes automatic stepping from `paused` or `initialized` |
+| `sim.reset` | `sim.state` | Recreates the FMU instance with the original initialization options |
+| `sim.step` | `sim.outputs` | `deltaT` (legacy `stepSize` accepted) |
+| `sim.runUntil` | `sim.outputs` | `time` (legacy `targetTime` accepted); optional `stepSize` |
+| `sim.setInputs` | `sim.inputs.updated` | `values` map keyed by model variable name |
+| `sim.getOutputs` | `sim.outputs` | Optional `variables` array (legacy `valueReferences` accepted) |
 | `sim.subscribeOutputs` | `sim.subscribed` | Optional `variables`, `periodMs`, `maxBatchSize`, `maxHz` |
 | `sim.unsubscribeOutputs` | `sim.unsubscribed` | Stops background output events |
 | `sim.getState` | `sim.state` | Returns current simulation state and time |

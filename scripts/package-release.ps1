@@ -7,7 +7,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $executableNames = @(
-    'AppControl.exe',
     'LabStation.exe',
     'LabStationPanel.exe',
     'WindowSpy.exe'
@@ -37,6 +36,14 @@ try {
 
         Copy-Item -LiteralPath $source -Destination (Join-Path $packageDirectory $name) -Force
     }
+
+    $appControlSource = Join-Path $distDirectory 'AppControl.exe'
+    if (-not (Test-Path -LiteralPath $appControlSource -PathType Leaf)) {
+        throw "Release executable not found: $appControlSource"
+    }
+    $remoteAppDirectory = Join-Path $packageDirectory 'remote-app'
+    New-Item -ItemType Directory -Path $remoteAppDirectory -Force | Out-Null
+    Copy-Item -LiteralPath $appControlSource -Destination (Join-Path $remoteAppDirectory 'AppControl.exe') -Force
 
     $logoSource = Join-Path $distDirectory 'img\DecentraLabs.png'
     if (Test-Path -LiteralPath $logoSource -PathType Leaf) {

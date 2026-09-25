@@ -103,7 +103,7 @@ jobs:
             throw "AutoHotkey base path missing: $base"
           }
 
-          $scriptPath = (Resolve-Path 'controller/AppControl.ahk').Path
+          $scriptPath = (Resolve-Path 'remote-app/AppControl.ahk').Path
           $outDir = Join-Path $PWD 'dist'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $outFile = Join-Path $outDir 'AppControl.exe'

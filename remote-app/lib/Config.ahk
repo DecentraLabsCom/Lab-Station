@@ -55,8 +55,8 @@ global CloseOnEventIds := [23, 24, 39, 40]
 global WTS_NOTIFICATIONS_ACTIVE := false  ; Track if WTS notifications are working
 
 ; Cooperative close handshake shared with the Lab Station service. The
-; compiled controller lives at the project root; source execution lives in
-; controller/, so resolve the canonical labstation/data directory from both.
+; compiled Remote App lives in the remote-app directory; source execution uses
+; the same directory, so resolve the canonical labstation/data directory from both.
 global CONTROLLER_CLOSE_REQUEST_START_TICK := A_TickCount
 global CONTROLLER_CLOSE_REQUEST_POLL_MS := 250
 global CONTROLLER_CLOSE_REQUEST_LAST_TOKEN := ""

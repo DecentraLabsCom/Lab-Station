@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import logging
+from functools import reduce
+from operator import mul
 import shutil
 import tempfile
 import time as _time
@@ -11,8 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generator, Optional
 
-from fmpy import extract as fmpy_extract, read_model_description
+from fmpy import (
+    extract as fmpy_extract,
+    instantiate_fmu as fmpy_instantiate_fmu,
+    read_model_description,
+)
 from fmpy.fmi2 import FMU2Slave
+
+_DEFAULT_FMU2SLAVE = FMU2Slave
 
 from . import config
 
@@ -40,7 +49,7 @@ class OutputSubscription:
 
 
 class FmuSession:
-    """Manages one loaded FMI 2 Co-Simulation session."""
+    """Manage one loaded FMI 2/FMI 3 Co-Simulation session."""
 
     def __init__(
         self,
@@ -57,10 +66,14 @@ class FmuSession:
         self.expires_at = expires_at
         self.gateway_context = dict(gateway_context or {})
         self._extract_dir: Path | None = None
-        self._slave: FMU2Slave | None = None
+        self._slave: Any | None = None
         self._md = None
         self._time: float = 0.0
         self._step_size: float = 0.001
+        self._start_time: float = 0.0
+        self._stop_time: float = 1.0
+        self._parameters: dict[str, Any] = {}
+        self._state: str = "new"
         self._initialised: bool = False
         self._terminated: bool = False
         self._attached: bool = False
@@ -76,6 +89,8 @@ class FmuSession:
 
     def load(self) -> dict[str, Any]:
         """Extract and read model description. Returns describe dict."""
+        if self._md is not None:
+            return self._describe()
         self._extract_dir = Path(tempfile.mkdtemp(
             prefix=f"fmu_{self.session_id}_",
             dir=str(config.TEMP_DIR),
@@ -98,43 +113,65 @@ class FmuSession:
         if self._md.coSimulation is None:
             raise RuntimeError("FMU does not support Co-Simulation")
 
-        self._step_size = step_size or (
+        self._step_size = step_size if step_size is not None else (
             float(self._md.defaultExperiment.stepSize)
             if self._md.defaultExperiment and self._md.defaultExperiment.stepSize
             else 0.001
         )
-        self._time = start_time
+        self._start_time = float(start_time)
+        self._stop_time = float(stop_time)
+        if self._stop_time <= self._start_time:
+            raise ValueError("stopTime must be greater than startTime")
+        if self._step_size <= 0:
+            raise ValueError("stepSize must be positive")
+        self._time = self._start_time
+        self._parameters = dict(parameters or {})
 
-        model_id = self._md.coSimulation.modelIdentifier
-        fmu_path_in_extract = str(self._extract_dir)
+        self._slave = self._instantiate()
+        if self._fmi_major() == "3":
+            self._slave.enterInitializationMode(
+                startTime=self._start_time,
+                stopTime=self._stop_time,
+            )
+        else:
+            self._slave.setupExperiment(
+                startTime=self._start_time,
+                stopTime=self._stop_time,
+            )
+            self._slave.enterInitializationMode()
 
-        self._slave = FMU2Slave(
-            guid=self._md.guid,
-            unzipDirectory=fmu_path_in_extract,
-            modelIdentifier=model_id,
-        )
-        self._slave.instantiate()
-        self._slave.setupExperiment(startTime=start_time, stopTime=stop_time)
+        if self._parameters:
+            self._apply_parameters(self._parameters)
 
-        if parameters:
-            self._apply_parameters(parameters)
-
-        self._slave.enterInitializationMode()
         self._slave.exitInitializationMode()
         self._initialised = True
+        self._terminated = False
+        self._state = "initialized"
 
         return {"sessionId": self.session_id, "time": self._time, "state": "initialized"}
 
     def step(self, step_size: float | None = None) -> dict[str, Any]:
         slave = self._require_slave()
+        if self._state == "paused":
+            raise RuntimeError("Session is paused")
         h = step_size or self._step_size
+        if h <= 0:
+            raise ValueError("stepSize must be positive")
         slave.doStep(currentCommunicationPoint=self._time, communicationStepSize=h)
         self._time += h
+        self._state = "running"
         return {"time": self._time, "state": "running"}
 
     def run_until(self, target_time: float, step_size: float | None = None) -> dict[str, Any]:
         slave = self._require_slave()
+        if target_time < self._time:
+            raise ValueError("targetTime must not be earlier than current simulation time")
+        if self._state == "paused":
+            raise RuntimeError("Session is paused")
         h = step_size or self._step_size
+        if h <= 0:
+            raise ValueError("stepSize must be positive")
+        self._state = "running"
         while self._time < target_time - 1e-12:
             remaining = target_time - self._time
             actual_h = min(h, remaining)
@@ -150,7 +187,14 @@ class FmuSession:
     ) -> Generator[dict[str, Any], None, None]:
         """Step until *target_time*, yielding output snapshots at each step."""
         slave = self._require_slave()
+        if target_time < self._time:
+            raise ValueError("targetTime must not be earlier than current simulation time")
+        if self._state == "paused":
+            raise RuntimeError("Session is paused")
         h = step_size or self._step_size
+        if h <= 0:
+            raise ValueError("stepSize must be positive")
+        self._state = "running"
         seq = 0
         while self._time < target_time - 1e-12:
             remaining = target_time - self._time
@@ -164,10 +208,45 @@ class FmuSession:
     def set_inputs(self, values: dict[str, Any]) -> None:
         self._ensure_live()
         self._apply_parameters(values)
+        self._parameters.update(values)
 
     def get_outputs(self, refs: list[int] | None = None) -> dict[str, Any]:
         self._ensure_live()
         return {"time": self._time, "outputs": self._read_outputs(refs)}
+
+    def pause(self) -> dict[str, Any]:
+        """Pause automatic execution without destroying FMU state."""
+        self._ensure_live()
+        if self._state == "running":
+            self._state = "paused"
+        return {"time": self._time, "state": self._state}
+
+    def resume(self) -> dict[str, Any]:
+        """Mark the session runnable; the websocket loop performs stepping."""
+        self._ensure_live()
+        if self._state not in ("paused", "initialized"):
+            raise RuntimeError(f"Cannot resume from state {self._state}")
+        self._state = "running"
+        return {"time": self._time, "state": self._state}
+
+    def reset(self) -> dict[str, Any]:
+        """Reset the FMU to its original initialization options."""
+        self._ensure_live()
+        self._release_fmu()
+        return self.initialize(
+            start_time=self._start_time,
+            stop_time=self._stop_time,
+            step_size=self._step_size,
+            parameters=self._parameters,
+        )
+
+    @property
+    def state(self) -> str:
+        if self._terminated:
+            return "terminated"
+        if self._state == "new":
+            return "loaded" if self._md is not None else "new"
+        return self._state
 
     def sample_subscription(self) -> dict[str, Any] | None:
         """Collect a subscription sample.  Returns an output-event dict ready
@@ -227,12 +306,7 @@ class FmuSession:
         self._attached = False
         self._attach_deadline = None
         self._attachment_owner = None
-        if self._slave and self._initialised:
-            try:
-                self._slave.terminate()
-                self._slave.freeInstance()
-            except Exception:
-                logger.warning("Error terminating FMU slave for session %s", self.session_id, exc_info=True)
+        self._release_fmu()
         self._cleanup_temp()
 
     def mark_detached(self, grace_seconds: float, attachment_owner: object | None = None) -> None:
@@ -273,16 +347,40 @@ class FmuSession:
         if not self._initialised:
             raise RuntimeError("Session not initialised")
 
-    def _require_slave(self) -> FMU2Slave:
+    def _require_slave(self) -> Any:
         self._ensure_live()
         if self._slave is None:
             raise RuntimeError("FMU slave is not initialized")
         return self._slave
 
+    def _fmi_major(self) -> str:
+        return str(getattr(self._md, "fmiVersion", "2.0")).split(".", 1)[0]
+
+    def _instantiate(self) -> Any:
+        """Instantiate through FMPy's FMI 2/FMI 3 selector."""
+        if self._extract_dir is None or self._md is None:
+            raise RuntimeError("FMU is not loaded")
+        # Existing Station tests and local diagnostics patch this symbol. Keep
+        # that patch point while normal execution uses the generic FMPy API.
+        if self._fmi_major() == "2" and FMU2Slave is not _DEFAULT_FMU2SLAVE:
+            slave = FMU2Slave(
+                guid=self._md.guid,
+                unzipDirectory=str(self._extract_dir),
+                modelIdentifier=self._md.coSimulation.modelIdentifier,
+            )
+            slave.instantiate()
+            return slave
+        # instantiate_fmu() already calls instantiate() internally.
+        return fmpy_instantiate_fmu(
+            str(self._extract_dir),
+            self._md,
+            fmi_type="CoSimulation",
+        )
+
     def _describe(self) -> dict[str, Any]:
         from . import fmu_storage
         # Re-use the same normalised describe logic
-        return fmu_storage.describe(self.fmu_path.name)
+        return fmu_storage.describe(self.access_key)
 
     def _apply_parameters(self, params: dict[str, Any]) -> None:
         """Set variable values by name."""
@@ -294,16 +392,12 @@ class FmuSession:
             if var is None:
                 logger.warning("Unknown variable %r – skipped", name)
                 continue
-            vr = [var.valueReference]
-            vtype = (var.type or "").lower()
-            if vtype == "real":
-                self._slave.setReal(vr, [float(value)])
-            elif vtype == "integer":
-                self._slave.setInteger(vr, [int(value)])
-            elif vtype == "boolean":
-                self._slave.setBoolean(vr, [bool(value)])
-            elif vtype == "string":
-                self._slave.setString(vr, [str(value)])
+            vtype = self._normalise_type(var)
+            values = self._coerce_values(var, value)
+            setter = getattr(self._slave, f"set{vtype}", None)
+            if setter is None:
+                raise ValueError(f"FMU variable type {vtype} is not supported")
+            setter([int(var.valueReference)], values)
 
     def _read_outputs(self, refs: list[int] | None = None) -> dict[str, Any]:
         """Read output variables. If *refs* is None, read all outputs."""
@@ -315,20 +409,91 @@ class FmuSession:
                 continue
             if refs is not None and var.valueReference not in refs:
                 continue
-            vr = [var.valueReference]
-            vtype = (var.type or "").lower()
+            vr = [int(var.valueReference)]
+            vtype = self._normalise_type(var)
             try:
-                if vtype == "real":
-                    outputs[var.name] = self._slave.getReal(vr)[0]
-                elif vtype == "integer":
-                    outputs[var.name] = self._slave.getInteger(vr)[0]
-                elif vtype == "boolean":
-                    outputs[var.name] = self._slave.getBoolean(vr)[0]
-                elif vtype == "string":
-                    outputs[var.name] = self._slave.getString(vr)[0]
+                getter = getattr(self._slave, f"get{vtype}", None)
+                if getter is None:
+                    continue
+                size = self._variable_size(var)
+                values = getter(vr) if size == 1 else getter(vr, nValues=size)
+                normalised = [self._normalise_output(vtype, value) for value in list(values)]
+                outputs[var.name] = normalised[0] if size == 1 else normalised
             except Exception:
                 logger.debug("Could not read %s (vr=%d)", var.name, var.valueReference)
         return outputs
+
+    @staticmethod
+    def _normalise_type(var: Any) -> str:
+        variable_type = str(getattr(var, "type", ""))
+        return "Integer" if variable_type == "Enumeration" else variable_type
+
+    @staticmethod
+    def _variable_size(var: Any) -> int:
+        shape = getattr(var, "shape", None)
+        if isinstance(shape, (list, tuple)) and shape:
+            return int(reduce(mul, (int(extent) for extent in shape), 1))
+        dimensions = getattr(var, "dimensions", None)
+        if isinstance(dimensions, (list, tuple)) and dimensions:
+            extents: list[int] = []
+            for dimension in dimensions:
+                start = getattr(dimension, "start", None)
+                if start is None:
+                    return 1
+                extents.append(int(start))
+            return int(reduce(mul, extents, 1))
+        return 1
+
+    @classmethod
+    def _coerce_values(cls, var: Any, value: Any) -> list[Any]:
+        vtype = cls._normalise_type(var)
+        size = cls._variable_size(var)
+        raw_values = value if size > 1 else [value]
+        if size > 1 and (not isinstance(value, (list, tuple)) or len(value) != size):
+            raise ValueError(f"Array input '{var.name}' expects {size} values")
+        if vtype in ("Real", "Float32", "Float64"):
+            return [float(item) for item in raw_values]
+        if vtype in ("Integer", "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64"):
+            return [int(item) for item in raw_values]
+        if vtype in ("Boolean", "Clock"):
+            return [bool(item) for item in raw_values]
+        if vtype == "String":
+            return [item.decode("utf-8") if isinstance(item, bytes) else str(item) for item in raw_values]
+        if vtype == "Binary":
+            try:
+                return [item if isinstance(item, (bytes, bytearray)) else base64.b64decode(str(item), validate=True) for item in raw_values]
+            except Exception as exc:
+                raise ValueError("Binary inputs must be valid base64 strings") from exc
+        raise ValueError(f"FMU variable type {vtype} is not supported")
+
+    @staticmethod
+    def _normalise_output(vtype: str, value: Any) -> Any:
+        if vtype in ("Real", "Float32", "Float64"):
+            return float(value)
+        if vtype in ("Int64", "UInt64"):
+            return str(int(value))
+        if vtype in ("Integer", "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32"):
+            return int(value)
+        if vtype in ("Boolean", "Clock"):
+            return bool(value)
+        if vtype == "String":
+            return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+        if vtype == "Binary":
+            return base64.b64encode(bytes(value)).decode("ascii")
+        return value
+
+    def _release_fmu(self) -> None:
+        if self._slave is not None:
+            try:
+                self._slave.terminate()
+            except Exception:
+                logger.debug("FMU terminate failed for session %s", self.session_id, exc_info=True)
+            try:
+                self._slave.freeInstance()
+            except Exception:
+                logger.debug("FMU freeInstance failed for session %s", self.session_id, exc_info=True)
+        self._slave = None
+        self._initialised = False
 
     def _cleanup_temp(self) -> None:
         extract_dir = getattr(self, "_extract_dir", None)
