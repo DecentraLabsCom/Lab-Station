@@ -1,7 +1,7 @@
 # Status and heartbeat contract
 
 Lab Station exposes two related JSON documents with the same
-`schemaVersion` (`1.0.0`):
+`schemaVersion` (`2.0.0`):
 
 | Document | Location or command | Behavior |
 | --- | --- | --- |
@@ -10,7 +10,7 @@ Lab Station exposes two related JSON documents with the same
 | Heartbeat | `labstation/data/telemetry/heartbeat.json` | The background service refreshes it once per service-loop interval and includes a top-level `status` copy plus `operations`. |
 
 The status document contains the station profile, RemoteApp and WinRM state,
-autostart, Wake-on-LAN and power compliance, sessions, FMU Executor health,
+legacy AppControl-autostart detection, Wake-on-LAN and power compliance, sessions, FMU Executor health,
 the complete `summary.ready` verdict, capability-specific `readiness`,
 operation timestamps, `localModeEnabled`, and the latest `lastForcedLogoff`.
 The heartbeat adds `host` and application `version` for file-drop consumers.

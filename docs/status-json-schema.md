@@ -21,7 +21,7 @@ The `diagnostics` command writes the same status shape to
 ## Versioning
 
 Every status document includes `schemaVersion`. The current version is
-`1.0.0`, and the JSON Schema accepts the `1.x` major version.
+`2.0.0`, and the JSON Schema accepts the `2.x` major version.
 
 Consumers should reject or warn on a higher major version. New fields may be
 added within a major version, so consumers should ignore fields they do not
@@ -31,12 +31,12 @@ need and tolerate additional properties.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `schemaVersion` | string | Telemetry contract version, currently `1.0.0`. |
+| `schemaVersion` | string | Telemetry contract version, currently `2.0.0`. |
 | `timestamp` | date-time string | UTC timestamp for the status collection. |
 | `stationProfile` | `server` or `hybrid` | Operating profile selected for the station. |
 | `remoteAppEnabled` | boolean | Whether the RemoteApp policy is enabled. |
 | `winrm` | object | WinRM readiness and diagnostic details. |
-| `autoStartConfigured` | boolean | Whether AppControl is configured to start automatically. |
+| `legacyAppControlAutostart` | boolean | Whether the obsolete AppControl Windows autostart entry is still present and must be removed. |
 | `wake` | object | Wake-on-LAN device and NIC diagnostics. |
 | `power` | object | Active power plan and sleep/hibernate compliance. |
 | `readiness` | object | Capability-specific readiness for `physicalLab` and `fmu`. |
@@ -95,12 +95,12 @@ Gateway can determine whether the station remains safe to power down and wake.
 
 ```json
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "timestamp": "2026-09-02T12:00:00Z",
   "stationProfile": "server",
   "remoteAppEnabled": true,
   "winrm": { "ready": true },
-  "autoStartConfigured": true,
+  "legacyAppControlAutostart": false,
   "wake": { "armedCount": 1, "nicPower": [] },
   "power": {
     "activePlan": "Balanced",

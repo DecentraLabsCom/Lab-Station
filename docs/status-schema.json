@@ -10,7 +10,7 @@
     "stationProfile",
     "remoteAppEnabled",
     "winrm",
-    "autoStartConfigured",
+    "legacyAppControlAutostart",
     "wake",
     "power",
     "readiness",
@@ -22,15 +22,15 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "pattern": "^1\\.",
-      "description": "Telemetry contract version. Current value is 1.0.0."
+      "pattern": "^2\\.",
+      "description": "Telemetry contract version. Current value is 2.0.0."
     },
     "timestamp": {"type": "string", "format": "date-time"},
     "stationProfile": {"type": "string", "enum": ["server", "hybrid"]},
     "identity": {"type": "object", "additionalProperties": true},
     "remoteAppEnabled": {"type": "boolean"},
     "winrm": {"$ref": "#/definitions/object"},
-    "autoStartConfigured": {"type": "boolean"},
+    "legacyAppControlAutostart": {"type": "boolean"},
     "wake": {
       "type": "object",
       "properties": {

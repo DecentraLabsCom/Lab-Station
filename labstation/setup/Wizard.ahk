@@ -7,7 +7,6 @@
 #Include ..\core\Admin.ahk
 #Include ..\system\RegistryManager.ahk
 #Include ..\system\WakeOnLan.ahk
-#Include ..\system\Autostart.ahk
 #Include ..\system\AccountManager.ahk
 #Include ..\system\WinRM.ahk
 #Include ..\system\ServiceManager.ahk
@@ -104,7 +103,7 @@ LS_WizardSaveProfile(mode) {
 LS_WizardServerSteps() {
     return [
         Map("label", "Create/configure LABUSER + Remote Desktop Users + Autologon", "action", (*) => LS_WizardAccountServer()),
-        Map("label", "Register AppControl autostart", "action", (*) => LS_WizardAutostartServer()),
+        Map("label", "Remove legacy AppControl autostart; launch it from Guacamole", "action", (*) => LS_WizardClearLegacyAppControlAutostart()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
@@ -116,7 +115,7 @@ LS_WizardServerSteps() {
 LS_WizardHybridSteps() {
     return [
         Map("label", "Create/update LABUSER + Remote Desktop Users (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
-        Map("label", "Register autostart only for LABUSER", "action", (*) => LS_WizardAutostartHybrid()),
+        Map("label", "Remove legacy AppControl autostart; launch it from Guacamole", "action", (*) => LS_WizardClearLegacyAppControlAutostart()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
@@ -181,10 +180,6 @@ LS_WizardWinRM() {
     return false
 }
 
-LS_WizardAutostartServer() {
-    return LS_Autostart.Configure()
-}
-
-LS_WizardAutostartHybrid() {
-    return LS_Autostart.Configure("", LS_AccountManager.DefaultUser)
+LS_WizardClearLegacyAppControlAutostart() {
+    return LS_RegistryManager.RemoveRunEntry("LabStationAppControl")
 }

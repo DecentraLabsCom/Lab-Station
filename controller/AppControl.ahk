@@ -87,6 +87,7 @@ IsFullCommand(arg) {
 }
 
 StripOuterQuotes(value) {
+    local quote
     quote := Chr(34)
     if (StrLen(value) >= 2 && SubStr(value, 1, 1) = quote && SubStr(value, -1) = quote) {
         return SubStr(value, 2, StrLen(value) - 2)
@@ -95,6 +96,7 @@ StripOuterQuotes(value) {
 }
 
 HasOuterQuotes(value) {
+    local quote
     quote := Chr(34)
     return StrLen(value) >= 2 && SubStr(value, 1, 1) = quote && SubStr(value, -1) = quote
 }

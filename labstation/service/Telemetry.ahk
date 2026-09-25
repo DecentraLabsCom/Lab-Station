@@ -23,7 +23,7 @@ class LS_Telemetry {
         payload["host"] := A_ComputerName
         payload["version"] := LAB_STATION_VERSION
         payload["remoteAppEnabled"] := status["remoteAppEnabled"]
-        payload["autoStartConfigured"] := status["autoStartConfigured"]
+        payload["legacyAppControlAutostart"] := status["legacyAppControlAutostart"]
         payload["wake"] := status["wake"]
         payload["readiness"] := status["readiness"]
         payload["summary"] := status["summary"]

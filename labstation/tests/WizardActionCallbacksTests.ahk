@@ -63,8 +63,20 @@ try {
 try {
     hybridSteps := LS_WizardHybridSteps()
     CheckSteps("hybrid", hybridSteps, 7, &errors)
+    if (IsSet(serverSteps) && serverSteps.Length >= 2 && hybridSteps.Length >= 2
+        && serverSteps[2]["label"] != hybridSteps[2]["label"]) {
+        errors.Push("wizard: dedicated and hybrid profiles must share the Guacamole AppControl launch policy")
+    }
 } catch as e {
     errors.Push("hybrid: exception while building steps - " . e.Message)
+}
+
+wizardSource := FileRead(A_ScriptDir "\..\setup\Wizard.ahk", "UTF-8")
+if InStr(wizardSource, "LS_WizardAutostart") {
+    errors.Push("wizard: setup must not register AppControl autostart")
+}
+if !InStr(wizardSource, "LS_WizardClearLegacyAppControlAutostart") {
+    errors.Push("wizard: setup must remove legacy AppControl autostart")
 }
 
 CheckNoNativeProbeAbort(A_ScriptDir "\..\system\AccountManager.ahk", &errors)
@@ -237,7 +249,7 @@ sampleStatus := Map(
     "identity", Map("labUserExists", true),
     "remoteAppEnabled", true,
     "winrm", Map("ready", true),
-    "autoStartConfigured", true,
+    "legacyAppControlAutostart", false,
     "policy", Map(
         "autoLogon", Map("enabled", false, "userMatches", false, "passwordSet", false),
         "remoteDesktopUsers", Map("labUserPresent", true, "otherMembers", []),

@@ -69,6 +69,7 @@ QueryLatestRdpEventRecordViaApi(ids) {
 }
 
 RenderEventXml(hEvent) {
+    local buffer
     if (!hEvent)
         return ""
 

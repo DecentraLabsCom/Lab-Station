@@ -22,7 +22,7 @@ class LS_Status {
         data["identity"] := this.GetIdentityInformation()
         data["remoteAppEnabled"] := this.CheckRemoteAppPolicy()
         data["winrm"] := LS_WinRM.GetStatus()
-        data["autoStartConfigured"] := this.CheckRunEntry()
+        data["legacyAppControlAutostart"] := this.CheckLegacyAppControlAutostart()
         data["wake"] := this.GetWakeInformation()
         data["power"] := this.GetPowerInformation()
         data["biosChecklist"] := this.GetBiosChecklist()
@@ -71,7 +71,9 @@ class LS_Status {
         lines.Push("RemoteApp: " . (data["remoteAppEnabled"] ? "OK" : "MISSING"))
         lines.Push("WinRM: " . (data["winrm"]["ready"] ? "OK" : "MISSING"))
         lines.Push("Profile: " . data["stationProfile"])
-        lines.Push("Autostart: " . (data["autoStartConfigured"] ? "OK" : "MISSING"))
+        lines.Push(data["legacyAppControlAutostart"]
+            ? "AppControl launch: LEGACY AUTOSTART (REMOVE)"
+            : "AppControl launch: GUACAMOLE REMOTE APP")
         lines.Push(Format("Wake-capable devices: {1}", data["wake"]["armedCount"]))
         lines.Push("Active power plan: " . data["power"]["activePlan"])
         return LS_StrJoin(lines, "`n")
@@ -107,7 +109,7 @@ class LS_Status {
         }
     }
 
-    static CheckRunEntry() {
+    static CheckLegacyAppControlAutostart() {
         basePath := "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         try {
             command := RegRead(basePath, "LabStationAppControl")
@@ -555,8 +557,8 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("RemoteApp policy missing")
         if (!data["winrm"]["ready"])
             issues.Push("WinRM not ready for Lab Gateway")
-        if (!data["autoStartConfigured"])
-            issues.Push("Controller autostart missing")
+        if (data["legacyAppControlAutostart"])
+            issues.Push("Legacy AppControl autostart must be removed")
         autoLogon := data["policy"]["autoLogon"]
         if (dedicated && !autoLogon["enabled"])
             issues.Push("AutoAdminLogon disabled")

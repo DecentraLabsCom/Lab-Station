@@ -246,6 +246,7 @@ class LS_EnergyAudit {
     }
 
     static ParseSettingState(value, kind := "wake") {
+        local number
         if (value = "")
             return "unknown"
         normalized := StrLower(Trim(value))

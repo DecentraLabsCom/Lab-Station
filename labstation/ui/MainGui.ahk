@@ -124,7 +124,7 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.5.1")
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.5.3")
     myGui.RefreshButton.Focus()
 
     myGui.OnEvent("Close", LS_GuiClose_Handler)
@@ -149,7 +149,7 @@ LS_GuiNeedsSetup(status) {
         return true
     if (status.Has("remoteAppEnabled") && !status["remoteAppEnabled"])
         return true
-    if (status.Has("autoStartConfigured") && !status["autoStartConfigured"])
+    if (status.Has("legacyAppControlAutostart") && status["legacyAppControlAutostart"])
         return true
     if (status.Has("wake")) {
         wake := status["wake"]
@@ -422,6 +422,7 @@ LS_GuiToggleTray(gui) {
 }
 
 LS_GuiToggleLocalMode(gui) {
+    local file
     flag := LAB_STATION_LOCAL_MODE_FLAG
     message := ""
     try {

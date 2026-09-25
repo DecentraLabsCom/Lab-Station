@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+## [3.5.3] - 2026-09-25
+
+### Changed
+- AppControl is now launched by Guacamole Remote App for both dedicated and
+  hybrid stations; the setup wizard no longer registers it in Windows Run.
+- Setup removes the legacy `LabStationAppControl` Run entry and reports it as
+  configuration drift without scheduling a recovery reboot.
+- Status and heartbeat schemas are now version `2.0.0` because the obsolete
+  AppControl autostart field was removed.
+
 ## [3.5.2] - 2026-09-24
 
 ### Added

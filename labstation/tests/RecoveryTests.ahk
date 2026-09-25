@@ -60,6 +60,7 @@ RunRecoveryTests() {
         TestForcedRecoveryShortCircuitsStatusReasons()
         TestReasonsAreDistinctAndCaseInsensitive()
         TestHybridProfileAllowsAdditionalRemoteDesktopUsers()
+        TestLegacyAppControlAutostartDoesNotTriggerReboot()
     } catch as err {
         Fail("Unhandled recovery test exception: " . err.Message)
     }
@@ -102,6 +103,7 @@ TestUnhealthyStateRunsCleanupAndReboot() {
     Assert(RecordingRecovery.calls[3]["name"] = "reboot", "recovery schedules reboot after cleanup")
     Assert(RecordingRecovery.calls[3]["timeout"] = 15, "recovery forwards the reboot timeout")
     Assert(InStr(result["reason"], "other-users-active") > 0, "recovery records the active-user reason")
+    Assert(!InStr(result["reason"], "autostart"), "recovery does not depend on AppControl autostart")
     state := LS_ServiceState.ReadSection("safeguard-reboot")
     Assert(state["success"] && state["rebooted"], "recovery records the successful safeguard")
 }
@@ -138,7 +140,7 @@ TestHybridProfileAllowsAdditionalRemoteDesktopUsers() {
         "summary", Map("state", "ready", "issues", []),
         "sessions", Map("hasOtherUsers", true),
         "remoteAppEnabled", true,
-        "autoStartConfigured", true,
+        "legacyAppControlAutostart", false,
         "policy", Map(
             "autoLogon", Map("enabled", false),
             "remoteDesktopUsers", Map("otherMembers", ["Instructor"])
@@ -150,12 +152,30 @@ TestHybridProfileAllowsAdditionalRemoteDesktopUsers() {
     Assert(reasons.Length = 0, "hybrid recovery does not reboot for local users or additional RDP members")
 }
 
+TestLegacyAppControlAutostartDoesNotTriggerReboot() {
+    status := Map(
+        "stationProfile", "server",
+        "summary", Map("state", "needs-action", "issues", ["Legacy AppControl autostart must be removed"]),
+        "sessions", Map("hasOtherUsers", false),
+        "remoteAppEnabled", true,
+        "legacyAppControlAutostart", true,
+        "policy", Map(
+            "autoLogon", Map("enabled", true),
+            "remoteDesktopUsers", Map("otherMembers", [])
+        )
+    )
+
+    reasons := LS_Recovery.ResolveReasons(status, Map())
+
+    Assert(reasons.Length = 0, "legacy AppControl autostart is not a recovery reboot trigger")
+}
+
 HealthyStatus() {
     return Map(
         "summary", Map("state", "ready", "issues", []),
         "sessions", Map("hasOtherUsers", false),
         "remoteAppEnabled", true,
-        "autoStartConfigured", true,
+        "legacyAppControlAutostart", false,
         "policy", Map(
             "autoLogon", Map("enabled", true),
             "remoteDesktopUsers", Map("otherMembers", [])
@@ -168,7 +188,7 @@ UnhealthyStatus() {
         "summary", Map("state", "degraded", "issues", ["RemoteApp disabled"]),
         "sessions", Map("hasOtherUsers", true),
         "remoteAppEnabled", false,
-        "autoStartConfigured", false,
+        "legacyAppControlAutostart", false,
         "policy", Map(
             "autoLogon", Map("enabled", false),
             "remoteDesktopUsers", Map("otherMembers", ["OtherUser"])

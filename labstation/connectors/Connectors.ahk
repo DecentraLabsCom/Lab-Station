@@ -57,7 +57,8 @@ class LS_ConnectorRegistry {
         available := appControl != ""
         details := []
         details.Push("Controller path: " . (available ? appControl : "Not found"))
-        details.Push("Autostart target: " . LAB_STATION_CONTROLLER_DIR)
+        details.Push("Launch mode: Guacamole Remote App")
+        details.Push("AppControl autostart is disabled; configure Program, Working directory, and Parameters in Guacamole.")
         details.Push("RemoteApp and LABUSER readiness remain part of Station diagnosis.")
         return Map(
             "id", "guacamole-app",

@@ -249,6 +249,7 @@ if (Test-Path `$Path) {{
     ; ── private ─────────────────────────────────────────────
 
     static _FindPython() {
+        local candidates
         candidates := ["python", "python3"]
         for cmd in candidates {
             capture := this.RunCommandCapture(Format('{1} --version', cmd), "Check " . cmd)

@@ -72,14 +72,12 @@ class LS_Recovery {
         summary := status["summary"]
         profile := status.Has("stationProfile") ? status["stationProfile"] : ""
         isHybrid := (profile = "hybrid")
-        if (summary.Has("state") && summary["state"] != "ready")
+        if (summary.Has("state") && summary["state"] != "ready" && this.HasRecoverableStatusIssue(status))
             reasons.Push("status-needs-action")
         if (!isHybrid && status.Has("sessions") && status["sessions"]["hasOtherUsers"])
             reasons.Push("other-users-active")
         if (!status["remoteAppEnabled"])
             reasons.Push("remoteapp-disabled")
-        if (!status["autoStartConfigured"])
-            reasons.Push("autostart-missing")
         policy := status.Has("policy") ? status["policy"] : Map()
         if (!isHybrid && policy.Has("autoLogon") && !policy["autoLogon"]["enabled"])
             reasons.Push("autologon-disabled")
@@ -89,6 +87,19 @@ class LS_Recovery {
                 reasons.Push("remote-desktop-users-drift")
         }
         return this.DistinctReasons(reasons)
+    }
+
+    static HasRecoverableStatusIssue(status) {
+        if (!status.Has("legacyAppControlAutostart") || !status["legacyAppControlAutostart"])
+            return true
+        summary := status["summary"]
+        if (!summary.Has("issues") || !IsObject(summary["issues"]))
+            return true
+        for issue in summary["issues"] {
+            if (issue != "Legacy AppControl autostart must be removed")
+                return true
+        }
+        return false
     }
 
     static DistinctReasons(reasons) {

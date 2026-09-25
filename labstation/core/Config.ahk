@@ -4,12 +4,12 @@
 #Requires AutoHotkey v2.0
 
 if (!IsSet(LAB_STATION_VERSION)) {
-    global LAB_STATION_VERSION := "3.5.2"
+    global LAB_STATION_VERSION := "3.5.3"
 }
 
 if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {
     ; Version of the telemetry/status JSON contract (heartbeat/status.json).
-    global LAB_STATION_SCHEMA_VERSION := "1.0.0"
+    global LAB_STATION_SCHEMA_VERSION := "2.0.0"
 }
 
 if (!IsSet(LAB_STATION_COMMAND_TIMEOUT_MS)) {

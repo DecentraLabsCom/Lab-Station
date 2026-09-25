@@ -10,7 +10,7 @@ description: Windows Lab Station assistant (RemoteApp, WOL, diagnostics) with bu
 
 The project is split into two first-class components:
 
-- **Lab Station** (`labstation/`): Windows hardening assistant that configures RemoteApp policies, Wake-on-LAN, autostart, diagnostics export, tray UI, and a background monitoring service.
+- **Lab Station** (`labstation/`): Windows hardening assistant that configures RemoteApp policies, Wake-on-LAN, diagnostics export, tray UI, and a background monitoring service.
 - **AppControl** (`controller/`): The single-instance AutoHotkey controller that launches lab apps, keeps them foregrounded, and closes them automatically on session changes.
 
 Lab Station is the default entrypoint and bundles AppControl. Use AppControl directly only when you need the raw controller.
@@ -24,7 +24,6 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 > # Fire individual tasks
 > .\labstation\LabStation.ahk remoteapp
 > .\labstation\LabStation.ahk wol
-> .\labstation\LabStation.ahk autostart "C:\Tools\AppControl.exe"
 > .\labstation\LabStation.ahk status-json "C:\Logs\labstation-status.json"
 > .\labstation\LabStation.ahk tray
 > .\labstation\LabStation.ahk service install
@@ -45,12 +44,12 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 
 ### 🚀 Lab Station highlights
 
-- **Guided setup wizard**: Applies RemoteApp policy (`fAllowUnlistedRemotePrograms`), Wake-on-LAN tweaks, WinRM for Lab Gateway operations, autostart entries, and verifies admin privileges.
-- **One-off commands**: Run `remoteapp`, `wol`, `winrm`, `autostart`, `launch-app-control`, `diagnostics`, or `fmu-executor` individually from the CLI without stepping through the wizard.
-- **Diagnostics export**: `status` shows a human-readable summary. `status-json` writes JSON to stdout unless a destination path is supplied; `diagnostics` writes the report to `labstation/data/status.json` by default. The payload includes RemoteApp/WoL/autostart health, NIC power compliance (`wake.nicPower`), power-plan timeouts (`power.sleep`/`power.hibernate`), and hybrid fields (`localSessionActive`, `localModeEnabled`, `lastForcedLogoff`). The [versioned status schema](docs/status-json-schema.md) documents the machine-readable shape; the canonical validator definition remains in [`status-schema.json`](docs/status-schema.json).
+- **Guided setup wizard**: Applies RemoteApp policy (`fAllowUnlistedRemotePrograms`), removes legacy AppControl autostart, configures Wake-on-LAN and WinRM for Lab Gateway operations, exports diagnostics, and verifies admin privileges.
+- **One-off commands**: Run `remoteapp`, `wol`, `winrm`, `launch-app-control`, `diagnostics`, or `fmu-executor` individually from the CLI without stepping through the wizard.
+- **Diagnostics export**: `status` shows a human-readable summary. `status-json` writes JSON to stdout unless a destination path is supplied; `diagnostics` writes the report to `labstation/data/status.json` by default. The payload includes RemoteApp readiness and legacy AppControl-autostart detection, NIC power compliance (`wake.nicPower`), power-plan timeouts (`power.sleep`/`power.hibernate`), and hybrid fields (`localSessionActive`, `localModeEnabled`, `lastForcedLogoff`). The [versioned status schema](docs/status-json-schema.md) documents the machine-readable shape; the canonical validator definition remains in [`status-schema.json`](docs/status-schema.json).
 - **Tray UI**: Optional background tray icon showing live status, shortcuts to logs, wizard, and manual export.
 - **Background service**: `service install|start|stop|status|uninstall` provisions a Windows Scheduled Task that keeps diagnostics fresh even when nobody is logged on.
-- **Continuous telemetry**: The service now publishes a heartbeat at `labstation/data/telemetry/heartbeat.json` containing RemoteApp/WoL/autostart checks plus the timestamp of the latest cleanups so Lab Gateway can poll without a live WinRM hop. Compiled releases also mirror the legacy executable-root heartbeat during migration.
+- **Continuous telemetry**: The service now publishes a heartbeat at `labstation/data/telemetry/heartbeat.json` containing RemoteApp/WoL readiness and legacy-launch detection plus the timestamp of the latest cleanups so Lab Gateway can poll without a live WinRM hop. Compiled releases also mirror the legacy executable-root heartbeat during migration.
 - **Controlled power-down**: `power shutdown|hibernate` re-checks NIC/WoL readiness (and can reapply settings) before scheduling the OS power action, recording the order in `service-state.ini` and telemetry for auditing.
 - **Logging & data dir**: All operations log to `labstation/labstation.log` and persist data to `labstation/data/`.
 
@@ -61,7 +60,7 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 
 ### 🖼️ UI tour
 
-The screenshots below show the current v3.5.1 desktop UI. Status values are
+The screenshots below show the current v3.5.3 desktop UI. Status values are
 read from the local workstation, so host names, connector state, and warnings
 will vary between installations.
 
@@ -105,11 +104,10 @@ profile keeps the station usable by local users as well.
 
 | Command | Description |
 | --- | --- |
-| `setup` | Guided wizard that chains RemoteApp policy, Wake-on-LAN tweaks, WinRM setup, autostart registration, diagnostics export, and service prompt. |
+| `setup` | Guided wizard that chains RemoteApp policy, legacy AppControl-autostart cleanup, Wake-on-LAN, WinRM setup, diagnostics export, and service prompt. |
 | `remoteapp` | Sets `fAllowUnlistedRemotePrograms` and related HKLM keys for RemoteApp. |
 | `wol` | Configures adapters and power plan settings required for Wake-on-LAN. Follow the [Windows 10/11 desktop NIC checklist](docs/bios-wol-playbook.md). |
 | `winrm [configure\|status]` | Enables WinRM HTTPS on port 5986, exports the public server certificate, opens the scoped HTTPS firewall rule, creates/updates `.\LabGatewaySvc`, and reports readiness. Save the generated credentials in Lab Manager -> Lab Station Ops -> WinRM Credentials, then manage the certificate from the host card's `WinRM TLS trust` control. |
-| `autostart [path]` | Registers AppControl (EXE or AHK) under HKLM\Run; optional custom path overrides bundle location. |
 | `launch-app-control [...]` | Pass-through launcher that proxies CLI args to the bundled controller. |
 | `account [create\|autologon\|lockdown\|setup] [user] [password]` | Creates the lab account, refreshes autologon (DefaultUserName/Password), and `lockdown` now enforces `SeDenyInteractiveLogonRight` for every other local user. |
 | `status` | Shows the latest health summary in a message box (or stdout in a headless session); it does not emit JSON. |
@@ -118,7 +116,7 @@ profile keeps the station usable by local users as well.
 | `session guard [--grace=120] [--user=LABUSER]` | Warns local/console sessions, waits the grace period, forces logoff, and appends an audit entry to `data/telemetry/session-guard-events.jsonl`. |
 | `prepare-session [--user=LABUSER] [--guard-grace=90] [--no-guard]` | Runs `session guard` automatically (unless `--no-guard`), captures expulsions, and then wipes LABUSER temps/logs so a remote reservation can start pristine. |
 | `release-session [--user=LABUSER] [--reboot] [--reboot-timeout=15]` | Requests AppControl to close the configured application cooperatively, logs off LABUSER, and optionally schedules a reboot when a reservation finishes. |
-| `recovery reboot-if-needed [--force] [--timeout=20]` | Evaluates RemoteApp/WoL/autostart + policy drift and only schedules a forced reboot when the host is unhealthy (or when `--force` is passed). |
+| `recovery reboot-if-needed [--force] [--timeout=20]` | Evaluates RemoteApp/WoL and policy drift and only schedules a forced reboot when the host is unhealthy (or when `--force` is passed). |
 | `power shutdown [--delay=0] [--reason=text] [--no-force] [--skip-wake-check] [--repair-wake=<yes\|no>] [--require-wake]`<br>`power hibernate [...]` | Validates WoL readiness (optionally reapplying NIC settings) and schedules a graceful shutdown or hibernate so Lab Gateway can power off hosts at the end of a reservation without breaking WoL. See the [BIOS and WoL playbook](docs/bios-wol-playbook.md) for verification. |
 | `tray` | Starts the tray UI with shortcuts to logs, wizard, and manual exports. |
 | `energy audit [--json=path]` | Collects power plan, sleep/hibernate timers, NIC wake settings, and WoL readiness; optionally exports JSON for compliance. The [BIOS and WoL playbook](docs/bios-wol-playbook.md) explains the expected Windows 10/11 adapter values. |
@@ -229,7 +227,7 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
 - **`Lab-Station.zip`** – recommended package. Extracting it creates a `Lab Station` directory containing all executables and the branding image.
 - **`LabStation.exe`** – compiled Lab Station CLI/tray/wizard. Drop it in any folder together with `AppControl.exe` and run it directly (no AutoHotkey runtime required).
 - **`LabStationPanel.exe`** – compiled desktop control-panel launcher.
-- **`AppControl.exe`** – standalone controller binary for setups that only need the RDP-aware launcher (also used by Lab Station under the hood).
+- **`AppControl.exe`** – standalone controller binary launched by Guacamole Remote App for the RDP-aware lab application lifecycle.
 - **`WindowSpy.exe`** – helper from the AutoHotkey project, included for convenience to discover window classes, controls, and coordinates.
 
 ***
@@ -248,7 +246,8 @@ Every forced logoff appends a JSON line to `labstation/data/telemetry/session-gu
   .\LabStation.exe tray
   ```
 
-3. Lab Station will call the `AppControl.exe` that lives in the same folder whenever it needs to launch/configure the controller.
+3. Configure Guacamole to launch the `AppControl.exe` from that folder with the
+   lab application's window class and command-line parameters.
 
 The individual executable assets remain available when a single binary needs to
 be replaced manually.
@@ -512,8 +511,14 @@ Use the included **WindowSpy.exe** tool to identify:
 
 ### 🌐 Integration with DecentraLabs
 
-Run this script **when a user session starts** (e.g., on Guacamole/RDP connect).\
-It will keep the lab app active and **will close it on the next RDP session event** (typically the disconnect at the end of the session).
+Run this script **when a user session starts** (Guacamole launches it as the
+Remote App). It keeps the lab app active and **closes it on the next RDP
+session event** (typically the disconnect at the end of the session).
+
+Lab Station does not register AppControl in Windows Run. The same Guacamole
+Remote App configuration is used for dedicated and hybrid stations; Lab
+Station owns station readiness and session cleanup, while Guacamole owns the
+application command and its parameters.
 
 #### **Recommended Setup: Guacamole + Windows Remote App**
 

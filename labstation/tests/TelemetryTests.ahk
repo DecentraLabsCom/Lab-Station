@@ -57,7 +57,8 @@ TestBuildPayloadMirrorsStatusAndOperations() {
     Assert(payload["schemaVersion"] = LAB_STATION_SCHEMA_VERSION, "heartbeat uses the configured schema version")
     Assert(payload["version"] = LAB_STATION_VERSION, "heartbeat includes the station version")
     Assert(payload["remoteAppEnabled"], "heartbeat mirrors RemoteApp state at the top level")
-    Assert(payload["autoStartConfigured"], "heartbeat mirrors autostart state at the top level")
+    Assert(!payload["legacyAppControlAutostart"], "heartbeat reports no legacy AppControl autostart")
+    Assert(!payload.Has("autoStartConfigured"), "heartbeat no longer publishes AppControl autostart state")
     Assert(payload["summary"]["state"] = "ready", "heartbeat mirrors the status summary")
     Assert(payload["operations"]["lastPowerAction"]["mode"] = "shutdown", "heartbeat carries operation history")
     Assert(payload["status"]["localSessionActive"] = false, "heartbeat embeds the full status snapshot")
@@ -118,7 +119,7 @@ SampleStatus(operations := Map()) {
         "stationProfile", "hybrid",
         "identity", Map("labUser", "LABUSER"),
         "remoteAppEnabled", true,
-        "autoStartConfigured", true,
+        "legacyAppControlAutostart", false,
         "wake", Map("armedCount", 1, "programmableCount", 1, "nicPower", []),
         "power", Map("sleepCompliant", true, "hibernateCompliant", true),
         "policy", Map(),

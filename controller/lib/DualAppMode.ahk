@@ -34,6 +34,7 @@ WaitForProcessReady(pid, timeoutMs := 10000) {
 
 ; Helper to wait for a window using WinWait, with fallback for launcher processes
 WaitForAppWindow(className, pid, isLauncher, startupTimeout) {
+    local target
     if (startupTimeout < 1)
         startupTimeout := 1
 
@@ -200,6 +201,7 @@ PositionUWPApp(hwnd, x, y, width, height, maxRetries := 5) {
 }
 
 CreateDualAppContainer(class1, command1, class2, command2, tab1Title := "Application 1", tab2Title := "Application 2") {
+    local appPath2
     global STARTUP_TIMEOUT, POLL_INTERVAL_MS, SILENT_ERRORS
     
     Log("Initializing dual app container mode", "INFO")

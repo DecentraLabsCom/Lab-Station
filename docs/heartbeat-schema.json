@@ -10,7 +10,7 @@
     "host",
     "version",
     "remoteAppEnabled",
-    "autoStartConfigured",
+    "legacyAppControlAutostart",
     "wake",
     "readiness",
     "summary",
@@ -19,11 +19,11 @@
   ],
   "properties": {
     "timestamp": {"type": "string", "format": "date-time"},
-    "schemaVersion": {"type": "string", "pattern": "^1\\."},
+    "schemaVersion": {"type": "string", "pattern": "^2\\."},
     "host": {"type": "string"},
     "version": {"type": "string"},
     "remoteAppEnabled": {"type": "boolean"},
-    "autoStartConfigured": {"type": "boolean"},
+    "legacyAppControlAutostart": {"type": "boolean"},
     "wake": {"type": "object", "additionalProperties": true},
     "readiness": {"$ref": "status-schema.json#/definitions/readiness"},
     "summary": {

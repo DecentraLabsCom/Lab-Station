@@ -5,6 +5,7 @@
 ; ============================================================================
 
 CreateSingleApp(windowClass, appCommand) {
+    local appPath
     global target, STARTUP_TIMEOUT, ACTIVATION_RETRIES, SILENT_ERRORS, TEST_MODE, CUSTOM_CLOSE_METHOD
     global WINDOW_STATE_TIMEOUT_MS, WINDOW_STATE_POLL_INTERVAL_MS
     
