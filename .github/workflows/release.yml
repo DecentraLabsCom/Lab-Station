@@ -545,13 +545,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: |
-            dist/Lab-Station.zip
-            dist/AppControl.exe
-            dist/LabStation.exe
-            dist/LabStationPanel.exe
-            dist/WindowSpy.exe
-            dist/img/DecentraLabs.png
+          files: dist/Lab-Station.zip
           tag_name: ${{ steps.release_meta.outputs.tag }}
           prerelease: ${{ contains(steps.release_meta.outputs.tag, '-') }}
         env:
