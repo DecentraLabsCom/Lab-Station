@@ -46,7 +46,7 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 
 - **Guided setup wizard**: Applies RemoteApp policy (`fAllowUnlistedRemotePrograms`), removes legacy AppControl autostart, configures Wake-on-LAN and WinRM for Lab Gateway operations, exports diagnostics, and verifies admin privileges.
 - **One-off commands**: Run `remoteapp`, `wol`, `winrm`, `launch-app-control`, `diagnostics`, or `fmu-executor` individually from the CLI without stepping through the wizard.
-- **Diagnostics export**: `status` shows a human-readable summary. `status-json` writes JSON to stdout unless a destination path is supplied; `diagnostics` writes the report to `labstation/data/status.json` by default. The payload includes RemoteApp readiness and legacy AppControl-autostart detection, NIC power compliance (`wake.nicPower`), power-plan timeouts (`power.sleep`/`power.hibernate`), and hybrid fields (`localSessionActive`, `localModeEnabled`, `lastForcedLogoff`). The [versioned status schema](docs/status-json-schema.md) documents the machine-readable shape; the canonical validator definition remains in [`status-schema.json`](docs/status-schema.json).
+- **Diagnostics export**: `status` shows a human-readable summary. `status-json` writes JSON to stdout unless a destination path is supplied; `diagnostics` writes the report to `labstation/data/status.json` by default. The payload includes RemoteApp readiness and legacy AppControl-autostart detection, NIC power compliance (`wake.nicPower`), power-plan timeouts (`power.sleep`/`power.hibernate`), and hybrid fields (`sessions`, `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`). The typed `sessions` summary distinguishes LABUSER/local, LABUSER/remote, local-user, remote-user, mixed, and unavailable session states. The [versioned status schema](docs/status-json-schema.md) documents the machine-readable shape; the canonical validator definition remains in [`status-schema.json`](docs/status-schema.json).
 - **Tray UI**: Optional background tray icon showing live status, shortcuts to logs, wizard, and manual export.
 - **Background service**: `service install|start|stop|status|uninstall` provisions a Windows Scheduled Task that keeps diagnostics fresh even when nobody is logged on.
 - **Continuous telemetry**: The service now publishes a heartbeat at `labstation/data/telemetry/heartbeat.json` containing RemoteApp/WoL readiness and legacy-launch detection plus the timestamp of the latest cleanups so Lab Gateway can poll without a live WinRM hop. Compiled releases also mirror the legacy executable-root heartbeat during migration.
@@ -60,7 +60,7 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 
 ### 🖼️ UI tour
 
-The screenshots below show the current v3.5.3 desktop UI. Status values are
+The screenshots below show the current v3.5.4 desktop UI. Status values are
 read from the local workstation, so host names, connector state, and warnings
 will vary between installations.
 

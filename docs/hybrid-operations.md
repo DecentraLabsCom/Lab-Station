@@ -67,7 +67,8 @@ These rules help hybrid stations keep sessions clean without ruling out occasion
 
 ## 8. Translating to the Gateway UI
 
-The Gateway UI should use the public `localModeEnabled`, `localSessionActive`,
-`summary.ready`, and `lastForcedLogoff` fields from the status/heartbeat
-contracts. The local-mode flag is a policy signal; Lab Station does not itself
-reject a reservation based on that flag.
+The Gateway UI should use the typed `sessions` active-session summary together
+with `localModeEnabled`, `summary.ready`, and `lastForcedLogoff` from the
+status/heartbeat contracts. `localSessionActive` remains the legacy signal for
+other-user session handling. The local-mode flag is a policy signal; Lab
+Station does not itself reject a reservation based on that flag.

@@ -102,6 +102,43 @@ if (sessionEntries.Length != 1 || sessionEntries[1]["id"] != "7") {
     errors.Push("status: session parser must ignore localized headers and keep numeric IDs")
 }
 
+emptySummary := LS_Status.BuildSessionSummary([], "LABUSER")
+if (emptySummary["active"] || emptySummary["kind"] != "none") {
+    errors.Push("status: no sessions must report an empty active-session summary")
+}
+
+labUserConsoleEntries := []
+labUserConsoleEntries.Push(Map("user", "LABUSER", "session", "console", "id", "1", "state", "Activo"))
+labUserConsole := LS_Status.BuildSessionSummary(labUserConsoleEntries, "LABUSER")
+if (!labUserConsole["active"] || !labUserConsole["labUserActive"] || labUserConsole["labUserRemoteActive"]
+    || labUserConsole["remoteSessionActive"] || labUserConsole["kind"] != "labuser-local") {
+    errors.Push("status: a local LABUSER session must be classified separately from remote LABUSER")
+}
+
+labUserRemoteEntries := []
+labUserRemoteEntries.Push(Map("user", "LABUSER", "session", "rdp-tcp#1", "id", "7", "state", "Active"))
+labUserRemote := LS_Status.BuildSessionSummary(labUserRemoteEntries, "LABUSER")
+if (!labUserRemote["active"] || !labUserRemote["labUserActive"] || !labUserRemote["labUserRemoteActive"]
+    || !labUserRemote["remoteSessionActive"] || labUserRemote["kind"] != "labuser-remote") {
+    errors.Push("status: a remote LABUSER session must imply an active LABUSER session")
+}
+
+disconnectedEntries := []
+disconnectedEntries.Push(Map("user", "LABUSER", "session", "rdp-tcp#1", "id", "7", "state", "Disc"))
+disconnected := LS_Status.BuildSessionSummary(disconnectedEntries, "LABUSER")
+if (disconnected["active"] || disconnected["labUserActive"] || disconnected["remoteSessionActive"]) {
+    errors.Push("status: disconnected sessions must not be reported as active")
+}
+
+mixedEntries := []
+mixedEntries.Push(Map("user", "LABUSER", "session", "rdp-tcp#1", "id", "7", "state", "Active"))
+mixedEntries.Push(Map("user", "alice", "session", "console", "id", "2", "state", "Active"))
+mixed := LS_Status.BuildSessionSummary(mixedEntries, "LABUSER")
+if (!mixed["active"] || !mixed["labUserActive"] || !mixed["labUserRemoteActive"]
+    || !mixed["localUserActive"] || !mixed["remoteSessionActive"] || mixed["kind"] != "mixed") {
+    errors.Push("status: simultaneous remote LABUSER and local user sessions must be mixed")
+}
+
 winrmConfigureScript := LS_WinRM.BuildConfigureScript("LabGatewaySvc", "test-password")
 winrmSource := FileRead(A_ScriptDir "\..\system\WinRM.ahk", "UTF-8")
 if !InStr(winrmSource, "Test-WinRMCertificate") {

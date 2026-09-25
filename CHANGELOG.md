@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## [3.5.4] - 2026-09-25
+
+### Added
+- Added typed hybrid-session telemetry distinguishing active LABUSER sessions,
+  remote LABUSER sessions, local users, remote users, mixed sessions, and
+  unavailable session queries.
+
+### Changed
+- Lab Gateway and Marketplace can now report LABUSER occupancy consistently,
+  including remote reservation and demo sessions.
+- Lab Manager operations now shows `Active session` with an accessible
+  session-kind tooltip.
+
 ## [3.5.3] - 2026-09-25
 
 ### Changed

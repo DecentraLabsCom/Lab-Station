@@ -54,7 +54,7 @@ The status document can also include the following diagnostic blocks:
 | `identity` | Lab account and local profile information. |
 | `biosChecklist` | BIOS/UEFI Wake-on-LAN checks shown to the operator. |
 | `policy` | Autologon, Remote Desktop Users and interactive-logon policy state. |
-| `sessions` | Current sessions and lab-user state. |
+| `sessions` | Current sessions and the typed active-session summary. |
 | `fmuExecutor` | FMU Executor availability, endpoint health, local process state and configured port. Secrets are represented only by boolean state. |
 | `lastForcedLogoff` | The latest forced-logoff record, when one exists. |
 
@@ -71,6 +71,16 @@ requirements, while `readiness.fmu.ready` also requires the optional FMU
 Executor to be configured and running. FMU diagnostics therefore do not make a
 physical laboratory unavailable. The aggregate `summary` remains the complete
 station diagnostic verdict and can still include issues for both capabilities.
+
+The `sessions` object reports the Windows session classification used by the
+Gateway. `active` means that at least one active session is present. `kind` is
+`none`, `labuser-local`, `labuser-remote`, `local-user`, `remote-user`,
+`mixed`, or `unknown`. `labUserActive` includes both local and remote LABUSER
+sessions; `labUserRemoteActive` is the narrower remote-LABUSER signal;
+therefore `labUserRemoteActive` implies `labUserActive`. `remoteSessionActive`
+means that any active remote Windows session exists and must not be confused
+with the identity of the platform user or reservation owner. `queryOk` reports
+whether Lab Station could query Windows sessions.
 
 ## Stable nested fields
 

@@ -42,7 +42,7 @@
     "power": {"$ref": "#/definitions/object"},
     "biosChecklist": {"$ref": "#/definitions/object"},
     "policy": {"$ref": "#/definitions/object"},
-    "sessions": {"$ref": "#/definitions/object"},
+    "sessions": {"$ref": "#/definitions/sessionSummary"},
     "fmuExecutor": {
       "type": "object",
       "properties": {
@@ -84,6 +84,23 @@
   "additionalProperties": true,
   "definitions": {
     "object": {"type": "object", "additionalProperties": true},
+    "sessionSummary": {
+      "type": "object",
+      "properties": {
+        "queryOk": {"type": "boolean"},
+        "active": {"type": "boolean"},
+        "kind": {
+          "type": "string",
+          "enum": ["none", "labuser-local", "labuser-remote", "local-user", "remote-user", "mixed", "unknown"]
+        },
+        "labUserActive": {"type": "boolean"},
+        "labUserRemoteActive": {"type": "boolean"},
+        "localUserActive": {"type": "boolean"},
+        "remoteSessionActive": {"type": "boolean"},
+        "entries": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      },
+      "additionalProperties": true
+    },
     "capabilityReadiness": {
       "type": "object",
       "required": ["ready", "issues"],

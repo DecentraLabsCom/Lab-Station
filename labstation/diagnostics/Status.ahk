@@ -481,8 +481,10 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     static GetSessionInformation(identity) {
         info := Map()
         capture := LS_RunCommandCapture("quser", "Query sessions")
-        entries := capture["exitCode"] = 0 ? this.ParseSessionEntries(capture["stdout"]) : []
+        queryOk := capture["exitCode"] = 0
+        entries := queryOk ? this.ParseSessionEntries(capture["stdout"]) : []
         info["entries"] := entries
+        info["queryOk"] := queryOk
         info["labUserState"] := "none"
         info["labUserSessionId"] := ""
         info["otherUsers"] := []
@@ -497,7 +499,92 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         }
         info["hasOtherUsers"] := info["otherUsers"].Length > 0
         info["localSessionActive"] := info["hasOtherUsers"]
+        summary := this.BuildSessionSummary(entries, target)
+        summary["queryOk"] := queryOk
+        if (!queryOk)
+            summary["kind"] := "unknown"
+        for key, value in summary
+            info[key] := value
         return info
+    }
+
+    static BuildSessionSummary(entries, target) {
+        summary := Map(
+            "active", false,
+            "kind", "none",
+            "labUserActive", false,
+            "labUserRemoteActive", false,
+            "localUserActive", false,
+            "remoteSessionActive", false
+        )
+        hasLabUserLocal := false
+        hasLabUserRemote := false
+        hasOtherLocal := false
+        hasOtherRemote := false
+
+        for entry in entries {
+            if (!this.IsActiveSession(entry))
+                continue
+
+            summary["active"] := true
+            isLabUser := this.EqualsUser(entry["user"], target)
+            isRemote := this.IsRemoteSession(entry)
+            if (isLabUser) {
+                summary["labUserActive"] := true
+                if (isRemote) {
+                    summary["labUserRemoteActive"] := true
+                    summary["remoteSessionActive"] := true
+                    hasLabUserRemote := true
+                } else {
+                    hasLabUserLocal := true
+                }
+            } else if (isRemote) {
+                summary["remoteSessionActive"] := true
+                hasOtherRemote := true
+            } else {
+                summary["localUserActive"] := true
+                hasOtherLocal := true
+            }
+        }
+
+        categoryCount := (hasLabUserLocal ? 1 : 0) + (hasLabUserRemote ? 1 : 0)
+            + (hasOtherLocal ? 1 : 0) + (hasOtherRemote ? 1 : 0)
+        if (!summary["active"])
+            return summary
+        if (categoryCount != 1) {
+            summary["kind"] := "mixed"
+        } else if (hasLabUserLocal) {
+            summary["kind"] := "labuser-local"
+        } else if (hasLabUserRemote) {
+            summary["kind"] := "labuser-remote"
+        } else if (hasOtherLocal) {
+            summary["kind"] := "local-user"
+        } else if (hasOtherRemote) {
+            summary["kind"] := "remote-user"
+        } else {
+            summary["kind"] := "unknown"
+        }
+        return summary
+    }
+
+    static IsActiveSession(entry) {
+        state := StrLower(Trim(entry.Has("state") ? entry["state"] : ""))
+        return state = "active"
+            || state = "activo"
+            || state = "activa"
+            || state = "connected"
+            || state = "conectado"
+            || state = "conectada"
+            || state = "actif"
+            || state = "aktiv"
+            || state = "ativo"
+    }
+
+    static IsRemoteSession(entry) {
+        session := StrLower(Trim(entry.Has("session") ? entry["session"] : ""))
+        if (session = "" || session = "console" || session = "consola")
+            return false
+        return true
     }
 
     static ParseSessionEntries(text) {
