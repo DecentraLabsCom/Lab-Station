@@ -68,6 +68,7 @@ global CONTROLLER_CLOSE_REQUEST_FILE := CONTROLLER_DATA_DIR "\controller-close.r
 global CONTROLLER_CLOSE_RESULT_FILE := CONTROLLER_DATA_DIR "\controller-close.result"
 
 ControllerResolveDataDir() {
+    local candidates, candidate
     candidates := [
         A_ScriptDir "\labstation\data",
         A_ScriptDir "\..\labstation\data",

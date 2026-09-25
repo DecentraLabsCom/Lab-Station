@@ -1,18 +1,16 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
 #Include ..\..\controller\lib\Config.ahk
+#Include ..\..\controller\lib\Utils.ahk
+#Include ..\..\controller\lib\WindowClosing.ahk
 #Include ..\..\controller\lib\CloseRequest.ahk
+#Include ..\service\SessionGuard.ahk
+#Include ..\service\FmuExecutor.ahk
 #Include ..\service\SessionManager.ahk
 
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-ControllerCloseRequestTests-" A_TickCount
 global ORIGINAL_PRESENCE_FILE := LAB_STATION_CONTROLLER_PRESENCE_FILE
-
-; SessionManager and the controller share the same marker format. The test
-; provides the controller log function because only the protocol helpers are
-; exercised here; no interactive controller window is started.
-Log(message, level := "INFO") {
-}
 
 DirCreate(TEST_ROOT)
 LAB_STATION_CONTROLLER_PRESENCE_FILE := TEST_ROOT "\controller-presence.txt"
@@ -29,7 +27,7 @@ RunControllerCloseRequestTests() {
         TestControllerPresenceRejectsStaleMarker()
         TestControllerPresenceRejectsMalformedMarker()
     } catch as err {
-        Fail("Unhandled controller-close test exception: " . err.Message)
+        LS_TestFail("Unhandled controller-close test exception: " . err.Message)
     }
 
     LAB_STATION_CONTROLLER_PRESENCE_FILE := ORIGINAL_PRESENCE_FILE
@@ -45,17 +43,17 @@ RunControllerCloseRequestTests() {
 }
 
 TestControllerRequestParsing() {
-    Assert(ControllerRequestTick("12345-20260924200000-1234") = 12345,
+    LS_TestAssert(ControllerRequestTick("12345-20260924200000-1234") = 12345,
         "controller request token exposes its creation tick")
-    Assert(ControllerRequestTick("not-a-request") = 0,
+    LS_TestAssert(ControllerRequestTick("not-a-request") = 0,
         "malformed controller request token is ignored")
 }
 
 TestControllerResultMatching() {
     token := "12345-20260924200000-1234"
-    Assert(LS_SessionManager.CloseResultMatches(token . "|ok", token, "ok"),
+    LS_TestAssert(LS_SessionManager.CloseResultMatches(token . "|ok", token, "ok"),
         "session manager accepts the matching successful result")
-    Assert(!LS_SessionManager.CloseResultMatches(token . "|failed", token, "ok"),
+    LS_TestAssert(!LS_SessionManager.CloseResultMatches(token . "|failed", token, "ok"),
         "session manager rejects a result with the wrong status")
 }
 
@@ -65,9 +63,9 @@ TestControllerPresenceParsing() {
     FileAppend(pid . "|" . A_TickCount, LAB_STATION_CONTROLLER_PRESENCE_FILE, "UTF-8")
 
     presence := LS_SessionManager.ReadControllerPresence()
-    Assert(presence["present"], "a live controller marker is detected")
-    Assert(presence["pid"] = pid, "controller marker PID is preserved")
-    Assert(!presence["stale"], "a live controller marker is not stale")
+    LS_TestAssert(presence["present"], "a live controller marker is detected")
+    LS_TestAssert(presence["pid"] = pid, "controller marker PID is preserved")
+    LS_TestAssert(!presence["stale"], "a live controller marker is not stale")
     try FileDelete(LAB_STATION_CONTROLLER_PRESENCE_FILE)
 }
 
@@ -76,9 +74,9 @@ TestControllerPresenceRejectsStaleMarker() {
     FileAppend("4294967295|" . A_TickCount, LAB_STATION_CONTROLLER_PRESENCE_FILE, "UTF-8")
 
     presence := LS_SessionManager.ReadControllerPresence()
-    Assert(!presence["present"], "a dead controller PID is not treated as active")
-    Assert(presence["stale"], "a dead controller marker is reported as stale")
-    Assert(!FileExist(LAB_STATION_CONTROLLER_PRESENCE_FILE), "stale controller marker is removed")
+    LS_TestAssert(!presence["present"], "a dead controller PID is not treated as active")
+    LS_TestAssert(presence["stale"], "a dead controller marker is reported as stale")
+    LS_TestAssert(!FileExist(LAB_STATION_CONTROLLER_PRESENCE_FILE), "stale controller marker is removed")
 }
 
 TestControllerPresenceRejectsMalformedMarker() {
@@ -86,7 +84,7 @@ TestControllerPresenceRejectsMalformedMarker() {
     FileAppend("not-a-marker", LAB_STATION_CONTROLLER_PRESENCE_FILE, "UTF-8")
 
     presence := LS_SessionManager.ReadControllerPresence()
-    Assert(!presence["present"], "a malformed controller marker is not treated as active")
-    Assert(presence["stale"], "a malformed controller marker is reported as stale")
-    Assert(!FileExist(LAB_STATION_CONTROLLER_PRESENCE_FILE), "malformed controller marker is removed")
+    LS_TestAssert(!presence["present"], "a malformed controller marker is not treated as active")
+    LS_TestAssert(presence["stale"], "a malformed controller marker is reported as stale")
+    LS_TestAssert(!FileExist(LAB_STATION_CONTROLLER_PRESENCE_FILE), "malformed controller marker is removed")
 }

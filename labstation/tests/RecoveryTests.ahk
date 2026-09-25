@@ -1,12 +1,7 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
-
-class LS_SessionGuard {
-    static Run(options) {
-        return true
-    }
-}
-
+#Include ..\service\SessionGuard.ahk
+#Include ..\service\FmuExecutor.ahk
 #Include ..\service\Recovery.ahk
 
 global TEST_FAILURES := 0
@@ -62,7 +57,7 @@ RunRecoveryTests() {
         TestHybridProfileAllowsAdditionalRemoteDesktopUsers()
         TestLegacyAppControlAutostartDoesNotTriggerReboot()
     } catch as err {
-        Fail("Unhandled recovery test exception: " . err.Message)
+        LS_TestFail("Unhandled recovery test exception: " . err.Message)
     }
 
     LAB_STATION_SERVICE_STATE_FILE := ORIGINAL_STATE_FILE
@@ -82,12 +77,12 @@ TestHealthyStateSkipsReboot() {
 
     result := RecordingRecovery.RebootIfNeeded()
 
-    Assert(result["success"], "healthy recovery result is successful")
-    Assert(result["skipped"], "healthy recovery skips the reboot")
-    Assert(result["reason"] = "healthy", "healthy recovery explains why reboot was skipped")
-    Assert(RecordingRecovery.calls.Length = 0, "healthy recovery does not close, log off, or reboot")
+    LS_TestAssert(result["success"], "healthy recovery result is successful")
+    LS_TestAssert(result["skipped"], "healthy recovery skips the reboot")
+    LS_TestAssert(result["reason"] = "healthy", "healthy recovery explains why reboot was skipped")
+    LS_TestAssert(RecordingRecovery.calls.Length = 0, "healthy recovery does not close, log off, or reboot")
     state := LS_ServiceState.ReadSection("safeguard-reboot")
-    Assert(state["success"] && state["rebooted"] = false, "healthy recovery records a skipped safeguard")
+    LS_TestAssert(state["success"] && state["rebooted"] = false, "healthy recovery records a skipped safeguard")
 }
 
 TestUnhealthyStateRunsCleanupAndReboot() {
@@ -95,17 +90,17 @@ TestUnhealthyStateRunsCleanupAndReboot() {
 
     result := RecordingRecovery.RebootIfNeeded(Map("timeout", 15, "user", "LABUSER"))
 
-    Assert(result["success"] && result["rebooted"], "unhealthy recovery schedules the reboot")
-    Assert(RecordingRecovery.calls.Length = 3, "unhealthy recovery performs all cleanup steps")
-    Assert(RecordingRecovery.calls[1]["name"] = "close-controller", "recovery closes controller processes first")
-    Assert(RecordingRecovery.calls[2]["name"] = "logoff", "recovery logs off the configured user second")
-    Assert(RecordingRecovery.calls[2]["user"] = "LABUSER", "recovery forwards the configured user")
-    Assert(RecordingRecovery.calls[3]["name"] = "reboot", "recovery schedules reboot after cleanup")
-    Assert(RecordingRecovery.calls[3]["timeout"] = 15, "recovery forwards the reboot timeout")
-    Assert(InStr(result["reason"], "other-users-active") > 0, "recovery records the active-user reason")
-    Assert(!InStr(result["reason"], "autostart"), "recovery does not depend on AppControl autostart")
+    LS_TestAssert(result["success"] && result["rebooted"], "unhealthy recovery schedules the reboot")
+    LS_TestAssert(RecordingRecovery.calls.Length = 3, "unhealthy recovery performs all cleanup steps")
+    LS_TestAssert(RecordingRecovery.calls[1]["name"] = "close-controller", "recovery closes controller processes first")
+    LS_TestAssert(RecordingRecovery.calls[2]["name"] = "logoff", "recovery logs off the configured user second")
+    LS_TestAssert(RecordingRecovery.calls[2]["user"] = "LABUSER", "recovery forwards the configured user")
+    LS_TestAssert(RecordingRecovery.calls[3]["name"] = "reboot", "recovery schedules reboot after cleanup")
+    LS_TestAssert(RecordingRecovery.calls[3]["timeout"] = 15, "recovery forwards the reboot timeout")
+    LS_TestAssert(InStr(result["reason"], "other-users-active") > 0, "recovery records the active-user reason")
+    LS_TestAssert(!InStr(result["reason"], "autostart"), "recovery does not depend on AppControl autostart")
     state := LS_ServiceState.ReadSection("safeguard-reboot")
-    Assert(state["success"] && state["rebooted"], "recovery records the successful safeguard")
+    LS_TestAssert(state["success"] && state["rebooted"], "recovery records the successful safeguard")
 }
 
 TestFailedRebootIsReportedAndRecorded() {
@@ -114,24 +109,24 @@ TestFailedRebootIsReportedAndRecorded() {
 
     result := RecordingRecovery.RebootIfNeeded(Map("timeout", 20))
 
-    Assert(!result["success"] && !result["rebooted"], "recovery reports a failed reboot schedule")
-    Assert(RecordingRecovery.calls.Length = 3, "recovery attempts cleanup before reporting reboot failure")
+    LS_TestAssert(!result["success"] && !result["rebooted"], "recovery reports a failed reboot schedule")
+    LS_TestAssert(RecordingRecovery.calls.Length = 3, "recovery attempts cleanup before reporting reboot failure")
     state := LS_ServiceState.ReadSection("safeguard-reboot")
-    Assert(!state["success"] && state["rebooted"] = false, "recovery records the failed safeguard")
+    LS_TestAssert(!state["success"] && state["rebooted"] = false, "recovery records the failed safeguard")
 }
 
 TestForcedRecoveryShortCircuitsStatusReasons() {
     reasons := LS_Recovery.ResolveReasons(UnhealthyStatus(), Map("force", true))
 
-    Assert(reasons.Length = 1, "forced recovery uses one explicit reason")
-    Assert(reasons[1] = "forced-by-backend", "forced recovery identifies the backend override")
+    LS_TestAssert(reasons.Length = 1, "forced recovery uses one explicit reason")
+    LS_TestAssert(reasons[1] = "forced-by-backend", "forced recovery identifies the backend override")
 }
 
 TestReasonsAreDistinctAndCaseInsensitive() {
     reasons := LS_Recovery.DistinctReasons(["RemoteApp-Disabled", "remoteapp-disabled", "", "Other-users-active"])
 
-    Assert(reasons.Length = 2, "recovery removes duplicate and empty reasons")
-    Assert(reasons[1] = "RemoteApp-Disabled" && reasons[2] = "Other-users-active", "recovery preserves the first spelling of each reason")
+    LS_TestAssert(reasons.Length = 2, "recovery removes duplicate and empty reasons")
+    LS_TestAssert(reasons[1] = "RemoteApp-Disabled" && reasons[2] = "Other-users-active", "recovery preserves the first spelling of each reason")
 }
 
 TestHybridProfileAllowsAdditionalRemoteDesktopUsers() {
@@ -149,7 +144,7 @@ TestHybridProfileAllowsAdditionalRemoteDesktopUsers() {
 
     reasons := LS_Recovery.ResolveReasons(status, Map())
 
-    Assert(reasons.Length = 0, "hybrid recovery does not reboot for local users or additional RDP members")
+    LS_TestAssert(reasons.Length = 0, "hybrid recovery does not reboot for local users or additional RDP members")
 }
 
 TestLegacyAppControlAutostartDoesNotTriggerReboot() {
@@ -167,7 +162,7 @@ TestLegacyAppControlAutostartDoesNotTriggerReboot() {
 
     reasons := LS_Recovery.ResolveReasons(status, Map())
 
-    Assert(reasons.Length = 0, "legacy AppControl autostart is not a recovery reboot trigger")
+    LS_TestAssert(reasons.Length = 0, "legacy AppControl autostart is not a recovery reboot trigger")
 }
 
 HealthyStatus() {
@@ -194,15 +189,4 @@ UnhealthyStatus() {
             "remoteDesktopUsers", Map("otherMembers", ["OtherUser"])
         )
     )
-}
-
-Assert(condition, message) {
-    if (!condition)
-        Fail(message)
-}
-
-Fail(message) {
-    global TEST_FAILURES
-    TEST_FAILURES += 1
-    LS_TestOutput(message . "`n")
 }

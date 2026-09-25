@@ -28,7 +28,7 @@ RunTelemetryTests() {
         TestPublishReportsPrimaryWriteFailure()
         TestPublishReportsLegacyWriteFailure()
     } catch as err {
-        Fail("Unhandled telemetry test exception: " . err.Message)
+        LS_TestFail("Unhandled telemetry test exception: " . err.Message)
     }
 
     LAB_STATION_HEARTBEAT_FILE := ORIGINAL_HEARTBEAT_FILE
@@ -54,14 +54,14 @@ TestBuildPayloadMirrorsStatusAndOperations() {
 
     payload := LS_Telemetry.BuildPayload(status)
 
-    Assert(payload["schemaVersion"] = LAB_STATION_SCHEMA_VERSION, "heartbeat uses the configured schema version")
-    Assert(payload["version"] = LAB_STATION_VERSION, "heartbeat includes the station version")
-    Assert(payload["remoteAppEnabled"], "heartbeat mirrors RemoteApp state at the top level")
-    Assert(!payload["legacyAppControlAutostart"], "heartbeat reports no legacy AppControl autostart")
-    Assert(!payload.Has("autoStartConfigured"), "heartbeat no longer publishes AppControl autostart state")
-    Assert(payload["summary"]["state"] = "ready", "heartbeat mirrors the status summary")
-    Assert(payload["operations"]["lastPowerAction"]["mode"] = "shutdown", "heartbeat carries operation history")
-    Assert(payload["status"]["localSessionActive"] = false, "heartbeat embeds the full status snapshot")
+    LS_TestAssert(payload["schemaVersion"] = LAB_STATION_SCHEMA_VERSION, "heartbeat uses the configured schema version")
+    LS_TestAssert(payload["version"] = LAB_STATION_VERSION, "heartbeat includes the station version")
+    LS_TestAssert(payload["remoteAppEnabled"], "heartbeat mirrors RemoteApp state at the top level")
+    LS_TestAssert(!payload["legacyAppControlAutostart"], "heartbeat reports no legacy AppControl autostart")
+    LS_TestAssert(!payload.Has("autoStartConfigured"), "heartbeat no longer publishes AppControl autostart state")
+    LS_TestAssert(payload["summary"]["state"] = "ready", "heartbeat mirrors the status summary")
+    LS_TestAssert(payload["operations"]["lastPowerAction"]["mode"] = "shutdown", "heartbeat carries operation history")
+    LS_TestAssert(payload["status"]["localSessionActive"] = false, "heartbeat embeds the full status snapshot")
 }
 
 TestPublishWritesPrimaryAndLegacyHeartbeats() {
@@ -69,13 +69,13 @@ TestPublishWritesPrimaryAndLegacyHeartbeats() {
 
     result := LS_Telemetry.Publish(status)
 
-    Assert(result, "telemetry publish succeeds for valid heartbeat destinations")
-    Assert(FileExist(LAB_STATION_HEARTBEAT_FILE), "telemetry writes the primary heartbeat")
-    Assert(FileExist(LAB_STATION_LEGACY_HEARTBEAT_FILE), "telemetry writes the legacy heartbeat")
+    LS_TestAssert(result, "telemetry publish succeeds for valid heartbeat destinations")
+    LS_TestAssert(FileExist(LAB_STATION_HEARTBEAT_FILE), "telemetry writes the primary heartbeat")
+    LS_TestAssert(FileExist(LAB_STATION_LEGACY_HEARTBEAT_FILE), "telemetry writes the legacy heartbeat")
     primary := LS_ParseJson(FileRead(LAB_STATION_HEARTBEAT_FILE, "UTF-8"))
     legacy := LS_ParseJson(FileRead(LAB_STATION_LEGACY_HEARTBEAT_FILE, "UTF-8"))
-    Assert(primary["status"]["operations"]["lastReleaseSession"]["success"], "primary heartbeat contains operation data")
-    Assert(legacy["status"]["localModeEnabled"] = false, "legacy heartbeat preserves the status snapshot")
+    LS_TestAssert(primary["status"]["operations"]["lastReleaseSession"]["success"], "primary heartbeat contains operation data")
+    LS_TestAssert(legacy["status"]["localModeEnabled"] = false, "legacy heartbeat preserves the status snapshot")
 }
 
 TestBuildPayloadFallsBackToServiceStateOperations() {
@@ -86,8 +86,8 @@ TestBuildPayloadFallsBackToServiceStateOperations() {
 
     payload := LS_Telemetry.BuildPayload(status)
 
-    Assert(payload["operations"]["lastPrepareSession"]["success"], "heartbeat reads prepare status when operations are absent")
-    Assert(payload["operations"]["lastPrepareSession"]["user"] = "LABUSER", "heartbeat preserves service-state operation metadata")
+    LS_TestAssert(payload["operations"]["lastPrepareSession"]["success"], "heartbeat reads prepare status when operations are absent")
+    LS_TestAssert(payload["operations"]["lastPrepareSession"]["user"] = "LABUSER", "heartbeat preserves service-state operation metadata")
 }
 
 TestPublishReportsPrimaryWriteFailure() {
@@ -98,7 +98,7 @@ TestPublishReportsPrimaryWriteFailure() {
     result := LS_Telemetry.Publish(SampleStatus())
 
     LAB_STATION_HEARTBEAT_FILE := originalPath
-    Assert(!result, "telemetry reports failure when the primary heartbeat cannot be written")
+    LS_TestAssert(!result, "telemetry reports failure when the primary heartbeat cannot be written")
 }
 
 TestPublishReportsLegacyWriteFailure() {
@@ -109,7 +109,7 @@ TestPublishReportsLegacyWriteFailure() {
     result := LS_Telemetry.Publish(SampleStatus())
 
     LAB_STATION_LEGACY_HEARTBEAT_FILE := originalPath
-    Assert(!result, "telemetry reports failure when the legacy heartbeat cannot be written")
+    LS_TestAssert(!result, "telemetry reports failure when the legacy heartbeat cannot be written")
 }
 
 SampleStatus(operations := Map()) {
@@ -133,15 +133,4 @@ SampleStatus(operations := Map()) {
         "localSessionActive", false,
         "localModeEnabled", false
     )
-}
-
-Assert(condition, message) {
-    if (!condition)
-        Fail(message)
-}
-
-Fail(message) {
-    global TEST_FAILURES
-    TEST_FAILURES += 1
-    LS_TestOutput(message . Chr(10))
 }

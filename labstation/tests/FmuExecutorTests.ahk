@@ -187,7 +187,7 @@ RunFmuExecutorTests() {
         TestHealthSummaryFallsBackToSidecarHealth()
         TestHealthSummaryRejectsUnhealthyLiveProcess()
     } catch as err {
-        Fail("Unhandled FMU executor test exception: " . err.Message)
+        LS_TestFail("Unhandled FMU executor test exception: " . err.Message)
     }
 
     LAB_STATION_FMU_EXECUTOR_DIR := ORIGINAL_EXECUTOR_DIR
@@ -208,13 +208,13 @@ TestConfiguredPortUsesEnvironmentAndSafeFallback() {
     original := EnvGet("FMU_EXECUTOR_PORT")
 
     EnvSet("FMU_EXECUTOR_PORT", "19091")
-    Assert(LS_ResolveFmuExecutorPort() = 19091, "FMU supervisor reads a valid port from the environment")
+    LS_TestAssert(LS_ResolveFmuExecutorPort() = 19091, "FMU supervisor reads a valid port from the environment")
 
     EnvSet("FMU_EXECUTOR_PORT", "65536")
-    Assert(LS_ResolveFmuExecutorPort() = 8091, "FMU supervisor falls back when the port is outside the TCP range")
+    LS_TestAssert(LS_ResolveFmuExecutorPort() = 8091, "FMU supervisor falls back when the port is outside the TCP range")
 
     EnvSet("FMU_EXECUTOR_PORT", "not-a-port")
-    Assert(LS_ResolveFmuExecutorPort() = 8091, "FMU supervisor falls back when the port is not numeric")
+    LS_TestAssert(LS_ResolveFmuExecutorPort() = 8091, "FMU supervisor falls back when the port is not numeric")
 
     EnvSet("FMU_EXECUTOR_PORT", original)
 }
@@ -224,24 +224,24 @@ TestAvailabilityUsesExecutorLayout() {
 
     try FileDelete(TEST_ROOT "\app\main.py")
     try DirDelete(TEST_ROOT "\app", true)
-    Assert(!LS_FmuExecutor.IsAvailable(), "FMU executor is unavailable without its application entrypoint")
+    LS_TestAssert(!LS_FmuExecutor.IsAvailable(), "FMU executor is unavailable without its application entrypoint")
 
     DirCreate(TEST_ROOT "\app")
     FileAppend("# test executor" . Chr(10), TEST_ROOT "\app\main.py", "UTF-8")
-    Assert(LS_FmuExecutor.IsAvailable(), "FMU executor is available when app/main.py is present")
+    LS_TestAssert(LS_FmuExecutor.IsAvailable(), "FMU executor is available when app/main.py is present")
 }
 
 TestStartRequiresAvailabilityAndToken() {
     RecordingFmuExecutor.Reset()
 
     result := RecordingFmuExecutor.Start()
-    Assert(!result, "FMU start fails when the executor directory is unavailable")
-    Assert(RecordingFmuExecutor.firewallCalls = 0, "unavailable executor does not configure firewall")
+    LS_TestAssert(!result, "FMU start fails when the executor directory is unavailable")
+    LS_TestAssert(RecordingFmuExecutor.firewallCalls = 0, "unavailable executor does not configure firewall")
 
     RecordingFmuExecutor.available := true
     result := RecordingFmuExecutor.Start()
-    Assert(!result, "FMU start fails when the internal token is missing")
-    Assert(RecordingFmuExecutor.firewallCalls = 0, "missing token does not configure firewall")
+    LS_TestAssert(!result, "FMU start fails when the internal token is missing")
+    LS_TestAssert(RecordingFmuExecutor.firewallCalls = 0, "missing token does not configure firewall")
 }
 
 TestStartRunsTheConfiguredPythonExecutor() {
@@ -252,12 +252,12 @@ TestStartRunsTheConfiguredPythonExecutor() {
 
     result := RecordingFmuExecutor.Start()
 
-    Assert(result, "FMU start succeeds after availability, token and firewall checks")
-    Assert(RecordingFmuExecutor.firewallCalls = 1, "FMU start configures firewall before launch")
-    Assert(RecordingFmuExecutor.launchCalls.Length = 1, "FMU start launches one executor process")
-    Assert(InStr(RecordingFmuExecutor.launchCalls[1]["command"], Chr(34) . "python" . Chr(34) . " -m app") > 0, "FMU start launches the Python app module")
-    Assert(RecordingFmuExecutor.launchCalls[1]["workingDir"] = LAB_STATION_FMU_EXECUTOR_DIR, "FMU start uses the executor working directory")
-    Assert(RecordingFmuExecutor._pid = 4242, "FMU start records the child process PID")
+    LS_TestAssert(result, "FMU start succeeds after availability, token and firewall checks")
+    LS_TestAssert(RecordingFmuExecutor.firewallCalls = 1, "FMU start configures firewall before launch")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls.Length = 1, "FMU start launches one executor process")
+    LS_TestAssert(InStr(RecordingFmuExecutor.launchCalls[1]["command"], Chr(34) . "python" . Chr(34) . " -m app") > 0, "FMU start launches the Python app module")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls[1]["workingDir"] = LAB_STATION_FMU_EXECUTOR_DIR, "FMU start uses the executor working directory")
+    LS_TestAssert(RecordingFmuExecutor._pid = 4242, "FMU start records the child process PID")
 }
 
 TestStartStopsBeforeLaunchWhenFirewallFails() {
@@ -268,8 +268,8 @@ TestStartStopsBeforeLaunchWhenFirewallFails() {
 
     result := RecordingFmuExecutor.Start()
 
-    Assert(!result, "FMU start reports firewall configuration failure")
-    Assert(RecordingFmuExecutor.launchCalls.Length = 0, "FMU start does not launch after firewall failure")
+    LS_TestAssert(!result, "FMU start reports firewall configuration failure")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls.Length = 0, "FMU start does not launch after firewall failure")
 }
 
 TestStartReportsLaunchFailure() {
@@ -281,8 +281,8 @@ TestStartReportsLaunchFailure() {
 
     result := RecordingFmuExecutor.Start()
 
-    Assert(!result, "FMU start reports a process launch exception")
-    Assert(RecordingFmuExecutor._pid = 0, "failed FMU launch does not publish a child PID")
+    LS_TestAssert(!result, "FMU start reports a process launch exception")
+    LS_TestAssert(RecordingFmuExecutor._pid = 0, "failed FMU launch does not publish a child PID")
 }
 
 TestStartDoesNotDuplicateRunningExecutor() {
@@ -295,37 +295,37 @@ TestStartDoesNotDuplicateRunningExecutor() {
 
     result := RecordingFmuExecutor.Start()
 
-    Assert(result, "FMU start is idempotent when the child is already running")
-    Assert(RecordingFmuExecutor.launchCalls.Length = 0, "FMU start does not launch a duplicate child")
+    LS_TestAssert(result, "FMU start is idempotent when the child is already running")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls.Length = 0, "FMU start does not launch a duplicate child")
 }
 
 TestProcessExistsBuildsRunnablePowerShell() {
     ProcessProbeFmuExecutor.Reset()
 
-    Assert(ProcessProbeFmuExecutor._ProcessExists(4242), "FMU process probe accepts a successful PowerShell marker")
-    Assert(ProcessProbeFmuExecutor.captureCalls.Length = 1, "FMU process probe invokes PowerShell once")
+    LS_TestAssert(ProcessProbeFmuExecutor._ProcessExists(4242), "FMU process probe accepts a successful PowerShell marker")
+    LS_TestAssert(ProcessProbeFmuExecutor.captureCalls.Length = 1, "FMU process probe invokes PowerShell once")
 
     script := ProcessProbeFmuExecutor.captureCalls[1]["script"]
-    Assert(InStr(script, "try {") > 0 && InStr(script, "} catch {") > 0, "FMU process probe generates single-brace PowerShell blocks")
-    Assert(InStr(script, "{{") = 0 && InStr(script, "}}") = 0, "FMU process probe does not leak Format brace escapes")
-    Assert(InStr(script, "Get-Process -Id 4242") > 0, "FMU process probe substitutes the PID")
+    LS_TestAssert(InStr(script, "try {") > 0 && InStr(script, "} catch {") > 0, "FMU process probe generates single-brace PowerShell blocks")
+    LS_TestAssert(InStr(script, "{{") = 0 && InStr(script, "}}") = 0, "FMU process probe does not leak Format brace escapes")
+    LS_TestAssert(InStr(script, "Get-Process -Id 4242") > 0, "FMU process probe substitutes the PID")
 
     ProcessProbeFmuExecutor.captureResult := Map("exitCode", 0, "stdout", "0", "stderr", "")
-    Assert(!ProcessProbeFmuExecutor._ProcessExists(4242), "FMU process probe rejects a negative PowerShell marker")
+    LS_TestAssert(!ProcessProbeFmuExecutor._ProcessExists(4242), "FMU process probe rejects a negative PowerShell marker")
 }
 
 TestStopIsIdempotentAndClearsPid() {
     RecordingFmuExecutor.Reset()
 
-    Assert(RecordingFmuExecutor.Stop(), "FMU stop succeeds when no child is registered")
-    Assert(RecordingFmuExecutor.stopCalls.Length = 0, "FMU stop does not kill an empty PID")
+    LS_TestAssert(RecordingFmuExecutor.Stop(), "FMU stop succeeds when no child is registered")
+    LS_TestAssert(RecordingFmuExecutor.stopCalls.Length = 0, "FMU stop does not kill an empty PID")
 
     RecordingFmuExecutor._pid := 1234
     result := RecordingFmuExecutor.Stop()
 
-    Assert(result, "FMU stop succeeds after issuing the process termination command")
-    Assert(RecordingFmuExecutor.stopCalls[1] = 1234, "FMU stop targets the recorded child PID")
-    Assert(RecordingFmuExecutor._pid = 0 && RecordingFmuExecutor._consecutiveFailures = 0, "FMU stop clears PID and health failure state")
+    LS_TestAssert(result, "FMU stop succeeds after issuing the process termination command")
+    LS_TestAssert(RecordingFmuExecutor.stopCalls[1] = 1234, "FMU stop targets the recorded child PID")
+    LS_TestAssert(RecordingFmuExecutor._pid = 0 && RecordingFmuExecutor._consecutiveFailures = 0, "FMU stop clears PID and health failure state")
 }
 
 TestRestartStopsWaitsAndStarts() {
@@ -338,10 +338,10 @@ TestRestartStopsWaitsAndStarts() {
 
     result := RecordingFmuExecutor.Restart()
 
-    Assert(result, "FMU restart succeeds when stop and start succeed")
-    Assert(RecordingFmuExecutor.stopCalls.Length = 1, "FMU restart stops the previous executor")
-    Assert(RecordingFmuExecutor.waitCalls.Length = 1 && RecordingFmuExecutor.waitCalls[1] = 1000, "FMU restart waits before launching again")
-    Assert(RecordingFmuExecutor.launchCalls.Length = 1, "FMU restart launches a replacement executor")
+    LS_TestAssert(result, "FMU restart succeeds when stop and start succeed")
+    LS_TestAssert(RecordingFmuExecutor.stopCalls.Length = 1, "FMU restart stops the previous executor")
+    LS_TestAssert(RecordingFmuExecutor.waitCalls.Length = 1 && RecordingFmuExecutor.waitCalls[1] = 1000, "FMU restart waits before launching again")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls.Length = 1, "FMU restart launches a replacement executor")
 }
 
 TestHealthCheckParsesSuccessAndTracksFailures() {
@@ -352,17 +352,17 @@ TestHealthCheckParsesSuccessAndTracksFailures() {
         "stderr", ""
     )
 
-    Assert(RecordingFmuExecutor.CheckHealth(), "FMU health check accepts a valid JSON response")
-    Assert(RecordingFmuExecutor._consecutiveFailures = 0, "successful health check clears failure count")
-    Assert(RecordingFmuExecutor._lastHealthResult["fmuCount"] = 2, "health check stores executor metadata")
+    LS_TestAssert(RecordingFmuExecutor.CheckHealth(), "FMU health check accepts a valid JSON response")
+    LS_TestAssert(RecordingFmuExecutor._consecutiveFailures = 0, "successful health check clears failure count")
+    LS_TestAssert(RecordingFmuExecutor._lastHealthResult["fmuCount"] = 2, "health check stores executor metadata")
 
     RecordingFmuExecutor.captureResult := Map("exitCode", 0, "stdout", "ERROR", "stderr", "")
-    Assert(!RecordingFmuExecutor.CheckHealth(), "FMU health check rejects the executor error response")
-    Assert(RecordingFmuExecutor._consecutiveFailures = 1 && RecordingFmuExecutor._lastHealthResult["status"] = "unreachable", "unreachable health checks are counted")
+    LS_TestAssert(!RecordingFmuExecutor.CheckHealth(), "FMU health check rejects the executor error response")
+    LS_TestAssert(RecordingFmuExecutor._consecutiveFailures = 1 && RecordingFmuExecutor._lastHealthResult["status"] = "unreachable", "unreachable health checks are counted")
 
     RecordingFmuExecutor.captureResult := Map("exitCode", 0, "stdout", "not-json", "stderr", "")
-    Assert(!RecordingFmuExecutor.CheckHealth(), "FMU health check rejects malformed JSON")
-    Assert(RecordingFmuExecutor._lastHealthResult["status"] = "parse-error", "malformed health JSON is classified as a parse error")
+    LS_TestAssert(!RecordingFmuExecutor.CheckHealth(), "FMU health check rejects malformed JSON")
+    LS_TestAssert(RecordingFmuExecutor._lastHealthResult["status"] = "parse-error", "malformed health JSON is classified as a parse error")
 }
 
 TestTickStartsMissingExecutor() {
@@ -373,8 +373,8 @@ TestTickStartsMissingExecutor() {
 
     RecordingFmuExecutor.Tick()
 
-    Assert(RecordingFmuExecutor.launchCalls.Length = 1, "service tick starts an available executor that is not running")
-    Assert(RecordingFmuExecutor._lastHealthCheck > 0, "service tick schedules the next health check after startup")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls.Length = 1, "service tick starts an available executor that is not running")
+    LS_TestAssert(RecordingFmuExecutor._lastHealthCheck > 0, "service tick schedules the next health check after startup")
 }
 
 TestTickRestartsAfterConsecutiveHealthFailures() {
@@ -391,10 +391,10 @@ TestTickRestartsAfterConsecutiveHealthFailures() {
         RecordingFmuExecutor.Tick()
     }
 
-    Assert(RecordingFmuExecutor.captureCalls.Length = 3, "service tick performs three health checks before restarting")
-    Assert(RecordingFmuExecutor._consecutiveFailures = 0, "FMU restart clears the consecutive failure count")
-    Assert(RecordingFmuExecutor.stopCalls.Length = 1 && RecordingFmuExecutor.launchCalls.Length = 1, "service tick restarts the executor at the failure threshold")
-    Assert(RecordingFmuExecutor.waitCalls.Length = 1, "service tick restart uses the controlled restart path")
+    LS_TestAssert(RecordingFmuExecutor.captureCalls.Length = 3, "service tick performs three health checks before restarting")
+    LS_TestAssert(RecordingFmuExecutor._consecutiveFailures = 0, "FMU restart clears the consecutive failure count")
+    LS_TestAssert(RecordingFmuExecutor.stopCalls.Length = 1 && RecordingFmuExecutor.launchCalls.Length = 1, "service tick restarts the executor at the failure threshold")
+    LS_TestAssert(RecordingFmuExecutor.waitCalls.Length = 1, "service tick restart uses the controlled restart path")
 }
 
 TestFindPythonUsesTheFirstWorkingCandidate() {
@@ -406,8 +406,8 @@ TestFindPythonUsesTheFirstWorkingCandidate() {
 
     python := RecordingPythonFmuExecutor._FindPython()
 
-    Assert(python = "python3", "FMU executor falls back to python3 when python is unavailable")
-    Assert(RecordingPythonFmuExecutor.captureCalls.Length = 2, "FMU executor probes both Python candidates in order")
+    LS_TestAssert(python = "python3", "FMU executor falls back to python3 when python is unavailable")
+    LS_TestAssert(RecordingPythonFmuExecutor.captureCalls.Length = 2, "FMU executor probes both Python candidates in order")
 }
 
 TestCleanTempStateUsesTheExecutorTempFolder() {
@@ -416,12 +416,12 @@ TestCleanTempStateUsesTheExecutorTempFolder() {
 
     result := RecordingFmuExecutor.CleanTempState()
 
-    Assert(!result, "FMU temp cleanup reports a PowerShell failure")
-    Assert(RecordingFmuExecutor.shellCalls.Length = 1, "FMU temp cleanup executes one cleanup script")
-    Assert(InStr(RecordingFmuExecutor.shellCalls[1]["script"], "fmu-data") > 0, "FMU temp cleanup targets the executor data directory")
+    LS_TestAssert(!result, "FMU temp cleanup reports a PowerShell failure")
+    LS_TestAssert(RecordingFmuExecutor.shellCalls.Length = 1, "FMU temp cleanup executes one cleanup script")
+    LS_TestAssert(InStr(RecordingFmuExecutor.shellCalls[1]["script"], "fmu-data") > 0, "FMU temp cleanup targets the executor data directory")
 
     RecordingFmuExecutor.shellResult := 0
-    Assert(RecordingFmuExecutor.CleanTempState(), "FMU temp cleanup succeeds when PowerShell succeeds")
+    LS_TestAssert(RecordingFmuExecutor.CleanTempState(), "FMU temp cleanup succeeds when PowerShell succeeds")
 }
 
 TestTerminateAllSessionsRestartsRunningExecutor() {
@@ -434,8 +434,8 @@ TestTerminateAllSessionsRestartsRunningExecutor() {
 
     result := RecordingFmuExecutor.TerminateAllSessions()
 
-    Assert(result, "FMU session termination succeeds through process restart")
-    Assert(RecordingFmuExecutor.stopCalls.Length = 1 && RecordingFmuExecutor.launchCalls.Length = 1, "FMU session termination restarts a running executor")
+    LS_TestAssert(result, "FMU session termination succeeds through process restart")
+    LS_TestAssert(RecordingFmuExecutor.stopCalls.Length = 1 && RecordingFmuExecutor.launchCalls.Length = 1, "FMU session termination restarts a running executor")
 }
 
 TestHealthSummaryMirrorsOperationalState() {
@@ -451,9 +451,9 @@ TestHealthSummaryMirrorsOperationalState() {
 
     summary := RecordingFmuExecutor.GetHealthSummary()
 
-    Assert(summary["available"] && summary["running"] && summary["tokenConfigured"], "FMU health summary reports availability, process and token state")
-    Assert(summary["pid"] = 8080 && summary["port"] = 18091, "FMU health summary reports PID and configured port")
-    Assert(summary["consecutiveFailures"] = 0 && summary["lastHealth"]["status"] = "UP", "FMU health summary reports health history")
+    LS_TestAssert(summary["available"] && summary["running"] && summary["tokenConfigured"], "FMU health summary reports availability, process and token state")
+    LS_TestAssert(summary["pid"] = 8080 && summary["port"] = 18091, "FMU health summary reports PID and configured port")
+    LS_TestAssert(summary["consecutiveFailures"] = 0 && summary["lastHealth"]["status"] = "UP", "FMU health summary reports health history")
 }
 
 TestHealthSummaryFallsBackToSidecarHealth() {
@@ -467,8 +467,8 @@ TestHealthSummaryFallsBackToSidecarHealth() {
 
     summary := RecordingFmuExecutor.GetHealthSummary()
 
-    Assert(summary["running"], "FMU health summary detects an executor started by another process")
-    Assert(RecordingFmuExecutor.captureCalls.Length = 1, "cross-process FMU status performs a health probe")
+    LS_TestAssert(summary["running"], "FMU health summary detects an executor started by another process")
+    LS_TestAssert(RecordingFmuExecutor.captureCalls.Length = 1, "cross-process FMU status performs a health probe")
 }
 
 TestHealthSummaryRejectsUnhealthyLiveProcess() {
@@ -480,17 +480,6 @@ TestHealthSummaryRejectsUnhealthyLiveProcess() {
 
     summary := RecordingFmuExecutor.GetHealthSummary()
 
-    Assert(!summary["running"], "FMU health summary rejects a live process with an unhealthy endpoint")
-    Assert(RecordingFmuExecutor.captureCalls.Length = 1, "live FMU status probes the endpoint when health is unknown")
-}
-
-Assert(condition, message) {
-    if (!condition)
-        Fail(message)
-}
-
-Fail(message) {
-    global TEST_FAILURES
-    TEST_FAILURES += 1
-    LS_TestOutput(message . Chr(10))
+    LS_TestAssert(!summary["running"], "FMU health summary rejects a live process with an unhealthy endpoint")
+    LS_TestAssert(RecordingFmuExecutor.captureCalls.Length = 1, "live FMU status probes the endpoint when health is unknown")
 }
