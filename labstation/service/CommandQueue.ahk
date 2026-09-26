@@ -9,6 +9,7 @@
 #Include SessionGuard.ahk
 #Include Recovery.ahk
 #Include ..\diagnostics\Status.ahk
+#Include Telemetry.ahk
 #Include ..\system\PowerManager.ahk
 
 class LS_CommandQueue {
@@ -88,10 +89,12 @@ class LS_CommandQueue {
                     return this.ResultState(success, exitCode, outcome["message"])
                 case "power-shutdown":
                     success := LS_PowerManager.Shutdown(cmd["options"])
+                    LS_PublishTelemetryBestEffort("power action")
                     message := success ? "Shutdown scheduled" : "Unable to schedule shutdown"
                     return this.ResultState(success, success ? 0 : 2, message)
                 case "power-hibernate":
                     success := LS_PowerManager.Hibernate(cmd["options"])
+                    LS_PublishTelemetryBestEffort("power action")
                     message := success ? "Hibernate scheduled" : "Unable to schedule hibernate"
                     return this.ResultState(success, success ? 0 : 2, message)
                 default:

@@ -83,10 +83,14 @@ try {
 
 try {
     entrypoint := FileRead(A_ScriptDir . "\..\LabStation.ahk", "UTF-8")
+    commandQueue := FileRead(A_ScriptDir . "\..\service\CommandQueue.ahk", "UTF-8")
     AssertContains("cli", entrypoint, "LS_ShowMessage", &errors)
     AssertContains("cli", entrypoint, "LS_WriteStdout", &errors)
     AssertContains("cli", entrypoint, "status-json could not write to stdout", &errors)
     AssertContains("cli", entrypoint, "ExitApp(commandExitCode)", &errors)
+    telemetryContract := "LS_PublishTelemetryBestEffort(" . Chr(34) . "power action" . Chr(34) . ")"
+    AssertContains("cli", entrypoint, telemetryContract, &errors)
+    AssertContains("command-queue", commandQueue, telemetryContract, &errors)
 } catch as e {
     errors.Push("cli: contract threw - " . e.Message)
 }

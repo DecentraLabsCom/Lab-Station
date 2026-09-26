@@ -5,9 +5,9 @@
 #SingleInstance Force
 
 ;@Ahk2Exe-SetName LabStation
-;@Ahk2Exe-SetVersion 3.5.4
-;@Ahk2Exe-SetFileVersion 3.5.4
-;@Ahk2Exe-SetProductVersion 3.5.4
+;@Ahk2Exe-SetVersion 3.5.6
+;@Ahk2Exe-SetFileVersion 3.5.6
+;@Ahk2Exe-SetProductVersion 3.5.6
 
 #Include core\Config.ahk
 #Include core\Logger.ahk
@@ -444,6 +444,7 @@ LS_HandlePowerCommand(args) {
             LS_ShowMessage("Unknown power subcommand", "Lab Station", "OK Iconx")
             return 2
     }
+    LS_PublishTelemetryBestEffort("power action")
     if (success) {
         LS_ShowMessage("Power action scheduled", "Lab Station", "OK Iconi")
         return 0

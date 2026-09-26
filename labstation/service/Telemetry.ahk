@@ -53,3 +53,12 @@ class LS_Telemetry {
         return true
     }
 }
+
+LS_PublishTelemetryBestEffort(reason := "operation") {
+    try {
+        if (!LS_Telemetry.Publish())
+            LS_LogWarning("Telemetry publication failed after " . reason)
+    } catch as e {
+        LS_LogWarning("Telemetry publication failed after " . reason . ": " . e.Message)
+    }
+}

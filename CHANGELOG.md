@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [3.5.6] - 2026-09-26
+
+### Fixed
+- Power shutdown and hibernate commands now publish telemetry immediately,
+  so Lab Gateway can display the latest power action for both direct and
+  queued commands.
+
 ## [3.5.4] - 2026-09-25
 
 ### Added
