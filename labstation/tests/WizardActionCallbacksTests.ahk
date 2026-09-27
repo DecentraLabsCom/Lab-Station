@@ -383,6 +383,9 @@ sampleReadiness := LS_Status.BuildCapabilityReadiness(sampleStatus)
 if (!sampleReadiness["physicalLab"]["ready"]) {
     errors.Push("status: FMU issues must not block physical-lab readiness")
 }
+if (!sampleReadiness["wake"]["ready"] || sampleReadiness["wake"]["issues"].Length != 0) {
+    errors.Push("status: wake readiness must remain a separate capability")
+}
 if (sampleReadiness["fmu"]["ready"] || sampleReadiness["fmu"]["issues"].Length != 2) {
     errors.Push("status: FMU readiness must retain its executor issues")
 }

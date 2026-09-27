@@ -657,6 +657,11 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("SeDenyInteractiveLogonRight not configured")
         if (deny["labUserDenied"])
             issues.Push("Lab user denied interactive logon")
+        return issues
+    }
+
+    static CollectWakeIssues(data) {
+        issues := []
         if (data["wake"]["armedCount"] = 0)
             issues.Push("No wake-armed devices detected")
         if (data["wake"]["nicNonCompliant"].Length > 0)
@@ -684,12 +689,17 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
 
     static BuildCapabilityReadiness(data) {
         stationIssues := this.CollectStationIssues(data)
+        wakeIssues := this.CollectWakeIssues(data)
         fmuIssues := this.CollectFmuIssues(data)
         fmuAvailable := data.Has("fmuExecutor") && data["fmuExecutor"]["available"]
         return Map(
             "physicalLab", Map(
                 "ready", stationIssues.Length = 0,
                 "issues", stationIssues
+            ),
+            "wake", Map(
+                "ready", wakeIssues.Length = 0,
+                "issues", wakeIssues
             ),
             "fmu", Map(
                 "available", fmuAvailable,
@@ -701,9 +711,12 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
 
     static BuildSummary(data) {
         stationIssues := this.CollectStationIssues(data)
+        wakeIssues := this.CollectWakeIssues(data)
         fmuIssues := this.CollectFmuIssues(data)
         issues := []
         for issue in stationIssues
+            issues.Push(issue)
+        for issue in wakeIssues
             issues.Push(issue)
         for issue in fmuIssues
             issues.Push(issue)

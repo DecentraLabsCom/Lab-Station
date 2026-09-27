@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.5.7] - 2026-09-27
+
+### Changed
+- Split Wake-on-LAN readiness from physical-lab and FMU readiness so Gateway
+  availability decisions can use each capability independently.
+
 ## [3.5.6] - 2026-09-26
 
 ### Fixed

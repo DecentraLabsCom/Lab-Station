@@ -16,10 +16,12 @@ operation timestamps, `localModeEnabled`, and the latest `lastForcedLogoff`.
 The heartbeat adds `host` and application `version` for file-drop consumers.
 
 `readiness.physicalLab` describes whether the station can serve a physical
-laboratory. `readiness.fmu` describes whether the optional FMU Executor is
-available and healthy. A missing or unhealthy FMU Executor can therefore leave
-the physical-lab capability ready while keeping the FMU capability unready;
-consumers should select the capability that matches their resource type.
+laboratory, while `readiness.wake` describes whether its local WoL and power
+configuration is usable. `readiness.fmu` describes whether the optional FMU
+Executor is available and healthy. A wake or FMU issue can therefore leave the
+physical-lab capability ready while keeping the affected capability unready;
+consumers should select the capability that matches the decision they are
+making.
 
 Use the Markdown schema guide for the field contract and the machine-readable
 schemas when validating ingestion:

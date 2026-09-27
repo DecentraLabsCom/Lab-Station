@@ -60,7 +60,7 @@ Lab Station is the default entrypoint and bundles AppControl. Use AppControl dir
 
 ### 🖼️ UI tour
 
-The screenshots below show the current v3.5.6 desktop UI. Status values are
+The screenshots below show the current v3.5.7 desktop UI. Status values are
 read from the local workstation, so host names, connector state, and warnings
 will vary between installations.
 
@@ -204,7 +204,7 @@ The same service loop now emits `labstation/data/telemetry/heartbeat.json` every
 
 - `localSessionActive`: true when another local/console user is still connected.
 - `localModeEnabled`: reflects the presence of `data/local-mode.flag` so the backend knows the lab is intentionally reserved for in-person use.
-- `readiness.physicalLab` and `readiness.fmu`: capability-specific readiness. FMU Executor issues affect only `fmu`; they do not make a physical laboratory unavailable.
+- `readiness.physicalLab`, `readiness.wake` and `readiness.fmu`: capability-specific readiness. Wake and FMU issues are reported separately and do not make an otherwise accessible physical laboratory unavailable.
 - `lastForcedLogoff`: metadata (timestamp, user, sessionId) for the most recent `session guard` eviction, sourced from `service-state.ini`.
 - `lastPowerAction`: records the last shutdown/hibernate order (mode, delay, wake readiness) so dashboards can prove who powered the host down.
 - `wake.nicPower`: per-adapter verdict showing `macAddress`, `status`, `wakeOnMagicPacket`, `allowTurnOff`, and `wolReady` so NIC misconfigurations surface in dashboards and Lab Gateway can suggest the Wake-on-LAN MAC.

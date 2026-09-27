@@ -59,9 +59,10 @@
     },
     "readiness": {
       "type": "object",
-      "required": ["physicalLab", "fmu"],
+      "required": ["physicalLab", "wake", "fmu"],
       "properties": {
         "physicalLab": {"$ref": "#/definitions/capabilityReadiness"},
+        "wake": {"$ref": "#/definitions/capabilityReadiness"},
         "fmu": {"$ref": "#/definitions/capabilityReadiness"}
       },
       "additionalProperties": false

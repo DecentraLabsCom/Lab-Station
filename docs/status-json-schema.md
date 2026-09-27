@@ -39,7 +39,7 @@ need and tolerate additional properties.
 | `legacyAppControlAutostart` | boolean | Whether the obsolete AppControl Windows autostart entry is still present and must be removed. |
 | `wake` | object | Wake-on-LAN device and NIC diagnostics. |
 | `power` | object | Active power plan and sleep/hibernate compliance. |
-| `readiness` | object | Capability-specific readiness for `physicalLab` and `fmu`. |
+| `readiness` | object | Capability-specific readiness for `physicalLab`, `wake` and `fmu`. |
 | `summary` | object | Aggregated readiness result and issue list. |
 | `operations` | object | Recent service operations and their outcomes. |
 | `localSessionActive` | boolean | Whether a local or console user other than the lab user is active. |
@@ -67,10 +67,12 @@ when Lab Station has a PID for it.
 
 The `readiness` object separates capabilities that can be used independently:
 `readiness.physicalLab.ready` covers the station and its physical-lab access
-requirements, while `readiness.fmu.ready` also requires the optional FMU
-Executor to be configured and running. FMU diagnostics therefore do not make a
-physical laboratory unavailable. The aggregate `summary` remains the complete
-station diagnostic verdict and can still include issues for both capabilities.
+requirements, `readiness.wake.ready` covers the local WoL and power-management
+configuration, and `readiness.fmu.ready` also requires the optional FMU
+Executor to be configured and running. Wake or FMU diagnostics therefore do
+not make an otherwise accessible physical laboratory unavailable. The
+aggregate `summary` remains the complete station diagnostic verdict and can
+still include issues for all capabilities.
 
 The `sessions` object reports the Windows session classification used by the
 Gateway. `active` means that at least one active session is present. `kind` is
@@ -119,6 +121,7 @@ Gateway can determine whether the station remains safe to power down and wake.
   },
   "readiness": {
     "physicalLab": { "ready": true, "issues": [] },
+    "wake": { "ready": true, "issues": [] },
     "fmu": { "available": false, "ready": false, "issues": [] }
   },
   "summary": { "state": "ready", "ready": true, "issues": [] },

@@ -31,7 +31,8 @@ Get-NetAdapter -Physical | Format-Table Name,Status,InterfaceDescription,MacAddr
 Use the adapter whose `Status` is `Up` and whose cable is connected to the
 station network. Lab Station evaluates every physical adapter that is active;
 an additional active wired adapter must also be configured. Disconnected
-physical adapters remain visible in diagnostics but do not fail readiness.
+physical adapters remain visible in diagnostics and affect `readiness.wake`,
+but do not fail `readiness.physicalLab` by themselves.
 
 ### 2.2 Configure the adapter in Device Manager
 
