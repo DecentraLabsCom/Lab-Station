@@ -299,24 +299,42 @@ if (`$p) {{ `$p.LocalPath }}
 `$User = '__USER__'
 `$regex = '^\s*>?\s*' + [regex]::Escape(`$User) + '\s+(?:\S+\s+)?(\d+)\s+\S+'
 `$lines = @()
-try { `$lines = quser } catch {}
-`$loggedOff = `$false
+try {
+    `$lines = @(quser)
+} catch {
+    Write-Error ("Unable to query active sessions: " + `$_.Exception.Message)
+    exit 2
+}
+`$matched = `$false
+`$allLoggedOff = `$true
 foreach (`$line in `$lines) {
     `$text = `$line.ToString()
     if (`$text -match `$regex) {
         `$sessionId = [int]`$Matches[1]
+        `$matched = `$true
         logoff `$sessionId 2>`$null
-        if (`$LASTEXITCODE -eq 0) { `$loggedOff = `$true }
+        if (`$LASTEXITCODE -ne 0) { `$allLoggedOff = `$false }
     }
 }
-if (`$loggedOff) { exit 0 } else { exit 1 }
+if (-not `$matched) {
+    Write-Output "NO_ACTIVE_SESSION"
+    exit 0
+}
+if (`$allLoggedOff) { exit 0 } else { exit 1 }
         )"
         script := StrReplace(script, "__USER__", sanitized)
-        exitCode := LS_RunPowerShell(script, "Logoff " . user)
+        capture := LS_RunPowerShellCapture(script, "Logoff " . user)
+        exitCode := capture["exitCode"]
         if (exitCode = 0) {
+            if (InStr(capture["stdout"], "NO_ACTIVE_SESSION"))
+                LS_LogInfo("No active session found for " . user . "; release already satisfied")
             return true
         }
-        LS_LogWarning("No active session found for " . user)
+        detail := LS_CaptureDetail(capture)
+        message := "Unable to log off active session for " . user
+        if (detail != "")
+            message .= ": " . detail
+        LS_LogWarning(message)
         return false
     }
 

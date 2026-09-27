@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [3.5.8] - 2026-09-27
+
+### Fixed
+- `release-session` now treats an already logged-off lab user as a successful,
+  idempotent release while preserving failures from the actual logoff process.
+
 ## [3.5.7] - 2026-09-27
 
 ### Changed

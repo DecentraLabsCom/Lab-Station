@@ -84,6 +84,7 @@ try {
 try {
     entrypoint := FileRead(A_ScriptDir . "\..\LabStation.ahk", "UTF-8")
     commandQueue := FileRead(A_ScriptDir . "\..\service\CommandQueue.ahk", "UTF-8")
+    sessionManager := FileRead(A_ScriptDir . "\..\service\SessionManager.ahk", "UTF-8")
     AssertContains("cli", entrypoint, "LS_ShowMessage", &errors)
     AssertContains("cli", entrypoint, "LS_WriteStdout", &errors)
     AssertContains("cli", entrypoint, "status-json could not write to stdout", &errors)
@@ -91,6 +92,9 @@ try {
     telemetryContract := "LS_PublishTelemetryBestEffort(" . Chr(34) . "power action" . Chr(34) . ")"
     AssertContains("cli", entrypoint, telemetryContract, &errors)
     AssertContains("command-queue", commandQueue, telemetryContract, &errors)
+    AssertContains("session-release", sessionManager, "NO_ACTIVE_SESSION", &errors)
+    AssertContains("session-release", sessionManager, "release already satisfied", &errors)
+    AssertContains("session-release", sessionManager, "Unable to log off active session", &errors)
 } catch as e {
     errors.Push("cli: contract threw - " . e.Message)
 }
