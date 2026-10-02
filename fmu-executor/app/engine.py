@@ -19,9 +19,6 @@ from fmpy import (
     instantiate_fmu as fmpy_instantiate_fmu,
     read_model_description,
 )
-from fmpy.fmi2 import FMU2Slave
-
-_DEFAULT_FMU2SLAVE = FMU2Slave
 
 from . import config
 
@@ -127,23 +124,26 @@ class FmuSession:
         self._time = self._start_time
         self._parameters = dict(parameters or {})
 
-        self._slave = self._instantiate()
+        slave = self._instantiate()
+        if slave is None:
+            raise RuntimeError("FMU instantiation returned no slave")
+        self._slave = slave
         if self._fmi_major() == "3":
-            self._slave.enterInitializationMode(
+            slave.enterInitializationMode(
                 startTime=self._start_time,
                 stopTime=self._stop_time,
             )
         else:
-            self._slave.setupExperiment(
+            slave.setupExperiment(
                 startTime=self._start_time,
                 stopTime=self._stop_time,
             )
-            self._slave.enterInitializationMode()
+            slave.enterInitializationMode()
 
         if self._parameters:
             self._apply_parameters(self._parameters)
 
-        self._slave.exitInitializationMode()
+        slave.exitInitializationMode()
         self._initialised = True
         self._terminated = False
         self._state = "initialized"
@@ -360,16 +360,6 @@ class FmuSession:
         """Instantiate through FMPy's FMI 2/FMI 3 selector."""
         if self._extract_dir is None or self._md is None:
             raise RuntimeError("FMU is not loaded")
-        # Existing Station tests and local diagnostics patch this symbol. Keep
-        # that patch point while normal execution uses the generic FMPy API.
-        if self._fmi_major() == "2" and FMU2Slave is not _DEFAULT_FMU2SLAVE:
-            slave = FMU2Slave(
-                guid=self._md.guid,
-                unzipDirectory=str(self._extract_dir),
-                modelIdentifier=self._md.coSimulation.modelIdentifier,
-            )
-            slave.instantiate()
-            return slave
         # instantiate_fmu() already calls instantiate() internally.
         return fmpy_instantiate_fmu(
             str(self._extract_dir),

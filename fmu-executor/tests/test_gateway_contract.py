@@ -527,14 +527,13 @@ class TestWsSimOutputsContract:
         """Test via sim.getOutputs (synchronous) — validates the per-message shape."""
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
-        # Patch FMU2Slave to allow initialization
-        mock_slave = MagicMock()
-        mock_slave.getReal.return_value = [3.14]
+        mock_fmu = MagicMock()
+        mock_fmu.getReal.return_value = [3.14]
 
         with patch("app.engine.read_model_description", return_value=md), \
              patch("app.engine.fmpy_extract", return_value=str(_isolate_config)), \
              patch("fmpy.read_model_description", return_value=md), \
-             patch("app.engine.FMU2Slave", return_value=mock_slave):
+             patch("app.engine.fmpy_instantiate_fmu", return_value=mock_fmu):
             with client.websocket_connect(
                 "/internal/fmu/sessions",
                 headers={"X-Internal-Session-Token": "station-shared-secret"},
@@ -572,17 +571,55 @@ class TestWsSimOutputsContract:
                 assert "values" in resp
                 assert isinstance(resp["values"], dict)
 
+    def test_get_outputs_reports_missing_model_description(self, client, _isolate_config):
+        """A selected-output request must report an unloaded model explicitly."""
+        from app import engine
+
+        _provision_fmu(_isolate_config)
+        md = _make_mock_md()
+        with patch("app.engine.read_model_description", return_value=md), \
+             patch("app.engine.fmpy_extract", return_value=str(_isolate_config)), \
+             patch("fmpy.read_model_description", return_value=md):
+            with client.websocket_connect(
+                "/internal/fmu/sessions",
+                headers={"X-Internal-Session-Token": "station-shared-secret"},
+            ) as ws:
+                ws.send_text(json.dumps({
+                    "type": "session.create",
+                    "requestId": "missing-model-create",
+                    "gatewayContext": {
+                        "mode": "station",
+                        "accessKey": "BouncingBall.fmu",
+                        "claims": {},
+                    },
+                }))
+                created = json.loads(ws.receive_text())
+                assert created["type"] == "session.created"
+                session = engine.get_session(created["sessionId"])
+                assert session is not None
+                session._md = None
+
+                ws.send_text(json.dumps({
+                    "type": "sim.getOutputs",
+                    "requestId": "missing-model-outputs",
+                    "variables": ["x"],
+                }))
+                response = json.loads(ws.receive_text())
+
+                assert response["type"] == "error"
+                assert response["code"] == "MODEL_DESCRIPTION_NOT_LOADED"
+
     def test_subscription_outputs_shape(self, client, _isolate_config):
         """Subscription events expose the fields consumed by the Gateway proxy."""
         _provision_fmu(_isolate_config)
         md = _make_mock_md()
-        mock_slave = MagicMock()
-        mock_slave.getReal.return_value = [3.14]
+        mock_fmu = MagicMock()
+        mock_fmu.getReal.return_value = [3.14]
 
         with patch("app.engine.read_model_description", return_value=md), \
              patch("app.engine.fmpy_extract", return_value=str(_isolate_config)), \
              patch("fmpy.read_model_description", return_value=md), \
-             patch("app.engine.FMU2Slave", return_value=mock_slave):
+             patch("app.engine.fmpy_instantiate_fmu", return_value=mock_fmu):
             with client.websocket_connect(
                 "/internal/fmu/sessions",
                 headers={"X-Internal-Session-Token": "station-shared-secret"},

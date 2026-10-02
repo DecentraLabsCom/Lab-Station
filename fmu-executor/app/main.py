@@ -744,10 +744,13 @@ async def _handle_ws_message(
         if variables is not None:
             if not isinstance(variables, list):
                 raise HTTPException(400, "sim.getOutputs requires 'variables' as array")
+            model_description = session._md
+            if model_description is None:
+                raise HTTPException(409, "MODEL_DESCRIPTION_NOT_LOADED")
             selected = set(variables)
             refs = [
                 int(variable.valueReference)
-                for variable in session._md.modelVariables
+                for variable in model_description.modelVariables
                 if variable.name in selected
             ]
         else:
