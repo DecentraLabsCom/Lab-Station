@@ -1,6 +1,8 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
+#Include ..\core\Json.ahk
 #Include ..\system\PowerManager.ahk
+#Include ParityTestSupport.ahk
 
 global TEST_FAILURES := 0
 
@@ -116,14 +118,16 @@ TestWakeIssuesAreRepairedBeforePowerAction() {
 }
 
 TestWakeIssuesCanBlockPowerAction() {
-    RecordingPowerManager.Reset([Readiness(false, ["No wake-armed devices"])])
+    matrix := LS_TestLoadParityMatrix()
+    vector := matrix["power"]
+    RecordingPowerManager.Reset([Readiness(vector["wakeReady"], ["No wake-armed devices"])])
 
-    result := RecordingPowerManager.Shutdown(Map(
-        "repairWake", false,
-        "failOnWakeIssues", true
-    ))
+    options := Map("repairWake", false, "failOnWakeIssues", vector["requireWake"])
+    LS_TestAssert(vector["action"] = "shutdown", "shared power vector targets shutdown")
+    result := RecordingPowerManager.Shutdown(options)
 
-    LS_TestAssert(!result, "power manager fails when wake issues are required to be absent")
+    LS_TestAssert(vector["expected"] = "blocked", "shared power vector expects required wake readiness to block shutdown")
+    LS_TestAssert(!result, "power manager fails when required wake readiness is unavailable")
     LS_TestAssert(RecordingPowerManager.commands.Length = 0, "power manager does not schedule after a blocking wake failure")
     LS_TestAssert(!RecordingPowerManager.records[1]["success"], "power manager records the blocking wake failure")
 }

@@ -9,7 +9,7 @@ if (!IsSet(LAB_STATION_VERSION)) {
 
 if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {
     ; Version of the telemetry/status JSON contract (heartbeat/status.json).
-    global LAB_STATION_SCHEMA_VERSION := "2.0.0"
+    global LAB_STATION_SCHEMA_VERSION := "3.0.0"
 }
 
 if (!IsSet(LAB_STATION_COMMAND_TIMEOUT_MS)) {

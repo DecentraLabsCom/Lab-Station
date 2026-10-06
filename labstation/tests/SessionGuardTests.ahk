@@ -1,6 +1,8 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
+#Include ..\core\Json.ahk
 #Include ..\service\SessionGuard.ahk
+#Include ParityTestSupport.ahk
 
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-SessionGuardTests-" A_TickCount
@@ -112,6 +114,7 @@ TestFiltersSessionsAndUsesGraceOptions() {
 }
 
 TestNoConflictingSessionsDoesNotWaitOrLogoff() {
+    matrix := LS_TestLoadParityMatrix()
     RecordingSessionGuard.Reset([
         Session("LABUSER", "console", "1", "Active"),
         Session("other", "rdp-tcp#2", "2", "Disc")
@@ -120,6 +123,7 @@ TestNoConflictingSessionsDoesNotWaitOrLogoff() {
     result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 60))
 
     LS_TestAssert(result, "session guard succeeds when there are no conflicting sessions")
+    LS_TestAssert(matrix["sessionSafety"]["localSession"] = "protect-unless-authorized", "shared policy preserves a local user's own session")
     LS_TestAssert(RecordingSessionGuard.waits.Length = 0, "session guard does not wait without conflicting sessions")
     LS_TestAssert(RecordingSessionGuard.notifications.Length = 0, "session guard does not notify without conflicting sessions")
     LS_TestAssert(RecordingSessionGuard.logoffs.Length = 0, "session guard does not log off without conflicting sessions")
@@ -150,6 +154,7 @@ TestLogoffFailureIsReportedAfterAllTargetsAreAttempted() {
 }
 
 TestSessionQueryFailureIsReported() {
+    matrix := LS_TestLoadParityMatrix()
     RecordingSessionGuard.Reset()
     RecordingSessionGuard.shouldQueryFail := true
 
@@ -161,6 +166,7 @@ TestSessionQueryFailureIsReported() {
     }
 
     LS_TestAssert(!threw, "session guard converts query failures into a warning result")
+    LS_TestAssert(matrix["sessionSafety"]["unavailableInventory"] = "fail-closed", "shared policy fails closed when session inventory is unavailable")
     LS_TestAssert(!result, "session guard fails closed when sessions cannot be queried")
     LS_TestAssert(RecordingSessionGuard.waits.Length = 0, "session guard does not wait after a query failure")
 }

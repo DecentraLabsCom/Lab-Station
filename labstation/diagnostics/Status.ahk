@@ -18,8 +18,12 @@ class LS_Status {
         data := Map()
         data["schemaVersion"] := LAB_STATION_SCHEMA_VERSION
         data["timestamp"] := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
+        data["host"] := A_ComputerName
+        data["version"] := LAB_STATION_VERSION
         data["stationProfile"] := this.GetStationProfile()
         data["identity"] := this.GetIdentityInformation()
+        data["identity"]["agentVersion"] := LAB_STATION_VERSION
+        data["identity"]["contractVersion"] := LAB_STATION_SCHEMA_VERSION
         data["remoteAppEnabled"] := this.CheckRemoteAppPolicy()
         data["winrm"] := LS_WinRM.GetStatus()
         data["legacyAppControlAutostart"] := this.CheckLegacyAppControlAutostart()
@@ -37,7 +41,55 @@ class LS_Status {
         data["lastForcedLogoff"] := ops.Has("lastForcedLogoff") ? ops["lastForcedLogoff"] : Map()
         data["localSessionActive"] := data["sessions"].Has("localSessionActive") ? data["sessions"]["localSessionActive"] : false
         data["localModeEnabled"] := this.IsLocalModeEnabled()
+        data["profile"] := data["stationProfile"] = "hybrid" ? "hybrid" : "dedicated"
+        data["platform"] := Map("os", "windows", "arch", A_PtrSize = 8 ? "x86_64" : "x86", "init", "windows-service", "version", A_OSVersion)
+        data["management"] := Map("transport", "winrm", "ready", data["winrm"]["ready"], "dispatcher", true)
+        data["remoteAccess"] := Map(
+            "mode", "remote-app",
+            "backend", "windows-remote-app",
+            "available", data["remoteAppEnabled"],
+            "ready", data["remoteAppEnabled"],
+            "issues", data["remoteAppEnabled"] ? [] : ["RemoteApp policy missing"]
+        )
+        data["sessions"]["active"] := this.BuildContractSessions(data["sessions"])
+        data["sessions"]["localSessionActive"] := data["localSessionActive"]
+        data["sessions"]["remoteSessionActive"] := data["sessions"].Has("remoteSessionActive")
+            ? data["sessions"]["remoteSessionActive"] : false
+        data["readiness"]["physicalLab"]["available"] := data["remoteAppEnabled"] && data["identity"]["labUserExists"]
+        data["readiness"]["wake"]["available"] := data["wake"]["programmableCount"] > 0
+        data["readiness"]["fmu"]["available"] := data["fmuExecutor"]["available"]
+        if (data["summary"]["state"] = "needs-action")
+            data["summary"]["state"] := "degraded"
+        data["supportTier"] := "certified"
+        data["platformSpecific"] := Map("windows", Map(
+            "remoteAppEnabled", data["remoteAppEnabled"],
+            "winrm", data["winrm"],
+            "legacyAppControlAutostart", data["legacyAppControlAutostart"],
+            "wake", data["wake"],
+            "power", data["power"],
+            "policy", data["policy"]
+        ))
         return data
+    }
+
+    static BuildContractSessions(sessions) {
+        active := []
+        entries := sessions.Has("entries") ? sessions["entries"] : []
+        for entry in entries {
+            if (!this.IsActiveSession(entry))
+                continue
+            remote := this.IsRemoteSession(entry)
+            active.Push(Map(
+                "user", entry["user"],
+                "id", entry["id"],
+                "state", entry["state"],
+                "remote", remote,
+                "kind", remote ? "remote" : "local",
+                "active", true,
+                "evictable", !remote && entry["user"] != LS_AccountManager.DefaultUser
+            ))
+        }
+        return active
     }
 
     static ExportJson(path := "labstation\status.json", data := "") {

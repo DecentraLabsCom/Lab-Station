@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import base64
 from pathlib import Path
 
 
@@ -26,6 +27,13 @@ FMU_ROOT: Path = Path(_env("FMU_ROOT", str(Path(__file__).resolve().parent.paren
 
 # Internal auth token shared with Gateway's fmu-runner
 def internal_token() -> str | None:
+    encoded = os.environ.get("FMU_INTERNAL_TOKEN_B64")
+    if encoded:
+        try:
+            padded = encoded + ("=" * (-len(encoded) % 4))
+            return base64.b64decode(padded, altchars=b"-_", validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return None
     return _env("FMU_INTERNAL_TOKEN")
 
 # Temp directory for FMU extraction during execution

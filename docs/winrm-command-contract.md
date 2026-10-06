@@ -39,7 +39,7 @@ and the log/result payload together:
 Queued commands normalize their result to `0` (success), `1` (warning), or
 `2` (hard failure); see the [queue contract](command-queue.md).
 
-**Telemetry contract:** `status-json` and the `heartbeat.json` produced by the service include `schemaVersion` (current: **2.0.0**). Treat major bumps as breaking; fail fast or warn if `schemaVersion` is higher than the backend understands. Validate payloads against [`status-schema.json`](status-schema.json) and [`heartbeat-schema.json`](heartbeat-schema.json).
+**Telemetry contract:** `status-json` and `heartbeat.json` emit Station Contract v3 (`schemaVersion: 3.0.0`). The Gateway accepts legacy Windows v2 payloads during migration. Validate new payloads against `Lab Gateway/contracts/station/v3/`; the local `status-schema.json` and `heartbeat-schema.json` describe the v2 compatibility format.
 
 ### Command surface
 | Command | Arguments | What it does | Artifacts |

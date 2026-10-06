@@ -69,6 +69,8 @@ LabStationMain(args) {
             exitCode := 0
         case "status-json":
             exitCode := LS_RunStatusJsonCommand(remaining)
+        case "local-mode":
+            exitCode := LS_HandleLocalModeCommand(remaining)
         case "diagnostics":
             exitCode := LS_RunDiagnosticsCommand(remaining)
         case "tray":
@@ -117,6 +119,7 @@ LS_ShowHelp() {
         "  LabStation.exe winrm [configure|status] # Configure or inspect WinRM" . "`n" .
         "  LabStation.exe status               # Quick summary" . "`n" .
         "  LabStation.exe status-json [path]   # Export diagnostics" . "`n" .
+        "  LabStation.exe local-mode [set|clear|status]" . "`n" .
         "  LabStation.exe gui                  # Launch desktop GUI" . "`n" .
         "  LabStation.exe tray                 # Tray UI" . "`n" .
         "  LabStation.exe service [install|uninstall|start|stop]" . "`n" .
@@ -208,6 +211,47 @@ LS_RunStatusJsonCommand(args) {
         return 1
     }
     return LS_Status.ExportJson(target) ? 0 : 1
+}
+
+LS_HandleLocalModeCommand(args) {
+    if (args.Length != 1) {
+        LS_LogWarning("Local-mode command rejected because its action is invalid")
+        return 2
+    }
+    action := StrLower(args[1])
+    switch action {
+        case "status":
+            enabled := LS_Status.IsLocalModeEnabled()
+            return LS_WriteStdout(LS_ToJson(Map("enabled", enabled))) ? 0 : 2
+        case "set":
+            EnsureDir(LAB_STATION_DATA_DIR)
+            temporary := LAB_STATION_LOCAL_MODE_FLAG . ".new"
+            try {
+                if (FileExist(temporary))
+                    FileDelete(temporary)
+                FileAppend(FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") . "`n", temporary, "UTF-8")
+                FileMove(temporary, LAB_STATION_LOCAL_MODE_FLAG, 1)
+                LS_PublishTelemetryBestEffort("local-mode enabled")
+                return 0
+            } catch as e {
+                LS_LogError("Unable to enable local mode: " . e.Message)
+                try FileDelete(temporary)
+                return 2
+            }
+        case "clear":
+            try {
+                if (FileExist(LAB_STATION_LOCAL_MODE_FLAG))
+                    FileDelete(LAB_STATION_LOCAL_MODE_FLAG)
+                LS_PublishTelemetryBestEffort("local-mode cleared")
+                return 0
+            } catch as e {
+                LS_LogError("Unable to clear local mode: " . e.Message)
+                return 2
+            }
+        default:
+            LS_LogWarning("Local-mode command rejected because its action is unsupported")
+            return 2
+    }
 }
 
 LS_HandleServiceCommand(args) {

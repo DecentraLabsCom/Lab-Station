@@ -4,9 +4,10 @@ description: Human-readable documentation for the Lab Station status JSON schema
 
 # Status JSON schema
 
-This page documents the machine-readable contract produced by Lab Station. The
-canonical JSON Schema remains available as [`status-schema.json`](status-schema.json)
-for validators and automated consumers.
+This page documents the legacy Windows Station Contract v2 shape. New releases
+emit Station Contract v3; its canonical JSON Schema and cross-platform fixtures
+are maintained in Lab Gateway at `contracts/station/v3/`. The local
+[`status-schema.json`](status-schema.json) is retained for older v2 payloads.
 
 ## Where the schema applies
 
@@ -20,8 +21,8 @@ The `diagnostics` command writes the same status shape to
 
 ## Versioning
 
-Every status document includes `schemaVersion`. The current version is
-`2.0.0`, and the JSON Schema accepts the `2.x` major version.
+Every status document includes `schemaVersion`. New releases emit `3.0.0`; the
+schema on this page accepts only the legacy `2.x` format.
 
 Consumers should reject or warn on a higher major version. New fields may be
 added within a major version, so consumers should ignore fields they do not
@@ -31,7 +32,7 @@ need and tolerate additional properties.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `schemaVersion` | string | Telemetry contract version, currently `2.0.0`. |
+| `schemaVersion` | string | Legacy telemetry contract version, `2.x`. |
 | `timestamp` | date-time string | UTC timestamp for the status collection. |
 | `stationProfile` | `server` or `hybrid` | Operating profile selected for the station. |
 | `remoteAppEnabled` | boolean | Whether the RemoteApp policy is enabled. |

@@ -1,6 +1,7 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
 #Include ..\service\Telemetry.ahk
+#Include ParityTestSupport.ahk
 
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-TelemetryTests-" A_TickCount
@@ -23,6 +24,7 @@ RunTelemetryTests() {
 
     try {
         TestBuildPayloadMirrorsStatusAndOperations()
+        TestV3EnvelopeHasPortableRequiredFields()
         TestPublishWritesPrimaryAndLegacyHeartbeats()
         TestBuildPayloadFallsBackToServiceStateOperations()
         TestPublishReportsPrimaryWriteFailure()
@@ -62,6 +64,39 @@ TestBuildPayloadMirrorsStatusAndOperations() {
     LS_TestAssert(payload["summary"]["state"] = "ready", "heartbeat mirrors the status summary")
     LS_TestAssert(payload["operations"]["lastPowerAction"]["mode"] = "shutdown", "heartbeat carries operation history")
     LS_TestAssert(payload["status"]["localSessionActive"] = false, "heartbeat embeds the full status snapshot")
+    LS_TestAssert(payload["platform"]["os"] = "windows", "heartbeat publishes the neutral v3 platform field")
+    LS_TestAssert(payload["management"]["transport"] = "winrm", "heartbeat publishes management transport")
+    LS_TestAssert(payload["status"]["version"] = LAB_STATION_VERSION, "nested status is a complete v3 document")
+}
+
+TestV3EnvelopeHasPortableRequiredFields() {
+    status := SampleStatus(Map())
+    payload := LS_Telemetry.BuildPayload(status)
+    matrix := LS_TestLoadParityMatrix()
+    contract := matrix["portableStatus"]
+    required := contract["requiredFields"]
+    windowsPlatform := matrix["platforms"]["windows"]
+
+    for _, key in required
+        LS_TestAssert(payload.Has(key), "Station Contract v3 heartbeat contains " . key)
+
+    LS_TestAssert(payload["schemaVersion"] = contract["schemaVersion"], "heartbeat advertises the shared contract version")
+    LS_TestAssert(LS_TestArrayContains(contract["profiles"], payload["profile"]), "profile uses a shared contract value")
+    LS_TestAssert(LS_TestArrayContains(contract["summaryStates"], payload["summary"]["state"]), "summary state uses a shared contract value")
+    LS_TestAssert(payload["platform"]["os"] = windowsPlatform["os"], "platform identifies the Windows implementation")
+    LS_TestAssert(payload["management"]["transport"] = windowsPlatform["managementTransport"], "Windows management transport stays explicit")
+    LS_TestAssert(Type(payload["sessions"]["active"]) = "Array", "active session projection is always an array")
+    LS_TestAssert(Type(payload["sessions"]["localSessionActive"]) = "Integer", "local-session activity serializes as a JSON boolean")
+    for _, capability in contract["readinessCapabilities"]
+        LS_TestAssert(payload["readiness"].Has(capability), capability . " readiness is portable")
+    for _, session in payload["sessions"]["active"] {
+        for _, key in contract["sessionRequiredFields"]
+            LS_TestAssert(session.Has(key), "active session contains shared field " . key)
+        LS_TestAssert(LS_TestArrayContains(contract["sessionKinds"], session["kind"]), "active session kind uses a shared contract value")
+        LS_TestAssert(Type(session["active"]) = "Integer", "active session state serializes as a JSON boolean")
+        LS_TestAssert(Type(session["evictable"]) = "Integer", "session eviction state serializes as a JSON boolean")
+    }
+    LS_TestAssert(payload["status"] = status, "heartbeat embeds the source status snapshot")
 }
 
 TestPublishWritesPrimaryAndLegacyHeartbeats() {
@@ -116,20 +151,30 @@ SampleStatus(operations := Map()) {
     return Map(
         "schemaVersion", LAB_STATION_SCHEMA_VERSION,
         "timestamp", "2026-08-25T12:00:00Z",
+        "host", "LAB-WS-01",
+        "version", LAB_STATION_VERSION,
+        "profile", "hybrid",
+        "platform", Map("os", "windows", "arch", "x86_64", "init", "windows-service"),
+        "management", Map("transport", "winrm", "ready", true, "dispatcher", true),
+        "remoteAccess", Map("mode", "remote-app", "available", true, "ready", true, "issues", []),
         "stationProfile", "hybrid",
-        "identity", Map("labUser", "LABUSER"),
+        "identity", Map("labUser", "LABUSER", "agentVersion", LAB_STATION_VERSION, "contractVersion", LAB_STATION_SCHEMA_VERSION),
         "remoteAppEnabled", true,
         "legacyAppControlAutostart", false,
         "wake", Map("armedCount", 1, "programmableCount", 1, "nicPower", []),
         "power", Map("sleepCompliant", true, "hibernateCompliant", true),
         "policy", Map(),
-        "sessions", Map("hasOtherUsers", false),
         "readiness", Map(
-            "physicalLab", Map("ready", true, "issues", []),
+            "physicalLab", Map("available", true, "ready", true, "issues", []),
+            "wake", Map("available", true, "ready", true, "issues", []),
             "fmu", Map("available", false, "ready", false, "issues", [])
         ),
         "summary", Map("state", "ready", "ready", true, "issues", []),
         "operations", operations,
+        "sessions", Map("active", [
+            Map("id", "42", "user", "LABUSER", "kind", "remote", "active", true, "evictable", true),
+            Map("id", "43", "user", "labstation-ops", "kind", "management", "active", true, "evictable", false)
+        ], "localSessionActive", false, "queryOk", true),
         "localSessionActive", false,
         "localModeEnabled", false
     )

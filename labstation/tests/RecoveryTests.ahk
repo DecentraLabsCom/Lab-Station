@@ -1,8 +1,10 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
+#Include ..\core\Json.ahk
 #Include ..\service\SessionGuard.ahk
 #Include ..\service\FmuExecutor.ahk
 #Include ..\service\Recovery.ahk
+#Include ParityTestSupport.ahk
 
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-RecoveryTests-" A_TickCount
@@ -73,11 +75,13 @@ RunRecoveryTests() {
 }
 
 TestHealthyStateSkipsReboot() {
+    matrix := LS_TestLoadParityMatrix()
     RecordingRecovery.Reset(HealthyStatus())
 
     result := RecordingRecovery.RebootIfNeeded()
 
     LS_TestAssert(result["success"], "healthy recovery result is successful")
+    LS_TestAssert(matrix["recovery"]["safeStationExpected"] = "no-reboot", "shared recovery vector expects no reboot when the station is safe")
     LS_TestAssert(result["skipped"], "healthy recovery skips the reboot")
     LS_TestAssert(result["reason"] = "healthy", "healthy recovery explains why reboot was skipped")
     LS_TestAssert(RecordingRecovery.calls.Length = 0, "healthy recovery does not close, log off, or reboot")

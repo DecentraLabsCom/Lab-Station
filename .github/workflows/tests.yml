@@ -95,6 +95,10 @@ jobs:
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\IntegrationContractTests.ahk
 
+      - name: Run cross-platform parity matrix tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\ParityMatrixTests.ahk
+
       - name: Run LabStation reservation flow tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\ReservationFlowTests.ahk

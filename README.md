@@ -23,7 +23,9 @@ The repository contains two runtime components:
 
 The optional **FMU Executor** (`fmu-executor/`) is a Python sidecar deployed
 separately from the Windows executables. It is used when Lab Gateway is
-configured with `FMU_BACKEND_MODE=station`.
+configured with `FMU_BACKEND_MODE=station`. Its source is pinned to the shared
+`DecentraLabsCom/FMU-Executor` release in `fmu-executor/SOURCE.lock.json`; the
+station package does not download executable Python source at runtime.
 
 ## Choose the station profile
 
@@ -137,10 +139,12 @@ are proxied by Lab Gateway.
 | `labstation/data/commands/processed/` | Archived queue input files. |
 
 The `status-json` and `diagnostics` commands use the same status shape. The
-machine-readable contract is versioned at `2.0.0`; see the [status and heartbeat
-contract](docs/status-and-heartbeat.md), [human-readable schema guide](docs/status-json-schema.md),
-and the canonical [status schema](docs/status-schema.json). The background
-queue has a separate [queue contract](docs/command-queue.md).
+new Windows releases emit Station Contract v3; see the [status and heartbeat
+contract](docs/status-and-heartbeat.md), [legacy v2 schema guide](docs/status-json-schema.md),
+and the canonical v3 schema in Lab Gateway at `contracts/station/v3/`. The background
+queue has a separate [queue contract](docs/command-queue.md). The AHK and Go test
+suites share the portable scenario vectors in `contracts/station/v3/test-parity.json`;
+the canonical copy is `Lab Gateway/docs/station-test-parity.json`.
 
 ## Lab Gateway integration
 

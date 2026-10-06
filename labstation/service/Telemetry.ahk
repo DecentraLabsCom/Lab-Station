@@ -18,6 +18,8 @@ class LS_Telemetry {
     static BuildPayload(status) {
         operations := status.Has("operations") ? status["operations"] : LS_ServiceState.GetOperationsSummary()
         payload := Map()
+        for key, value in status
+            payload[key] := value
         payload["timestamp"] := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
         payload["schemaVersion"] := LAB_STATION_SCHEMA_VERSION
         payload["host"] := A_ComputerName

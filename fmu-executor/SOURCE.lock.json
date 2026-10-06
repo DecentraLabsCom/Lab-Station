@@ -1,0 +1,6 @@
+{
+  "repository": "DecentraLabsCom/FMU-Executor",
+  "version": "0.1.0",
+  "syncMode": "release-snapshot",
+  "runtimeDownloads": false
+}
