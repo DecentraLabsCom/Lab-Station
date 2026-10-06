@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Windows with PowerShell 5.1 or newer.
-- AutoHotkey v2.0.27 for running the source tests and compiling the AHK
+- AutoHotkey v2.0.28 for running the source tests and compiling the AHK
   executables. The CI workflow uses this exact version.
 - Python 3.12 for the FMU Executor and its tests.
 - Administrator privileges for setup, WinRM, registry, firewall, scheduled
@@ -12,7 +12,7 @@
 ## Build the Windows executables
 
 From the repository root, `build.ps1` discovers Ahk2Exe and the AutoHotkey v2
-base runtime, then writes these files to the repository root:
+base runtime, then writes these development outputs to the repository root:
 
 ```powershell
 .\build.ps1
@@ -67,14 +67,17 @@ foreach ($test in $tests) {
 
 The release workflow publishes the individual `LabStation.exe`,
 `LabStationPanel.exe`, `AppControl.exe`, and `WindowSpy.exe` assets, plus a
-`Lab-Station.zip` package. Extracting that package creates a `Lab Station/`
-directory containing `LabStation.exe`, `LabStationPanel.exe`, `WindowSpy.exe`,
-the `remote-app\AppControl.exe` launcher, and the branding image, ready to be
-copied to a station as one unit. The Python FMU Executor is intentionally a
-separately deployed internal sidecar: copy the sibling `fmu-executor/` directory,
-install its requirements, configure the machine environment variables, and
-start it through the Lab Station supervisor. See [`FMU Executor`](../fmu-executor/README.md)
-for its port, token, API, and provisioning rules.
+`Lab-Station.zip` package. The local `build.ps1` output puts `AppControl.exe`
+at the repository root so the wizard can use it as a migration source; the
+release packaging step moves it to `remote-app\AppControl.exe`. Extracting the
+package creates a `Lab Station/` directory containing `LabStation.exe`,
+`LabStationPanel.exe`, `WindowSpy.exe`, the `remote-app\AppControl.exe`
+launcher, and the branding image, ready to be copied to a station as one unit.
+The Python FMU Executor is intentionally a separately deployed internal
+sidecar: copy the sibling `fmu-executor/` directory, install its requirements,
+configure the machine environment variables, and start it through the Lab
+Station supervisor. See [`FMU Executor`](../fmu-executor/README.md) for its
+port, token, API, and provisioning rules.
 
 Never commit or pass passwords and internal tokens through source files,
 public URLs, shell history, or unprotected command arguments. Prefer the setup

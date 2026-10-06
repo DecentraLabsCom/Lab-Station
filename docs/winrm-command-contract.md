@@ -25,12 +25,19 @@
 ## 4. Command contract
 All remote executions call the bundled binary: `C:\LabStation\LabStation.exe <command> [options]`.
 
-### Exit codes (applies to every command)
+### Exit codes
+
+The commands do not all use the same failure code. Use the command's exit code
+and the log/result payload together:
+
 | Code | Meaning | Typical remediation |
 | --- | --- | --- |
-| `0` | Success. Logs contain only informational entries. | None. |
-| `1` | Completed with warnings (handled condition, e.g., profile folder missing). | Inspect `labstation.log`, decide if retry is needed. |
-| `>=2` | Hard failure (command not run, privileges missing, PowerShell error). | Alert + manual investigation. |
+| `0` | Success. | None. |
+| `1` | Operational warning or failure, depending on the command. Session cleanup can use it for warnings; power, recovery, WinRM, service, and export commands also use it for a failed operation. | Inspect `labstation.log` and retry or investigate. |
+| `2` | Invalid or unsupported invocation, such as a missing subcommand or malformed usage. | Correct the command before retrying. |
+
+Queued commands normalize their result to `0` (success), `1` (warning), or
+`2` (hard failure); see the [queue contract](command-queue.md).
 
 **Telemetry contract:** `status-json` and the `heartbeat.json` produced by the service include `schemaVersion` (current: **2.0.0**). Treat major bumps as breaking; fail fast or warn if `schemaVersion` is higher than the backend understands. Validate payloads against [`status-schema.json`](status-schema.json) and [`heartbeat-schema.json`](heartbeat-schema.json).
 
@@ -42,7 +49,7 @@ All remote executions call the bundled binary: `C:\LabStation\LabStation.exe <co
 | `release-session` | `--user=<LABUSER>`, `--reboot`, `--reboot-timeout=<seconds>` | Requests the interactive AppControl to close the configured lab application cooperatively, logs off LABUSER, and optionally schedules `shutdown /r /t <timeout> /f`. Run after reservation completes. Guard switches are not used by this command. | Controlled application close, logoff, optional reboot. |
 | `recovery reboot-if-needed` | `--force` bypasses health heuristics, `--timeout=<seconds>` overrides default 20s, `--reason=<text>` tags the order. | Evaluates `status.json` issues (RemoteApp/WoL/policy drift, lingering sessions) and only triggers a forced reboot when needed; legacy AppControl autostart is a configuration issue, not a reboot trigger; `--force` handles manual overrides. | Writes a safeguard entry to `service-state.ini`, updates `telemetry/heartbeat.json`, and schedules `shutdown /r`. |
 | `power shutdown` / `power hibernate` | `--delay=<seconds>` (default 0), `--reason=<text>`, `--no-force`, `--skip-wake-check`, `--repair-wake=<yes|no>` (default `yes`; `--repair-wake` and `--no-repair-wake` are equivalent aliases), `--require-wake`. | Re-validates Wake-on-LAN compliance (optionally reapplying adapter settings) and schedules a graceful shutdown or hibernate so the host can be powered off between reservations without breaking WoL. | Records `lastPowerAction` inside `service-state.ini`/telemetry and logs result to `labstation.log`. |
-| `status-json` | `status-json [absolute-path]` | Refreshes diagnostics (RemoteApp, WoL, legacy AppControl-autostart detection, account/lockdown, sessions) and writes JSON to the provided path; without a path it writes the JSON document to stdout. | JSON file/document including `summary.ready`, the `sessions` active-session classification, `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`, and the `operations` block. |
+| `status-json` | `status-json [absolute-path]` | Refreshes diagnostics (RemoteApp, WoL, legacy AppControl-autostart detection, account/lockdown, sessions) and writes JSON to the provided path; without a path it writes the JSON document to stdout and does not update the default status file. | JSON file/document including `summary.ready`, the `sessions` active-session classification, `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`, and the `operations` block. |
 | `service start|stop|status|install|uninstall` | subcommand only | Manages the Lab Station background scheduled task when automation needs it (rare). | Task Scheduler entry `LabStation\BackgroundService`. |
 
 > Note: `release-session` does not reboot by default. Pass `--reboot --reboot-timeout=15` only when an explicit reboot is required. Use `recovery reboot-if-needed` for a one-off safeguard reboot when the host is stuck in a degraded state.

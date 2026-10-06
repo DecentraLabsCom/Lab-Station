@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Documentation
+
+- Reorganized the public documentation around a shorter Lab Station landing
+  page, a dedicated AppControl guide, and an explicit background command-queue
+  contract.
+- Synchronized status, WinRM, hybrid-operation, build, and private Gateway
+  runbooks with the current CLI, telemetry schema, and `ops-worker` routes.
+
 ## [3.5.8] - 2026-09-27
 
 ### Fixed
