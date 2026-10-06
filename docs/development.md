@@ -5,7 +5,8 @@
 - Windows with PowerShell 5.1 or newer.
 - AutoHotkey v2.0.28 for running the source tests and compiling the AHK
   executables. The CI workflow uses this exact version.
-- Python 3.12 for the FMU Executor and its tests.
+- Python 3.11 or newer for the FMU Executor. CI tests Python 3.11, 3.12, and
+  3.13.
 - Administrator privileges for setup, WinRM, registry, firewall, scheduled
   task, and power-management operations.
 
