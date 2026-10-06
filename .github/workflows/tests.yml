@@ -99,6 +99,10 @@ jobs:
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\IntegrationContractTests.ahk
 
+      - name: Run JSON parser unit tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\JsonParserTests.ahk
+
       - name: Run cross-platform parity matrix tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\ParityMatrixTests.ahk
