@@ -11,7 +11,9 @@ RunParityMatrixTests() {
     global TEST_FAILURES
     errors := []
     try {
+        LS_TestOutput("Parity matrix: loading shared vector file`n")
         matrix := LS_TestLoadParityMatrix()
+        LS_TestOutput("Parity matrix: loaded " . matrix["sharedScenarios"].Length . " scenarios`n")
         if (matrix["version"] != 1)
             errors.Push("portable test matrix version must be 1")
         if (matrix["portableStatus"]["schemaVersion"] != "3.0.0")
@@ -21,6 +23,7 @@ RunParityMatrixTests() {
         repositoryRoot := A_ScriptDir . "\..\.."
         for _, scenario in matrix["sharedScenarios"] {
             id := scenario["id"]
+            LS_TestOutput("Parity matrix: checking " . id . "`n")
             if (id = "" || seen.Has(id)) {
                 errors.Push("portable scenario ids must be present and unique: " . id)
                 continue
@@ -41,7 +44,8 @@ RunParityMatrixTests() {
                 errors.Push(id . ": Windows test file does not exist: " . windows["file"])
                 continue
             }
-            if !InStr(FileRead(windowsPath, "UTF-8"), windows["test"] . "(")
+            windowsSource := FileRead(windowsPath, "UTF-8")
+            if !InStr(windowsSource, windows["test"] . "(")
                 errors.Push(id . ": Windows test function does not exist: " . windows["test"])
         }
         if (matrix["sharedScenarios"].Length = 0)

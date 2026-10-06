@@ -12,7 +12,13 @@ if (-not $ahkPath -or -not (Test-Path -LiteralPath $ahkPath)) {
 
 $resolvedTest = (Resolve-Path -LiteralPath $TestPath).Path
 $argumentList = @('/ErrorStdOut', ('"{0}"' -f $resolvedTest))
-$process = Start-Process -FilePath $ahkPath -ArgumentList $argumentList -Wait -PassThru -NoNewWindow
+$timeoutSeconds = 120
+$process = Start-Process -FilePath $ahkPath -ArgumentList $argumentList -PassThru -NoNewWindow
+if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
+    & taskkill.exe /PID $process.Id /T /F | Out-Null
+    throw "AutoHotkey test timed out after $timeoutSeconds seconds: $resolvedTest"
+}
+
 $testExitCode = [int]$process.ExitCode
 if ($testExitCode -ne 0) {
     Write-Error "AutoHotkey test failed with exit code $testExitCode`: $resolvedTest"

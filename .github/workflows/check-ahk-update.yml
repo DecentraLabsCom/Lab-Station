@@ -49,11 +49,13 @@ jobs:
             UPDATES_NEEDED=true
           fi
 
-          echo "updates_needed=$UPDATES_NEEDED" >> "$GITHUB_OUTPUT"
-          echo "pinned_ahk=$PINNED_AHK" >> "$GITHUB_OUTPUT"
-          echo "pinned_ahk2exe=$PINNED_AHK2EXE" >> "$GITHUB_OUTPUT"
-          echo "latest_ahk=$LATEST_AHK" >> "$GITHUB_OUTPUT"
-          echo "latest_ahk2exe=$LATEST_AHK2EXE" >> "$GITHUB_OUTPUT"
+          {
+            echo "updates_needed=$UPDATES_NEEDED"
+            echo "pinned_ahk=$PINNED_AHK"
+            echo "pinned_ahk2exe=$PINNED_AHK2EXE"
+            echo "latest_ahk=$LATEST_AHK"
+            echo "latest_ahk2exe=$LATEST_AHK2EXE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Apply version bumps
         if: steps.check.outputs.updates_needed == 'true'
@@ -94,9 +96,11 @@ jobs:
           fi
 
           BODY+=$'\n'"Please review the release notes before merging."
-          echo "body<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$BODY" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Open pull request
         if: steps.check.outputs.updates_needed == 'true'
