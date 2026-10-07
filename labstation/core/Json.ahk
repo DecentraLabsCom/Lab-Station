@@ -67,8 +67,13 @@ LS_JsonEscape(value) {
 LS_WriteJson(path, value) {
     json := LS_ToJson(value)
     SplitPath(path, &fileName, &directory)
-    if (directory != "")
-        EnsureDir(directory)
+    if (directory != "") {
+        try {
+            if (!DirExist(directory))
+                DirCreate(directory)
+        } catch {
+        }
+    }
     temporaryPath := path . ".tmp-" . A_TickCount . "-" . Random(1000, 9999)
     try {
         FileAppend(json, temporaryPath, "UTF-8")
@@ -227,12 +232,59 @@ class LS_JsonParser {
     }
 
     _ParseNumber() {
-        remaining := SubStr(this._text, this._pos)
-        if !RegExMatch(remaining, "^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+\-]?\d+)?", &match)
+        startPos := this._pos
+        if (this._Peek() = "-")
+            this._pos += 1
+
+        ch := this._Peek()
+        if (ch = "0") {
+            this._pos += 1
+        } else if this._IsNonZeroDigit(ch) {
+            this._pos += 1
+            this._ConsumeDigits()
+        } else {
             throw Error("Invalid JSON: invalid number at position " . this._pos)
-        token := match[0]
-        this._pos += StrLen(token)
+        }
+
+        if (this._Peek() = ".") {
+            this._pos += 1
+            if !this._IsDigit(this._Peek())
+                throw Error("Invalid JSON: invalid number at position " . this._pos)
+            this._ConsumeDigits()
+        }
+
+        ch := this._Peek()
+        if (ch = "e" || ch = "E") {
+            this._pos += 1
+            ch := this._Peek()
+            if (ch = "+" || ch = "-")
+                this._pos += 1
+            if !this._IsDigit(this._Peek())
+                throw Error("Invalid JSON: invalid number at position " . this._pos)
+            this._ConsumeDigits()
+        }
+
+        token := SubStr(this._text, startPos, this._pos - startPos)
         return token + 0
+    }
+
+    _ConsumeDigits() {
+        while this._IsDigit(this._Peek())
+            this._pos += 1
+    }
+
+    _IsDigit(ch) {
+        if (ch = "")
+            return false
+        code := Ord(ch)
+        return code >= 48 && code <= 57
+    }
+
+    _IsNonZeroDigit(ch) {
+        if (ch = "")
+            return false
+        code := Ord(ch)
+        return code >= 49 && code <= 57
     }
 
     _ExpectLiteral(literal) {

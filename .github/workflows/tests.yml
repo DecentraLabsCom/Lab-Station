@@ -11,6 +11,10 @@ permissions:
 jobs:
   fmu-executor-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -18,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: fmu-executor/requirements.txt
 
@@ -34,6 +38,7 @@ jobs:
 
   smoke-tests:
     runs-on: windows-latest
+    timeout-minutes: 30
     env:
       AHK_VERSION: "2.0.29"
     steps:
@@ -90,6 +95,10 @@ jobs:
       - name: Run LabStation integration contract tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\IntegrationContractTests.ahk
+
+      - name: Run LabStation JSON parser tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\JsonParserTests.ahk
 
       - name: Run LabStation reservation flow tests
         shell: powershell
