@@ -48,6 +48,23 @@ try {
     errors.Push("nested numeric JSON values could not be parsed: " . err.Message)
 }
 
+temporaryRoot := A_Temp "\LabStationJsonTests-" A_TickCount "-" Random(1000, 9999)
+temporaryPath := temporaryRoot "\nested\status.json"
+try {
+    LS_WriteJson(temporaryPath, Map("value", 42))
+    if !FileExist(temporaryPath) {
+        errors.Push("JSON writer did not create the target file")
+    } else {
+        written := LS_ParseJson(FileRead(temporaryPath, "UTF-8"))
+        if (written["value"] != 42)
+            errors.Push("JSON writer produced an unreadable payload")
+    }
+} catch as err {
+    errors.Push("JSON writer failed for a new nested directory: " . err.Message)
+}
+if DirExist(temporaryRoot)
+    DirDelete(temporaryRoot, true)
+
 if (errors.Length > 0) {
     for _, message in errors
         LS_TestOutput(message . "`n")
