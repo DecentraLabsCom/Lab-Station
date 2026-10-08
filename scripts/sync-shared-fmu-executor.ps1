@@ -49,7 +49,7 @@ New-Item -ItemType Directory -Path $extractRoot | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to create the pinned FMU Executor source archive.'
 }
-& tar.exe -xf $archivePath -C $extractRoot
+& tar -xf $archivePath -C $extractRoot
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to extract the pinned FMU Executor source archive.'
 }

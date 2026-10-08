@@ -42,7 +42,7 @@ $archivePrefix = "decentralabs-fmu-executor-$sourceVersion/"
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to create the pinned FMU Executor verification archive.'
 }
-& tar.exe -xf $archivePath -C $extractRoot
+& tar -xf $archivePath -C $extractRoot
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to extract the pinned FMU Executor verification archive.'
 }

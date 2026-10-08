@@ -18,6 +18,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Read pinned Gateway contract revision
+        id: gateway-contract
+        shell: pwsh
+        run: |
+          $lock = Get-Content contracts/station/schema-bundle.lock.json -Raw | ConvertFrom-Json
+          "commit=$($lock.commit)" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout pinned Gateway contract source
+        uses: actions/checkout@v7
+        with:
+          repository: DecentraLabsCom/Lab-Gateway
+          ref: ${{ steps.gateway-contract.outputs.commit }}
+          path: .gateway-contract-source
+
       - name: Read pinned FMU Executor commit
         id: fmu-pin
         shell: pwsh
@@ -42,6 +56,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: fmu-executor/requirements.txt
+
+      - name: Verify pinned canonical station contract bundle
+        run: python .gateway-contract-source/scripts/verify_station_contract_bundle.py --station-root "$GITHUB_WORKSPACE" --canonical-root "$GITHUB_WORKSPACE/.gateway-contract-source"
 
       - name: Install FMU executor test dependencies
         working-directory: fmu-executor
