@@ -22,6 +22,7 @@
 #Include system\PowerManager.ahk
 #Include system\ServiceManager.ahk
 #Include service\SessionManager.ahk
+#Include service\LeaseDispatcher.ahk
 #Include service\SessionGuard.ahk
 #Include service\Telemetry.ahk
 #Include service\Recovery.ahk
@@ -89,6 +90,8 @@ LabStationMain(args) {
             exitCode := LS_RunPrepareSession(remaining)
         case "release-session":
             exitCode := LS_RunReleaseSession(remaining)
+        case "lease-dispatch":
+            exitCode := LS_RunLeaseDispatcher(remaining)
         case "energy":
             exitCode := LS_HandleEnergyCommand(remaining)
         case "power":
@@ -128,6 +131,7 @@ LS_ShowHelp() {
         "  LabStation.exe session guard [--grace=120] [--user=LABUSER]" . "`n" .
         "  LabStation.exe prepare-session [--user=LABUSER] [--reboot]" . "`n" .
         "  LabStation.exe release-session [--user=LABUSER] [--reboot]" . "`n" .
+        "  LabStation.exe lease-dispatch --request-json=<dispatcher-v2-json>" . "`n" .
         "  LabStation.exe power [shutdown|hibernate] [--delay=0] [--reason=txt]" . "`n" .
         "  LabStation.exe recovery reboot-if-needed [--force] [--timeout=20]" . "`n" .
         "  LabStation.exe fmu-executor [start|stop|restart|status]" . "`n" .
@@ -348,6 +352,28 @@ LS_RunReleaseSession(args := []) {
         LS_ShowMessage("Release-session finished with warnings (see log)", "Lab Station", "OK Iconx")
         return 1
     }
+}
+
+LS_RunLeaseDispatcher(args := []) {
+    if (args.Length != 1 || SubStr(args[1], 1, StrLen("--request-json=")) != "--request-json=")
+        return 2
+    try {
+        request := LS_ParseJson(SubStr(args[1], StrLen("--request-json=") + 1))
+        result := LS_LeaseDispatcher.Execute(request)
+    } catch as e {
+        LS_LogError("Lease dispatcher rejected an invalid request: " . e.Message)
+        result := LS_LeaseDispatcher.ErrorResult(Map(), "STATION_COMMAND_REJECTED", "lease request is invalid")
+    }
+    output := Map()
+    for key, value in result {
+        if ((key = "exitCode" || key = "durationMs") && value = 0)
+            output[key] := LS_JsonNumberValue(0)
+        else
+            output[key] := value
+    }
+    if (!LS_WriteStdout(LS_ToJson(output)))
+        return 2
+    return result["exitCode"]
 }
 
 LS_ParseSessionOptions(args) {

@@ -146,6 +146,10 @@ jobs:
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\ReservationFlowTests.ahk
 
+      - name: Run LabStation durable lease tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\LeaseDispatcherTests.ahk
+
       - name: Run LabStation controller close protocol tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\ControllerCloseRequestTests.ahk

@@ -9,6 +9,8 @@ LS_ParseJson(jsonText) {
 }
 
 LS_ToJson(value) {
+    if (value is LS_JsonNumberValue)
+        return value.value
     if IsObject(value) {
         if LS_IsArray(value) {
             parts := []
@@ -36,6 +38,16 @@ LS_ToJson(value) {
     if (IsNumber(value))
         return value
     return LS_JsonEscape(value)
+}
+
+; Booleans and integer zero share one AutoHotkey primitive value. Wrap numeric
+; zero explicitly where a JSON number is required.
+class LS_JsonNumberValue {
+    __New(value) {
+        if (!IsNumber(value))
+            throw TypeError("JSON numeric wrapper requires a number")
+        this.value := value
+    }
 }
 
 LS_IsArray(obj) {

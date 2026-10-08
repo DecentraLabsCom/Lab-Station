@@ -35,6 +35,9 @@ try {
     listParsed := LS_ParseJson(listJson)
     if (Type(listParsed["items"]) != "Array" || Type(listParsed["items"][1]["id"]) != "String")
         errors.Push("json: string values and arrays must retain their JSON types")
+    wrappedNumberJson := LS_ToJson(Map("zero", LS_JsonNumberValue(0), "falseValue", false))
+    AssertContains("json", wrappedNumberJson, '"zero":0', &errors)
+    AssertContains("json", wrappedNumberJson, '"falseValue":false', &errors)
 } catch as e {
     errors.Push("json: serialization contract threw - " . e.Message)
 }
@@ -66,6 +69,7 @@ try {
     energySource := FileRead(A_ScriptDir . "\..\system\EnergyAudit.ahk", "UTF-8")
     wakeSource := FileRead(A_ScriptDir . "\..\system\WakeOnLan.ahk", "UTF-8")
     AssertContains("status", statusSource, 'summary["ready"]', &errors)
+    AssertContains("status", statusSource, 'data["managementCapabilities"]', &errors)
     AssertNotContains("status", statusSource, ">nul 2>&1", &errors)
     AssertContains("energy", energySource, "TrimStart([char]'*')", &errors)
     AssertContains("energy", energySource, "advancedWakeOnMagicPacketRegistryValue", &errors)
@@ -95,6 +99,12 @@ try {
     AssertContains("session-release", sessionManager, "NO_ACTIVE_SESSION", &errors)
     AssertContains("session-release", sessionManager, "release already satisfied", &errors)
     AssertContains("session-release", sessionManager, "Unable to log off active session", &errors)
+    AssertContains("lease-dispatch", entrypoint, 'case "lease-dispatch"', &errors)
+    AssertContains("lease-dispatch", entrypoint, "LS_JsonNumberValue(0)", &errors)
+    leaseDispatcher := FileRead(A_ScriptDir . "\..\service\LeaseDispatcher.ahk", "UTF-8")
+    AssertContains("lease-dispatch", leaseDispatcher, "STATION_OPERATION_RECOVERY_REQUIRED", &errors)
+    AssertContains("lease-dispatch", leaseDispatcher, "STATION_OPERATION_ID_CONFLICT", &errors)
+    AssertContains("lease-dispatch", leaseDispatcher, "CreateMutexW", &errors)
 } catch as e {
     errors.Push("cli: contract threw - " . e.Message)
 }

@@ -128,6 +128,10 @@ if (!IsSet(LAB_STATION_SERVICE_STATE_FILE)) {
     global LAB_STATION_SERVICE_STATE_FILE := LAB_STATION_DATA_DIR "\service-state.ini"
 }
 
+if (!IsSet(LAB_STATION_LEASE_STATE_FILE)) {
+    global LAB_STATION_LEASE_STATE_FILE := LAB_STATION_DATA_DIR "\reservation-lease-state.json"
+}
+
 if (!IsSet(LAB_STATION_LOCAL_MODE_FLAG)) {
     global LAB_STATION_LOCAL_MODE_FLAG := LAB_STATION_DATA_DIR "\local-mode.flag"
 }

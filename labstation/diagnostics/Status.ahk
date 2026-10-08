@@ -20,6 +20,7 @@ class LS_Status {
         data["timestamp"] := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
         data["host"] := A_ComputerName
         data["version"] := LAB_STATION_VERSION
+        data["managementCapabilities"] := ["reservation-lease-v1"]
         data["stationProfile"] := this.GetStationProfile()
         data["identity"] := this.GetIdentityInformation()
         data["identity"]["agentVersion"] := LAB_STATION_VERSION
