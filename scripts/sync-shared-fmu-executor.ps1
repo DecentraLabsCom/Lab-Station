@@ -20,36 +20,86 @@ foreach ($path in @($sourceRoot, $destinationRoot)) {
     }
 }
 
-$sourceVersion = (Get-Content -LiteralPath (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
-$lockPath = Join-Path $destinationRoot 'SOURCE.lock.json'
-$lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
-if ($lock.repository -ne 'DecentraLabsCom/FMU-Executor') {
-    throw 'The station source lock names a different shared repository.'
-}
-if (-not $UpdatePin -and $sourceVersion -ne $lock.version) {
-    throw "Shared version $sourceVersion does not match the pinned station version $($lock.version). Pass -UpdatePin after reviewing the release."
-}
-foreach ($required in @('app/main.py', 'requirements.txt', 'pyproject.toml', 'tests')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $required))) {
-        throw "Shared FMU Executor source is missing $required."
-    }
-}
-
 $stage = Join-Path $repositoryRoot ('.fmu-executor-sync-' + [Guid]::NewGuid().ToString('N'))
 $backup = Join-Path $stage 'previous'
 if (-not $stage.StartsWith($repositoryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Refusing to create a sync directory outside Lab Station.'
 }
-New-Item -ItemType Directory -Path $stage | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $stage 'source') | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stage 'source') -Force | Out-Null
 New-Item -ItemType Directory -Path $backup | Out-Null
+$archiveDirectory = Join-Path $stage 'archive'
+New-Item -ItemType Directory -Path $archiveDirectory | Out-Null
 $appMoved = $false
 $testsMoved = $false
 try {
-    Copy-Item -LiteralPath (Join-Path $sourceRoot 'app') -Destination (Join-Path $stage 'source/app') -Recurse
-    Copy-Item -LiteralPath (Join-Path $sourceRoot 'tests') -Destination (Join-Path $stage 'source/tests') -Recurse
+$sourceCommit = (& git -C $sourceRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw 'SharedSource must be a Git checkout at a reviewed commit.'
+}
+$sourceChanges = @(& git -C $sourceRoot status --porcelain --untracked-files=all)
+if ($LASTEXITCODE -ne 0 -or $sourceChanges.Count -gt 0) {
+    throw 'SharedSource must be clean before synchronizing a pinned release.'
+}
+$sourceVersion = (Get-Content -LiteralPath (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
+$archivePrefix = "decentralabs-fmu-executor-$sourceVersion/"
+$archivePath = Join-Path $archiveDirectory 'fmu-executor.tar'
+$extractRoot = Join-Path $archiveDirectory 'extracted'
+New-Item -ItemType Directory -Path $extractRoot | Out-Null
+& git -C $sourceRoot -c core.autocrlf=false archive --format=tar "--prefix=$archivePrefix" "--output=$archivePath" $sourceCommit VERSION pyproject.toml requirements.txt README.md app tests
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to create the pinned FMU Executor source archive.'
+}
+& tar.exe -xf $archivePath -C $extractRoot
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to extract the pinned FMU Executor source archive.'
+}
+$archiveRoot = Join-Path $extractRoot "decentralabs-fmu-executor-$sourceVersion"
+$manifestLines = @(& git -C $sourceRoot ls-tree -r --full-tree $sourceCommit -- VERSION pyproject.toml requirements.txt README.md app tests)
+if ($LASTEXITCODE -ne 0 -or $manifestLines.Count -eq 0) {
+    throw 'Unable to create the normalized FMU Executor source manifest.'
+}
+$manifestBytes = [Text.Encoding]::UTF8.GetBytes(($manifestLines -join "`n") + "`n")
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    $sourceSha256 = ([BitConverter]::ToString($sha256.ComputeHash($manifestBytes))).Replace('-', '').ToLowerInvariant()
+} finally {
+    $sha256.Dispose()
+}
+$runtimeFiles = @(& git -C $sourceRoot ls-tree -r --name-only $sourceCommit -- VERSION requirements.txt app)
+if ($LASTEXITCODE -ne 0 -or $runtimeFiles.Count -eq 0) {
+    throw 'Unable to enumerate the FMU Executor runtime payload.'
+}
+$runtimeFiles = [string[]]$runtimeFiles
+[Array]::Sort($runtimeFiles, [StringComparer]::Ordinal)
+$runtimeManifestLines = foreach ($relativePath in $runtimeFiles) {
+    $fileHash = (Get-FileHash -LiteralPath (Join-Path $archiveRoot $relativePath) -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$relativePath`t$fileHash"
+}
+$runtimeManifestBytes = [Text.Encoding]::UTF8.GetBytes(($runtimeManifestLines -join "`n") + "`n")
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    $runtimePayloadSha256 = ([BitConverter]::ToString($sha256.ComputeHash($runtimeManifestBytes))).Replace('-', '').ToLowerInvariant()
+} finally {
+    $sha256.Dispose()
+}
+$lockPath = Join-Path $destinationRoot 'SOURCE.lock.json'
+$lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+if ($lock.repository -ne 'DecentraLabsCom/FMU-Executor') {
+    throw 'The station source lock names a different shared repository.'
+}
+if (-not $UpdatePin -and ($sourceVersion -ne $lock.version -or $sourceCommit -ne $lock.commit -or $sourceSha256 -ne $lock.sourceTree.sha256 -or $runtimePayloadSha256 -ne $lock.runtimePayload.sha256)) {
+    throw "Shared FMU Executor source does not match the pinned version/commit/digest. Pass -UpdatePin after reviewing the release."
+}
+foreach ($required in @('app/main.py', 'requirements.txt', 'pyproject.toml', 'tests')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $archiveRoot $required))) {
+        throw "Shared FMU Executor source is missing $required."
+    }
+}
+
+Copy-Item -LiteralPath (Join-Path $archiveRoot 'app') -Destination (Join-Path $stage 'source/app') -Recurse
+Copy-Item -LiteralPath (Join-Path $archiveRoot 'tests') -Destination (Join-Path $stage 'source/tests') -Recurse
     foreach ($name in @('README.md', 'VERSION', 'requirements.txt', 'pyproject.toml')) {
-        Copy-Item -LiteralPath (Join-Path $sourceRoot $name) -Destination (Join-Path $stage "source/$name")
+        Copy-Item -LiteralPath (Join-Path $archiveRoot $name) -Destination (Join-Path $stage "source/$name")
     }
 
     Move-Item -LiteralPath (Join-Path $destinationRoot 'app') -Destination (Join-Path $backup 'app')
@@ -63,8 +113,14 @@ try {
     }
     if ($UpdatePin) {
         $lock.version = $sourceVersion
-        $lock | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $lockPath -Encoding utf8
+        $lock | Add-Member -NotePropertyName commit -NotePropertyValue $sourceCommit -Force
+        $lock.PSObject.Properties.Remove('artifact')
+        $lock | Add-Member -NotePropertyName sourceTree -NotePropertyValue ([pscustomobject][ordered]@{ format = 'git-ls-tree-manifest-v1'; sha256 = $sourceSha256 }) -Force
+        $lock | Add-Member -NotePropertyName runtimePayload -NotePropertyValue ([pscustomobject][ordered]@{ format = 'sha256-path-manifest-v1'; sha256 = $runtimePayloadSha256 }) -Force
+        $lockJson = $lock | ConvertTo-Json -Depth 4
+        [IO.File]::WriteAllText($lockPath, $lockJson, [Text.UTF8Encoding]::new($false))
     }
+    & (Join-Path $PSScriptRoot 'verify-shared-fmu-executor.ps1') -SharedSource $sourceRoot
 } catch {
     if ($appMoved -and (Test-Path -LiteralPath (Join-Path $backup 'app'))) {
         if (Test-Path -LiteralPath (Join-Path $destinationRoot 'app')) { Remove-Item -LiteralPath (Join-Path $destinationRoot 'app') -Recurse -Force }

@@ -18,6 +18,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Read pinned FMU Executor commit
+        id: fmu-pin
+        shell: pwsh
+        run: |
+          $lock = Get-Content fmu-executor/SOURCE.lock.json -Raw | ConvertFrom-Json
+          "commit=$($lock.commit)" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout pinned FMU Executor source
+        uses: actions/checkout@v7
+        with:
+          repository: DecentraLabsCom/FMU-Executor
+          ref: ${{ steps.fmu-pin.outputs.commit }}
+          path: .fmu-executor-source
+
+      - name: Verify shared FMU Executor snapshot
+        shell: pwsh
+        run: .\scripts\verify-shared-fmu-executor.ps1 -SharedSource (Join-Path $env:GITHUB_WORKSPACE '.fmu-executor-source')
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:

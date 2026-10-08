@@ -1,7 +1,16 @@
 # FMU Executor
 
-Python/FastAPI sidecar that provides the FMU execution plane on Lab Station.  
-Consumed by Lab Gateway's `fmu-runner` in `station` backend mode.
+Shared Python/FastAPI service for the Windows and Linux Lab Station
+implementations. `VERSION` is the source release version; the Lab Station
+repositories carry release snapshots so station releases do not download
+executable code at runtime. Lab Gateway's `fmu-runner` consumes the service in
+`station` backend mode.
+
+Install from this project with `python -m pip install .` or use
+`requirements.txt` to build a station-local virtual environment. Keep the
+same release version in both Lab Station snapshots.
+
+Python 3.11 or newer is required by the supported runtime dependencies.
 
 ## Quick start
 
@@ -16,7 +25,7 @@ station service; expose the configured port only to the Lab Gateway network and
 configure the same non-empty `FMU_INTERNAL_TOKEN` in the Station process
 environment and Gateway's `FMU_STATION_INTERNAL_TOKEN`.
 
-When Lab Station starts the sidecar through `LabStation\BackgroundService`,
+On Windows, when Lab Station starts the sidecar through `LabStation\BackgroundService`,
 Windows Task Scheduler runs that task as `SYSTEM`. A per-user Python install or
 user-scoped `pip install` is not visible to that account. Install the
 requirements into a machine-wide Python environment (or a virtual environment
