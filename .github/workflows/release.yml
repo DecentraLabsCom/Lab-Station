@@ -159,7 +159,7 @@ jobs:
             --distpath dist/fmu-executor-runtime `
             --workpath build/fmu-executor `
             --specpath build/fmu-executor `
-            --version-file build/fmu-executor/version-info.txt `
+            --version-file $versionFile `
             --hidden-import app.main `
             --collect-all fastapi `
             --collect-all pydantic `
