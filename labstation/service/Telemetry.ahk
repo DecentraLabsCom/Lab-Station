@@ -23,8 +23,9 @@ class LS_Telemetry {
         payload["host"] := A_ComputerName
         payload["version"] := LAB_STATION_VERSION
         payload["remoteAppEnabled"] := status["remoteAppEnabled"]
-        payload["autoStartConfigured"] := status["autoStartConfigured"]
+        payload["legacyAppControlAutostart"] := status["legacyAppControlAutostart"]
         payload["wake"] := status["wake"]
+        payload["readiness"] := status["readiness"]
         payload["summary"] := status["summary"]
         payload["operations"] := operations
         payload["status"] := status
@@ -50,5 +51,14 @@ class LS_Telemetry {
             }
         }
         return true
+    }
+}
+
+LS_PublishTelemetryBestEffort(reason := "operation") {
+    try {
+        if (!LS_Telemetry.Publish())
+            LS_LogWarning("Telemetry publication failed after " . reason)
+    } catch as e {
+        LS_LogWarning("Telemetry publication failed after " . reason . ": " . e.Message)
     }
 }

@@ -7,7 +7,6 @@
 #Include ..\core\Admin.ahk
 #Include ..\system\RegistryManager.ahk
 #Include ..\system\WakeOnLan.ahk
-#Include ..\system\Autostart.ahk
 #Include ..\system\AccountManager.ahk
 #Include ..\system\WinRM.ahk
 #Include ..\system\ServiceManager.ahk
@@ -104,7 +103,8 @@ LS_WizardSaveProfile(mode) {
 LS_WizardServerSteps() {
     return [
         Map("label", "Create/configure LABUSER + Remote Desktop Users + Autologon", "action", (*) => LS_WizardAccountServer()),
-        Map("label", "Register AppControl autostart", "action", (*) => LS_WizardAutostartServer()),
+        Map("label", "Remove legacy AppControl autostart; launch it from the Gateway Remote App connection", "action", (*) => LS_WizardClearLegacyAppControlAutostart()),
+        Map("label", "Place AppControl in the remote-app launcher directory", "action", (*) => LS_WizardEnsureRemoteAppLauncher()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
@@ -116,7 +116,8 @@ LS_WizardServerSteps() {
 LS_WizardHybridSteps() {
     return [
         Map("label", "Create/update LABUSER + Remote Desktop Users (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
-        Map("label", "Register autostart only for LABUSER", "action", (*) => LS_WizardAutostartHybrid()),
+        Map("label", "Remove legacy AppControl autostart; launch it from the Gateway Remote App connection", "action", (*) => LS_WizardClearLegacyAppControlAutostart()),
+        Map("label", "Place AppControl in the remote-app launcher directory", "action", (*) => LS_WizardEnsureRemoteAppLauncher()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
         Map("label", "Configure WinRM for Lab Gateway", "action", (*) => LS_WizardWinRM()),
         Map("label", "Configure Wake-on-LAN", "action", (*) => LS_WakeOnLan.Configure()),
@@ -181,10 +182,37 @@ LS_WizardWinRM() {
     return false
 }
 
-LS_WizardAutostartServer() {
-    return LS_Autostart.Configure()
+LS_WizardClearLegacyAppControlAutostart() {
+    return LS_RegistryManager.RemoveRunEntry("LabStationAppControl")
 }
 
-LS_WizardAutostartHybrid() {
-    return LS_Autostart.Configure("", LS_AccountManager.DefaultUser)
+LS_WizardEnsureRemoteAppLauncher() {
+    targetDir := LAB_STATION_REMOTE_APP_DIR
+    targetExe := targetDir "\AppControl.exe"
+    targetScript := targetDir "\AppControl.ahk"
+    sourceExe := LAB_STATION_PROJECT_ROOT "\AppControl.exe"
+
+    try {
+        if (FileExist(targetExe) || FileExist(targetScript)) {
+            LS_LogInfo("Remote App launcher available at: " . (FileExist(targetExe) ? targetExe : targetScript))
+            return true
+        }
+
+        if (FileExist(sourceExe)) {
+            EnsureDir(targetDir)
+            FileMove(sourceExe, targetExe, true)
+            LS_LogInfo("Moved AppControl.exe to the canonical Remote App directory: " . targetExe)
+        }
+
+        if (FileExist(targetExe) || FileExist(targetScript)) {
+            LS_LogInfo("Remote App launcher available at: " . (FileExist(targetExe) ? targetExe : targetScript))
+            return true
+        }
+
+        LS_LogError("AppControl launcher was not found at the project root or remote-app directory")
+        return false
+    } catch as e {
+        LS_LogError("Unable to place AppControl.exe in the remote-app directory: " . e.Message)
+        return false
+    }
 }

@@ -11,3 +11,14 @@ LS_TestOutput(text) {
         OutputDebug(text)
     }
 }
+
+LS_TestAssert(condition, message) {
+    if (!condition)
+        LS_TestFail(message)
+}
+
+LS_TestFail(message) {
+    global TEST_FAILURES
+    TEST_FAILURES += 1
+    LS_TestOutput(message . "`n")
+}

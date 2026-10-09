@@ -103,7 +103,7 @@ jobs:
             throw "AutoHotkey base path missing: $base"
           }
 
-          $scriptPath = (Resolve-Path 'controller/AppControl.ahk').Path
+          $scriptPath = (Resolve-Path 'remote-app/AppControl.ahk').Path
           $outDir = Join-Path $PWD 'dist'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $outFile = Join-Path $outDir 'AppControl.exe'
@@ -499,6 +499,13 @@ jobs:
             Write-Host "$name signed: $($signature.Status)"
           }
 
+      - name: Create Lab Station release package
+        shell: powershell
+        run: |
+          .\scripts\package-release.ps1 `
+            -DistPath (Join-Path $PWD 'dist') `
+            -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip')
+
       - name: Upload AppControl artifact
         uses: actions/upload-artifact@v7
         with:
@@ -529,15 +536,16 @@ jobs:
           name: WindowSpy
           path: dist/WindowSpy.exe
 
+      - name: Upload Lab Station package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Lab-Station-package
+          path: dist/Lab-Station.zip
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: |
-            dist/AppControl.exe
-            dist/LabStation.exe
-            dist/LabStationPanel.exe
-            dist/WindowSpy.exe
-            dist/img/DecentraLabs.png
+          files: dist/Lab-Station.zip
           tag_name: ${{ steps.release_meta.outputs.tag }}
           prerelease: ${{ contains(steps.release_meta.outputs.tag, '-') }}
         env:

@@ -5,6 +5,7 @@
 ; ============================================================================
 
 CreateSingleApp(windowClass, appCommand) {
+    local appPath
     global target, STARTUP_TIMEOUT, ACTIVATION_RETRIES, SILENT_ERRORS, TEST_MODE, CUSTOM_CLOSE_METHOD
     global WINDOW_STATE_TIMEOUT_MS, WINDOW_STATE_POLL_INTERVAL_MS
     
@@ -124,6 +125,7 @@ CreateSingleApp(windowClass, appCommand) {
     
     ; Setup RDP monitoring using unified function
     SetupRdpMonitoring(A_ScriptHwnd)
+    ControllerSetupCloseRequestMonitoring()
     
     ; TEST MODE: Simulate custom close after 5 seconds (for coordinate testing)
     if (TEST_MODE && CUSTOM_CLOSE_METHOD != "none") {

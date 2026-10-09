@@ -1,19 +1,35 @@
 # Status and heartbeat contract
 
-Lab Station exposes two related JSON documents with the same
-`schemaVersion` (`1.0.0`):
+Lab Station exposes a persisted status document and a heartbeat envelope. Both
+use the same `schemaVersion` (`2.0.0`):
 
 | Document | Location or command | Behavior |
 | --- | --- | --- |
-| Status | `LabStation.exe status-json [path]` | Writes a fresh status document to stdout when `path` is omitted, or to the supplied path. |
-| Diagnostics export | `LabStation.exe diagnostics [path]` | Writes a fresh status document to `labstation/data/status.json` by default, or to the supplied path. |
-| Heartbeat | `labstation/data/telemetry/heartbeat.json` | The background service refreshes it once per service-loop interval and includes a top-level `status` copy plus `operations`. |
+| Status | `LabStation.exe status-json [path]` | Collects a fresh status document. With no path it writes JSON to stdout; with a path it persists the document there. |
+| Diagnostics export | `LabStation.exe diagnostics [path]` | Collects and persists the same status shape to `labstation/data/status.json` by default, or to the supplied path. |
+| Heartbeat | `labstation/data/telemetry/heartbeat.json` | The background service refreshes it every 60 seconds and includes a top-level dashboard view plus a complete `status` copy. |
 
 The status document contains the station profile, RemoteApp and WinRM state,
-autostart, Wake-on-LAN and power compliance, sessions, FMU Executor health,
-the `summary.ready` verdict, operation timestamps, `localModeEnabled`, and the
-latest `lastForcedLogoff`. The heartbeat adds `host` and application `version`
-for file-drop consumers.
+legacy AppControl-autostart detection, Wake-on-LAN and power compliance, sessions, FMU Executor health,
+the complete `summary.ready` verdict, capability-specific `readiness`,
+operation timestamps, `localModeEnabled`, and the latest `lastForcedLogoff`.
+The heartbeat adds `host` and application `version` for file-drop consumers.
+It also keeps the latest operation summary at the top level so a dashboard can
+read `operations.lastPrepareSession`, `lastReleaseSession`,
+`lastSafeguardReboot`, `lastForcedLogoff`, and `lastPowerAction` without
+descending into `status`.
+
+The service loop also polls the command queue every five seconds. Queue
+processing is independent of the one-minute status/heartbeat refresh; see the
+[background command queue](command-queue.md).
+
+`readiness.physicalLab` describes whether the station can serve a physical
+laboratory, while `readiness.wake` describes whether its local WoL and power
+configuration is usable. `readiness.fmu` describes whether the optional FMU
+Executor is available and healthy. A wake or FMU issue can therefore leave the
+physical-lab capability ready while keeping the affected capability unready;
+consumers should select the capability that matches the decision they are
+making.
 
 Use the Markdown schema guide for the field contract and the machine-readable
 schemas when validating ingestion:
@@ -25,4 +41,7 @@ schemas when validating ingestion:
 
 Consumers should treat a higher major schema version as incompatible. Unknown
 fields may be added within a major version, so integrations should read only
-the fields they need and tolerate additional properties.
+the fields they need and tolerate additional properties. Compiled releases may
+also mirror status and heartbeat files under the legacy executable-root `data`
+directory during migration; the canonical paths remain under
+`labstation/data`.

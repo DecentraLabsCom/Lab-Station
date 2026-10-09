@@ -123,7 +123,11 @@ foreach (`$adapter in `$adapters) {
             `$deviceEnable = @(Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceEnable -ErrorAction Stop |
                 Where-Object { `$_.InstanceName -like `$pattern })
             foreach (`$device in `$deviceEnable) {
-                `$device.Enable = `$false
+                # Keep Windows power management enabled so the adapter can
+                # expose and honor the device-wake checkboxes. WoL requires
+                # the NIC to be allowed to enter a low-power state and wake
+                # from it.
+                `$device.Enable = `$true
                 Set-CimInstance -InputObject `$device -ErrorAction Stop | Out-Null
             }
         } catch {
@@ -151,7 +155,7 @@ foreach (`$adapter in `$adapters) {
     `$allowState = Get-SettingState `$pm.AllowComputerToTurnOffDevice 'allow'
     if (`$magicState -ne 'enabled') { [void]`$adapterFailures.Add('WakeOnMagicPacket is ' + `$magicState) }
     if (`$patternState -ne 'disabled') { [void]`$adapterFailures.Add('WakeOnPattern is ' + `$patternState) }
-    if (`$allowState -eq 'enabled' -or `$allowState -eq 'unknown') { [void]`$adapterFailures.Add('AllowComputerToTurnOffDevice is ' + `$allowState) }
+    if (`$allowState -ne 'enabled') { [void]`$adapterFailures.Add('AllowComputerToTurnOffDevice is ' + `$allowState) }
     if (`$adapterFailures.Count -gt 0) {
         [void]`$failures.Add((`$adapter.Name + ': ' + (`$adapterFailures -join '; ')))
     }

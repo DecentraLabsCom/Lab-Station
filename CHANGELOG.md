@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- Reorganized the public documentation around a shorter Lab Station landing
+  page, a dedicated AppControl guide, and an explicit background command-queue
+  contract.
+- Synchronized status, WinRM, hybrid-operation, build, and private Gateway
+  runbooks with the current CLI, telemetry schema, and `ops-worker` routes.
+
+## [3.5.8] - 2026-09-27
+
+### Fixed
+- `release-session` now treats an already logged-off lab user as a successful,
+  idempotent release while preserving failures from the actual logoff process.
+
+## [3.5.7] - 2026-09-27
+
+### Changed
+- Split Wake-on-LAN readiness from physical-lab and FMU readiness so Gateway
+  availability decisions can use each capability independently.
+
+## [3.5.6] - 2026-09-26
+
+### Fixed
+- Power shutdown and hibernate commands now publish telemetry immediately,
+  so Lab Gateway can display the latest power action for both direct and
+  queued commands.
+
+## [3.5.4] - 2026-09-25
+
+### Added
+- Added typed hybrid-session telemetry distinguishing active LABUSER sessions,
+  remote LABUSER sessions, local users, remote users, mixed sessions, and
+  unavailable session queries.
+
+### Changed
+- Lab Gateway and Marketplace can now report LABUSER occupancy consistently,
+  including remote reservation and demo sessions.
+- Lab Manager operations now shows `Active session` with an accessible
+  session-kind tooltip.
+
+## [3.5.3] - 2026-09-25
+
+### Changed
+- AppControl is now launched by Guacamole Remote App for both dedicated and
+  hybrid stations; the setup wizard no longer registers it in Windows Run.
+- Setup removes the legacy `LabStationAppControl` Run entry and reports it as
+  configuration drift without scheduling a recovery reboot.
+- Status and heartbeat schemas are now version `2.0.0` because the obsolete
+  AppControl autostart field was removed.
+
+## [3.5.2] - 2026-09-24
+
+### Added
+- Added cooperative AppControl close coordination for `prepare-session` and
+  `release-session`, including presence, request, result, timeout, and stale
+  marker handling.
+
+### Changed
+- Reservation cleanup now asks the interactive controller to close the
+  configured application normally instead of force-killing AppControl.
+- Extended station status, heartbeat, diagnostics, and test coverage for the
+  current Lab Gateway operations contract.
+
 ## [3.5.1] - 2026-09-11
 
 ### Fixed

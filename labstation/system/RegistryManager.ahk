@@ -22,18 +22,25 @@ class LS_RegistryManager {
         }
     }
 
-    static SetRunEntry(valueName, command) {
+    static RemoveRunEntry(valueName) {
         if (!LS_EnsureAdmin()) {
             return false
         }
         basePath := "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         try {
-            RegWrite(command, "REG_SZ", basePath, valueName)
-            LS_LogInfo("Run entry '" . valueName . "' configured")
+            RegDelete(basePath, valueName)
+            LS_LogInfo("Run entry '" . valueName . "' removed")
             return true
         } catch as e {
-            LS_LogError("Cannot configure Run entry '" . valueName . "': " . e.Message)
-            return false
+            ; Removing an already absent migration entry is idempotent.
+            try {
+                RegRead(basePath, valueName)
+                LS_LogError("Cannot remove Run entry '" . valueName . "': " . e.Message)
+                return false
+            } catch {
+                LS_LogInfo("Run entry '" . valueName . "' was already absent")
+                return true
+            }
         }
     }
 }

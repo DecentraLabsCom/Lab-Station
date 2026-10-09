@@ -72,6 +72,10 @@ try {
     AssertContains("wake", wakeSource, "-RegistryKeyword", &errors)
     AssertContains("wake", wakeSource, "wake_armed", &errors)
     AssertContains("wake", wakeSource, "Get-WakeAdvancedState", &errors)
+    wakeDeviceEnableTrue := Chr(96) . Chr(36) . "device.Enable = " . Chr(96) . Chr(36) . "true"
+    wakeDeviceEnableFalse := Chr(96) . Chr(36) . "device.Enable = " . Chr(96) . Chr(36) . "false"
+    AssertContains("wake", wakeSource, wakeDeviceEnableTrue, &errors)
+    AssertNotContains("wake", wakeSource, wakeDeviceEnableFalse, &errors)
     AssertContains("wake", wakeSource, "LS_RunPowerShellCapture", &errors)
 } catch as e {
     errors.Push("status: contract threw - " . e.Message)
@@ -79,10 +83,18 @@ try {
 
 try {
     entrypoint := FileRead(A_ScriptDir . "\..\LabStation.ahk", "UTF-8")
+    commandQueue := FileRead(A_ScriptDir . "\..\service\CommandQueue.ahk", "UTF-8")
+    sessionManager := FileRead(A_ScriptDir . "\..\service\SessionManager.ahk", "UTF-8")
     AssertContains("cli", entrypoint, "LS_ShowMessage", &errors)
     AssertContains("cli", entrypoint, "LS_WriteStdout", &errors)
     AssertContains("cli", entrypoint, "status-json could not write to stdout", &errors)
     AssertContains("cli", entrypoint, "ExitApp(commandExitCode)", &errors)
+    telemetryContract := "LS_PublishTelemetryBestEffort(" . Chr(34) . "power action" . Chr(34) . ")"
+    AssertContains("cli", entrypoint, telemetryContract, &errors)
+    AssertContains("command-queue", commandQueue, telemetryContract, &errors)
+    AssertContains("session-release", sessionManager, "NO_ACTIVE_SESSION", &errors)
+    AssertContains("session-release", sessionManager, "release already satisfied", &errors)
+    AssertContains("session-release", sessionManager, "Unable to log off active session", &errors)
 } catch as e {
     errors.Push("cli: contract threw - " . e.Message)
 }

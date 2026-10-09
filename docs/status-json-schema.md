@@ -21,7 +21,7 @@ The `diagnostics` command writes the same status shape to
 ## Versioning
 
 Every status document includes `schemaVersion`. The current version is
-`1.0.0`, and the JSON Schema accepts the `1.x` major version.
+`2.0.0`, and the JSON Schema accepts the `2.x` major version.
 
 Consumers should reject or warn on a higher major version. New fields may be
 added within a major version, so consumers should ignore fields they do not
@@ -31,14 +31,15 @@ need and tolerate additional properties.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `schemaVersion` | string | Telemetry contract version, currently `1.0.0`. |
+| `schemaVersion` | string | Telemetry contract version, currently `2.0.0`. |
 | `timestamp` | date-time string | UTC timestamp for the status collection. |
 | `stationProfile` | `server` or `hybrid` | Operating profile selected for the station. |
 | `remoteAppEnabled` | boolean | Whether the RemoteApp policy is enabled. |
 | `winrm` | object | WinRM readiness and diagnostic details. |
-| `autoStartConfigured` | boolean | Whether AppControl is configured to start automatically. |
+| `legacyAppControlAutostart` | boolean | Whether the obsolete AppControl Windows autostart entry is still present and must be removed. |
 | `wake` | object | Wake-on-LAN device and NIC diagnostics. |
 | `power` | object | Active power plan and sleep/hibernate compliance. |
+| `readiness` | object | Capability-specific readiness for `physicalLab`, `wake` and `fmu`. |
 | `summary` | object | Aggregated readiness result and issue list. |
 | `operations` | object | Recent service operations and their outcomes. |
 | `localSessionActive` | boolean | Whether a local or console user other than the lab user is active. |
@@ -53,12 +54,35 @@ The status document can also include the following diagnostic blocks:
 | `identity` | Lab account and local profile information. |
 | `biosChecklist` | BIOS/UEFI Wake-on-LAN checks shown to the operator. |
 | `policy` | Autologon, Remote Desktop Users and interactive-logon policy state. |
-| `sessions` | Current sessions and lab-user state. |
-| `fmuExecutor` | FMU Executor availability, health and configured port. Secrets are represented only by boolean state. |
+| `sessions` | Current sessions and the typed active-session summary. |
+| `fmuExecutor` | FMU Executor availability, endpoint health, local process state and configured port. Secrets are represented only by boolean state. |
 | `lastForcedLogoff` | The latest forced-logoff record, when one exists. |
 
 Unknown fields are allowed so that diagnostics can grow without invalidating
 consumers that only use the stable fields above.
+
+For `fmuExecutor`, `running` means the sidecar health endpoint returned
+`status=UP`; `processRunning` only describes the locally supervised process
+when Lab Station has a PID for it.
+
+The `readiness` object separates capabilities that can be used independently:
+`readiness.physicalLab.ready` covers the station and its physical-lab access
+requirements, `readiness.wake.ready` covers the local WoL and power-management
+configuration, and `readiness.fmu.ready` also requires the optional FMU
+Executor to be configured and running. Wake or FMU diagnostics therefore do
+not make an otherwise accessible physical laboratory unavailable. The
+aggregate `summary` remains the complete station diagnostic verdict and can
+still include issues for all capabilities.
+
+The `sessions` object reports the Windows session classification used by the
+Gateway. `active` means that at least one active session is present. `kind` is
+`none`, `labuser-local`, `labuser-remote`, `local-user`, `remote-user`,
+`mixed`, or `unknown`. `labUserActive` includes both local and remote LABUSER
+sessions; `labUserRemoteActive` is the narrower remote-LABUSER signal;
+therefore `labUserRemoteActive` implies `labUserActive`. `remoteSessionActive`
+means that any active remote Windows session exists and must not be confused
+with the identity of the platform user or reservation owner. `queryOk` reports
+whether Lab Station could query Windows sessions.
 
 ## Stable nested fields
 
@@ -83,17 +107,22 @@ Gateway can determine whether the station remains safe to power down and wake.
 
 ```json
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "timestamp": "2026-09-02T12:00:00Z",
   "stationProfile": "server",
   "remoteAppEnabled": true,
   "winrm": { "ready": true },
-  "autoStartConfigured": true,
+  "legacyAppControlAutostart": false,
   "wake": { "armedCount": 1, "nicPower": [] },
   "power": {
     "activePlan": "Balanced",
     "sleepCompliant": true,
     "hibernateCompliant": true
+  },
+  "readiness": {
+    "physicalLab": { "ready": true, "issues": [] },
+    "wake": { "ready": true, "issues": [] },
+    "fmu": { "available": false, "ready": false, "issues": [] }
   },
   "summary": { "state": "ready", "ready": true, "issues": [] },
   "operations": {},

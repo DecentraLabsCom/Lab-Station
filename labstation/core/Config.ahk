@@ -4,12 +4,12 @@
 #Requires AutoHotkey v2.0
 
 if (!IsSet(LAB_STATION_VERSION)) {
-    global LAB_STATION_VERSION := "3.5.1"
+    global LAB_STATION_VERSION := "3.5.8"
 }
 
 if (!IsSet(LAB_STATION_SCHEMA_VERSION)) {
     ; Version of the telemetry/status JSON contract (heartbeat/status.json).
-    global LAB_STATION_SCHEMA_VERSION := "1.0.0"
+    global LAB_STATION_SCHEMA_VERSION := "2.0.0"
 }
 
 if (!IsSet(LAB_STATION_COMMAND_TIMEOUT_MS)) {
@@ -48,21 +48,19 @@ if (!IsSet(LAB_STATION_LEGACY_DATA_DIR)) {
     global LAB_STATION_LEGACY_DATA_DIR := A_IsCompiled ? LAB_STATION_PROJECT_ROOT "\data" : ""
 }
 
-if (!IsSet(LAB_STATION_CONTROLLER_DIR)) {
-    global LAB_STATION_CONTROLLER_DIR := LAB_STATION_PROJECT_ROOT "\controller"
+if (!IsSet(LAB_STATION_REMOTE_APP_DIR)) {
+    ; The Remote App launcher has one canonical location in every layout.
+    ; Development uses remote-app\AppControl.ahk; releases use
+    ; remote-app\AppControl.exe.
+    global LAB_STATION_REMOTE_APP_DIR := LAB_STATION_PROJECT_ROOT "\remote-app"
 }
 
-if (!DirExist(LAB_STATION_CONTROLLER_DIR)) {
-    candidates := [
-        LAB_STATION_PROJECT_ROOT,
-        LAB_STATION_ROOT,
-        LAB_STATION_PROJECT_ROOT "\dist"
-    ]
-    for candidate in candidates {
-        if (FileExist(candidate "\AppControl.exe") || FileExist(candidate "\AppControl.ahk")) {
-            LAB_STATION_CONTROLLER_DIR := candidate
-            break
-        }
+LS_IsRemoteAppPolicyEnabled() {
+    basePath := "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+    try {
+        return RegRead(basePath, "fAllowUnlistedRemotePrograms") = 1
+    } catch {
+        return false
     }
 }
 
@@ -73,6 +71,24 @@ if (!IsSet(LAB_STATION_LOG)) {
 if (!IsSet(LAB_STATION_DATA_DIR)) {
     global LAB_STATION_DATA_DIR := LAB_STATION_ROOT "\data"
     EnsureDir(LAB_STATION_DATA_DIR)
+}
+
+if (!IsSet(LAB_STATION_CONTROLLER_CLOSE_TIMEOUT_MS)) {
+    ; AppControl closes the configured lab application cooperatively before
+    ; release-session continues with the remaining cleanup.
+    global LAB_STATION_CONTROLLER_CLOSE_TIMEOUT_MS := 15000
+}
+
+if (!IsSet(LAB_STATION_CONTROLLER_PRESENCE_FILE)) {
+    global LAB_STATION_CONTROLLER_PRESENCE_FILE := LAB_STATION_DATA_DIR "\controller-presence.txt"
+}
+
+if (!IsSet(LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE)) {
+    global LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE := LAB_STATION_DATA_DIR "\controller-close.request"
+}
+
+if (!IsSet(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE)) {
+    global LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE := LAB_STATION_DATA_DIR "\controller-close.result"
 }
 
 if (!IsSet(LAB_STATION_STATUS_FILE)) {
@@ -143,18 +159,18 @@ LS_IsHeadlessSession() {
         return cached
 
     station := DllCall("GetProcessWindowStation", "Ptr")
-    flags := Buffer(8, 0)
+    flags := Buffer(16, 0)
     required := 0
     if (station && DllCall(
         "GetUserObjectInformation",
         "Ptr", station,
-        "Int", 2,
+        "Int", 1,
         "Ptr", flags,
         "UInt", flags.Size,
         "UInt*", &required
     )) {
         ; WSF_VISIBLE is set for the interactive WinSta0 window station.
-        cached := (NumGet(flags, 0, "UInt") & 0x1) = 0
+        cached := (NumGet(flags, 8, "UInt") & 0x1) = 0
         initialized := true
         return cached
     }
@@ -216,13 +232,13 @@ NormalizePath(path) {
 }
 
 PathGet(path) {
-    return (SubStr(path, 1, 2) = "\\" ? path : FileExist(path) ? (GetFullPathName(path)) : path)
+    return (SubStr(path, 1, 2) = "\\" ? path : GetFullPathName(path))
 }
 
 GetFullPathName(path) {
     buf := Buffer(32768)
-    size := DllCall("GetFullPathName", "str", path, "UInt", buf.Size, "str", buf, "ptr", 0, "UInt")
-    if (size = 0 || size > buf.Size) {
+    size := DllCall("GetFullPathName", "Str", path, "UInt", buf.Size // 2, "Ptr", buf, "Ptr", 0, "UInt")
+    if (size = 0 || size * 2 > buf.Size) {
         return path
     }
     return StrGet(buf, size)

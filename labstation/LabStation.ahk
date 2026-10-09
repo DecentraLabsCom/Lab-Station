@@ -5,9 +5,9 @@
 #SingleInstance Force
 
 ;@Ahk2Exe-SetName LabStation
-;@Ahk2Exe-SetVersion 3.5.1
-;@Ahk2Exe-SetFileVersion 3.5.1
-;@Ahk2Exe-SetProductVersion 3.5.1
+;@Ahk2Exe-SetVersion 3.5.8
+;@Ahk2Exe-SetFileVersion 3.5.8
+;@Ahk2Exe-SetProductVersion 3.5.8
 
 #Include core\Config.ahk
 #Include core\Logger.ahk
@@ -16,7 +16,6 @@
 #Include core\Json.ahk
 #Include system\RegistryManager.ahk
 #Include system\WakeOnLan.ahk
-#Include system\Autostart.ahk
 #Include system\AccountManager.ahk
 #Include system\WinRM.ahk
 #Include system\EnergyAudit.ahk
@@ -65,13 +64,6 @@ LabStationMain(args) {
             exitCode := LS_WakeOnLan.Configure() ? 0 : 2
         case "winrm":
             exitCode := LS_HandleWinRMCommand(remaining)
-        case "autostart":
-            target := remaining.Length >= 1 ? remaining[1] : ""
-            if (target != "") {
-                exitCode := LS_Autostart.Configure(target) ? 0 : 2
-            } else {
-                exitCode := LS_Autostart.Configure() ? 0 : 2
-            }
         case "status":
             LS_ShowMessage(LS_Status.SummaryText(), "Lab Station")
             exitCode := 0
@@ -123,7 +115,6 @@ LS_ShowHelp() {
         "  LabStation.exe remoteapp            # Configure fAllowUnlistedRemotePrograms" . "`n" .
         "  LabStation.exe wol                  # Configure Wake-on-LAN" . "`n" .
         "  LabStation.exe winrm [configure|status] # Configure or inspect WinRM" . "`n" .
-        "  LabStation.exe autostart [path]     # Register controller autostart" . "`n" .
         "  LabStation.exe status               # Quick summary" . "`n" .
         "  LabStation.exe status-json [path]   # Export diagnostics" . "`n" .
         "  LabStation.exe gui                  # Launch desktop GUI" . "`n" .
@@ -173,8 +164,8 @@ LS_HandleWinRMCommand(args) {
 }
 
 LS_LaunchAppControl(args) {
-    controllerExe := LAB_STATION_CONTROLLER_DIR "\AppControl.exe"
-    controllerScript := LAB_STATION_CONTROLLER_DIR "\AppControl.ahk"
+    controllerExe := LAB_STATION_REMOTE_APP_DIR "\AppControl.exe"
+    controllerScript := LAB_STATION_REMOTE_APP_DIR "\AppControl.ahk"
     if (FileExist(controllerExe)) {
         Run Format('"{1}" {2}', controllerExe, LS_BuildCliFromArgs(args))
         return true
@@ -453,6 +444,7 @@ LS_HandlePowerCommand(args) {
             LS_ShowMessage("Unknown power subcommand", "Lab Station", "OK Iconx")
             return 2
     }
+    LS_PublishTelemetryBestEffort("power action")
     if (success) {
         LS_ShowMessage("Power action scheduled", "Lab Station", "OK Iconi")
         return 0
@@ -564,10 +556,8 @@ LS_HandleFmuExecutorCommand(args) {
     }
 }
 
-global LS_SERVICE_LOOP_ACTIVE := true
-
 LS_ServiceLoop() {
-    global LS_SERVICE_LOOP_ACTIVE
+    global LS_SERVICE_LOOP_ACTIVE := true
     LS_LogInfo("Background loop started")
     OnExit(LS_StopServiceLoop)
     statusInterval := 60000

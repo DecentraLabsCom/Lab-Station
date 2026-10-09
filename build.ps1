@@ -2,6 +2,8 @@
 # Lab Station - Build Script
 # ============================================================================
 # Compiles all executables: AppControl.exe, LabStation.exe, LabStationPanel.exe
+# AppControl is emitted at the project root as the wizard's migration source;
+# release packaging places it in remote-app\AppControl.exe.
 
 param(
     [switch]$Clean,
@@ -67,7 +69,7 @@ Write-Host ""
 # Clean previous builds if requested
 if ($Clean) {
     Write-Host "Cleaning previous builds..." -ForegroundColor Yellow
-    $files = @("AppControl.exe", "LabStation.exe", "LabStationPanel.exe")
+    $files = @("AppControl.exe", "remote-app\AppControl.exe", "LabStation.exe", "LabStationPanel.exe")
     foreach ($file in $files) {
         if (Test-Path $file) {
             Remove-Item $file -Force
@@ -81,7 +83,7 @@ if ($Clean) {
 $jobs = @(
     @{
         Name = "AppControl"
-        Source = "controller\AppControl.ahk"
+        Source = "remote-app\AppControl.ahk"
         Output = "AppControl.exe"
     },
     @{

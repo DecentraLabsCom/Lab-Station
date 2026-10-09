@@ -273,6 +273,21 @@ def describe(access_key: str) -> dict[str, Any]:
         }
         if var.type:
             entry["type"] = var.type
+        dimensions = getattr(var, "dimensions", None)
+        if isinstance(dimensions, (list, tuple)) and dimensions:
+            dimension_entries = []
+            for dimension in dimensions:
+                dimension_entry: dict[str, Any] = {}
+                start = getattr(dimension, "start", None)
+                if start is not None:
+                    dimension_entry["start"] = start
+                value_reference = getattr(dimension, "valueReference", None)
+                if value_reference is not None:
+                    dimension_entry["valueReference"] = int(value_reference)
+                if dimension_entry:
+                    dimension_entries.append(dimension_entry)
+            if dimension_entries:
+                entry["dimensions"] = dimension_entries
         if var.start is not None:
             if var.type == "Binary" and isinstance(var.start, (bytes, bytearray)):
                 entry["start"] = base64.b64encode(bytes(var.start)).decode("ascii")

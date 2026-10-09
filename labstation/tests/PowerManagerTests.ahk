@@ -59,7 +59,7 @@ RunPowerManagerTests() {
         TestScheduleFailureIsRecorded()
         TestBuildCommandsForShutdownAndHibernate()
     } catch as err {
-        Fail("Unhandled power-manager test exception: " . err.Message)
+        LS_TestFail("Unhandled power-manager test exception: " . err.Message)
     }
 
     if (TEST_FAILURES > 0) {
@@ -74,13 +74,13 @@ RunPowerManagerTests() {
 TestNormalizeOptionsUsesSafeDefaults() {
     options := LS_PowerManager.NormalizeOptions(Map("delay", -5, "force", false, "repairWake", false, "skipWakeCheck", true, "failOnWakeIssues", true))
 
-    Assert(options["delay"] = 0, "power manager clamps negative delays to zero")
-    Assert(!options["force"], "power manager preserves force=false")
-    Assert(!options["repairWake"], "power manager preserves repairWake=false")
-    Assert(options["skipWakeCheck"], "power manager preserves skipWakeCheck=true")
-    Assert(options["failOnWakeIssues"], "power manager preserves failOnWakeIssues=true")
+    LS_TestAssert(options["delay"] = 0, "power manager clamps negative delays to zero")
+    LS_TestAssert(!options["force"], "power manager preserves force=false")
+    LS_TestAssert(!options["repairWake"], "power manager preserves repairWake=false")
+    LS_TestAssert(options["skipWakeCheck"], "power manager preserves skipWakeCheck=true")
+    LS_TestAssert(options["failOnWakeIssues"], "power manager preserves failOnWakeIssues=true")
     defaults := LS_PowerManager.NormalizeOptions(Map())
-    Assert(defaults["force"] && defaults["repairWake"], "power manager enables force and WoL repair by default")
+    LS_TestAssert(defaults["force"] && defaults["repairWake"], "power manager enables force and WoL repair by default")
 }
 
 TestShutdownSkipsWakeCheckAndSchedulesCommand() {
@@ -92,13 +92,13 @@ TestShutdownSkipsWakeCheckAndSchedulesCommand() {
         "skipWakeCheck", true
     ))
 
-    Assert(result, "shutdown succeeds when scheduling succeeds")
-    Assert(RecordingPowerManager.configureCalls = 0, "skipping WoL check does not reconfigure wake")
-    Assert(RecordingPowerManager.commands.Length = 1, "shutdown schedules exactly one command")
-    Assert(InStr(RecordingPowerManager.commands[1]["command"], "shutdown /s /t 60") > 0, "shutdown command contains the requested delay")
-    Assert(InStr(RecordingPowerManager.commands[1]["command"], "/c " . Chr(34) . "Reservation completed" . Chr(34)) > 0, "shutdown command contains the reason")
-    Assert(RecordingPowerManager.records[1]["mode"] = "shutdown" && RecordingPowerManager.records[1]["success"], "shutdown records a successful power action")
-    Assert(RecordingPowerManager.records[1]["wakeReady"], "skipped WoL checks record readiness as true")
+    LS_TestAssert(result, "shutdown succeeds when scheduling succeeds")
+    LS_TestAssert(RecordingPowerManager.configureCalls = 0, "skipping WoL check does not reconfigure wake")
+    LS_TestAssert(RecordingPowerManager.commands.Length = 1, "shutdown schedules exactly one command")
+    LS_TestAssert(InStr(RecordingPowerManager.commands[1]["command"], "shutdown /s /t 60") > 0, "shutdown command contains the requested delay")
+    LS_TestAssert(InStr(RecordingPowerManager.commands[1]["command"], "/c " . Chr(34) . "Reservation completed" . Chr(34)) > 0, "shutdown command contains the reason")
+    LS_TestAssert(RecordingPowerManager.records[1]["mode"] = "shutdown" && RecordingPowerManager.records[1]["success"], "shutdown records a successful power action")
+    LS_TestAssert(RecordingPowerManager.records[1]["wakeReady"], "skipped WoL checks record readiness as true")
 }
 
 TestWakeIssuesAreRepairedBeforePowerAction() {
@@ -109,10 +109,10 @@ TestWakeIssuesAreRepairedBeforePowerAction() {
 
     result := RecordingPowerManager.Shutdown(Map("repairWake", true))
 
-    Assert(result, "shutdown succeeds after wake configuration repairs readiness")
-    Assert(RecordingPowerManager.configureCalls = 1, "power manager repairs wake readiness once")
-    Assert(RecordingPowerManager.commands.Length = 1, "power manager schedules after readiness is repaired")
-    Assert(RecordingPowerManager.records[1]["wakeReady"], "power manager records repaired wake readiness")
+    LS_TestAssert(result, "shutdown succeeds after wake configuration repairs readiness")
+    LS_TestAssert(RecordingPowerManager.configureCalls = 1, "power manager repairs wake readiness once")
+    LS_TestAssert(RecordingPowerManager.commands.Length = 1, "power manager schedules after readiness is repaired")
+    LS_TestAssert(RecordingPowerManager.records[1]["wakeReady"], "power manager records repaired wake readiness")
 }
 
 TestWakeIssuesCanBlockPowerAction() {
@@ -123,9 +123,9 @@ TestWakeIssuesCanBlockPowerAction() {
         "failOnWakeIssues", true
     ))
 
-    Assert(!result, "power manager fails when wake issues are required to be absent")
-    Assert(RecordingPowerManager.commands.Length = 0, "power manager does not schedule after a blocking wake failure")
-    Assert(!RecordingPowerManager.records[1]["success"], "power manager records the blocking wake failure")
+    LS_TestAssert(!result, "power manager fails when wake issues are required to be absent")
+    LS_TestAssert(RecordingPowerManager.commands.Length = 0, "power manager does not schedule after a blocking wake failure")
+    LS_TestAssert(!RecordingPowerManager.records[1]["success"], "power manager records the blocking wake failure")
 }
 
 TestWakeWarningsStillAllowPowerActionByDefault() {
@@ -133,9 +133,9 @@ TestWakeWarningsStillAllowPowerActionByDefault() {
 
     result := RecordingPowerManager.Shutdown(Map("repairWake", false))
 
-    Assert(result, "power manager allows shutdown when wake issues are warnings")
-    Assert(RecordingPowerManager.commands.Length = 1, "power manager schedules despite non-blocking wake warnings")
-    Assert(!RecordingPowerManager.records[1]["wakeReady"], "power manager records the wake warning state")
+    LS_TestAssert(result, "power manager allows shutdown when wake issues are warnings")
+    LS_TestAssert(RecordingPowerManager.commands.Length = 1, "power manager schedules despite non-blocking wake warnings")
+    LS_TestAssert(!RecordingPowerManager.records[1]["wakeReady"], "power manager records the wake warning state")
 }
 
 TestScheduleFailureIsRecorded() {
@@ -144,8 +144,8 @@ TestScheduleFailureIsRecorded() {
 
     result := RecordingPowerManager.Hibernate(Map("delay", 30))
 
-    Assert(!result, "hibernate reports a failed scheduling command")
-    Assert(!RecordingPowerManager.records[1]["success"], "hibernate records the scheduling failure")
+    LS_TestAssert(!result, "hibernate reports a failed scheduling command")
+    LS_TestAssert(!RecordingPowerManager.records[1]["success"], "hibernate records the scheduling failure")
 }
 
 TestBuildCommandsForShutdownAndHibernate() {
@@ -153,24 +153,13 @@ TestBuildCommandsForShutdownAndHibernate() {
     hibernate := LS_PowerManager.BuildCommand("hibernate", Map("delay", 30, "force", false, "reason", "Night window"))
     quoted := LS_PowerManager.BuildReason("A " . Chr(34) . "quoted" . Chr(34) . " reason")
 
-    Assert(InStr(shutdown, "shutdown /s /t 10 /f") > 0, "shutdown command uses force and delay")
-    Assert(InStr(shutdown, "/c " . Chr(34) . "Test" . Chr(34)) > 0, "shutdown command includes a reason")
-    Assert(InStr(hibernate, "timeout /t 30 /nobreak") > 0, "delayed hibernate uses a timeout wrapper")
-    Assert(InStr(hibernate, "shutdown /h") > 0 && !InStr(hibernate, " /f "), "hibernate command respects force=false")
-    Assert(quoted = "/c " . Chr(34) . "A 'quoted' reason" . Chr(34), "power reasons sanitize embedded quotes")
+    LS_TestAssert(InStr(shutdown, "shutdown /s /t 10 /f") > 0, "shutdown command uses force and delay")
+    LS_TestAssert(InStr(shutdown, "/c " . Chr(34) . "Test" . Chr(34)) > 0, "shutdown command includes a reason")
+    LS_TestAssert(InStr(hibernate, "timeout /t 30 /nobreak") > 0, "delayed hibernate uses a timeout wrapper")
+    LS_TestAssert(InStr(hibernate, "shutdown /h") > 0 && !InStr(hibernate, " /f "), "hibernate command respects force=false")
+    LS_TestAssert(quoted = "/c " . Chr(34) . "A 'quoted' reason" . Chr(34), "power reasons sanitize embedded quotes")
 }
 
 Readiness(ok, issues) {
     return Map("ok", ok, "issues", issues, "wake", Map("armedCount", ok ? 1 : 0), "nics", [])
-}
-
-Assert(condition, message) {
-    if (!condition)
-        Fail(message)
-}
-
-Fail(message) {
-    global TEST_FAILURES
-    TEST_FAILURES += 1
-    LS_TestOutput(message . "`n")
 }

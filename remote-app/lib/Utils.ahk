@@ -107,6 +107,7 @@ EnsureWindowSized(hwnd, label := "", minWidth := 100, minHeight := 100) {
 }
 
 FindWindowCandidate(className, pid, isLauncher, label := "") {
+    local target
     minWidth := 100
     minHeight := 100
 
@@ -261,6 +262,7 @@ IsUWPApp(hwnd, className := "") {
 
 ; Extract executable path from a full command string (removes parameters)
 ExtractExecutablePath(command) {
+    local quote
     ; Handle commands with quoted executable paths followed by parameters
     ; Examples:
     ; - "C:\Program Files\app.exe" --param value
@@ -294,6 +296,7 @@ ExtractExecutablePath(command) {
 ; Auto-detect browsers and add kiosk/incognito flags if not present
 ; Returns the command with flags added if applicable
 EnhanceBrowserCommand(command) {
+    local quote
     global AUTO_BROWSER_KIOSK, BROWSER_KIOSK_FLAGS
     
     ; If auto-kiosk is disabled, return command unchanged

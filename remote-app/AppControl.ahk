@@ -15,11 +15,12 @@ ProcessSetPriority "High"
 #Include lib\Config.ahk
 #Include lib\Utils.ahk
 #Include lib\WindowClosing.ahk
+#Include lib\CloseRequest.ahk
 #Include lib\RdpMonitoring.ahk
 #Include lib\SingleAppMode.ahk
 #Include lib\DualAppMode.ahk
 
-global APP_VERSION := "2.4.0"
+global APP_VERSION := "2.5.0"
 Log("AppControl v" . APP_VERSION . " starting")
 
 ; ============================================================================
@@ -86,6 +87,7 @@ IsFullCommand(arg) {
 }
 
 StripOuterQuotes(value) {
+    local quote
     quote := Chr(34)
     if (StrLen(value) >= 2 && SubStr(value, 1, 1) = quote && SubStr(value, -1) = quote) {
         return SubStr(value, 2, StrLen(value) - 2)
@@ -94,6 +96,7 @@ StripOuterQuotes(value) {
 }
 
 HasOuterQuotes(value) {
+    local quote
     quote := Chr(34)
     return StrLen(value) >= 2 && SubStr(value, 1, 1) = quote && SubStr(value, -1) = quote
 }
@@ -198,6 +201,8 @@ if (customCloseControl != "" && (customCloseX > 0 || customCloseY > 0)) {
 }
 
 ; Parse arguments based on mode
+ControllerRegisterPresence()
+
 if (DUAL_APP_MODE) {
     ; Dual app mode: class1 command1 class2 command2
     if (positionalArgs.Length < 4) {

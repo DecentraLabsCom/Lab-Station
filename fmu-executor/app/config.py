@@ -31,6 +31,33 @@ def internal_token() -> str | None:
 # Temp directory for FMU extraction during execution
 TEMP_DIR: Path = Path(_env("FMU_EXECUTOR_TEMP", str(FMU_ROOT / ".tmp")) or "")
 
+# One-shot executions run in a child process by default so a native FMU crash
+# cannot bring down the Station API. Realtime websocket sessions stay in the
+# service process because they need a long-lived interactive state machine.
+def execution_mode() -> str:
+    mode = (_env("FMU_EXECUTION_MODE", "process") or "process").strip().lower()
+    return mode if mode in {"process", "in-process"} else "process"
+
+
+def execution_timeout_seconds() -> float:
+    return max(1.0, float(_env("FMU_EXECUTION_TIMEOUT_SECONDS", "3600") or "3600"))
+
+
+# OMSimulator is an optional future composition backend. It is deliberately
+# not part of the mandatory Windows runtime installation.
+def omsimulator_enabled() -> bool:
+    return (_env("FMU_OMSIMULATOR_ENABLED", "false") or "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def omsimulator_command() -> str:
+    return _env("FMU_OMSIMULATOR_COMMAND", "OMSimulator") or "OMSimulator"
+
+
+def omsimulator_timeout_seconds() -> float:
+    return max(1.0, float(_env("FMU_OMSIMULATOR_TIMEOUT_SECONDS", "3600") or "3600"))
+
 # Session limits
 MAX_CONCURRENT_SESSIONS: int = int(_env("FMU_MAX_SESSIONS", "4") or "4")
 FMU_ATTACH_GRACE_SECONDS: int = max(0, int(_env("FMU_ATTACH_GRACE_SECONDS", "120") or "120"))

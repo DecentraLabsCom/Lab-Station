@@ -4,14 +4,14 @@
 - Establish a minimal, script-friendly surface so Lab Gateway can orchestrate Lab Station hosts without deploying another agent.
 - Cover the commands required for a single reservation lifecycle: `session guard`, `prepare-session`, `release-session`, `status-json`, and the safeguard `recovery reboot-if-needed` fallback when the host refuses to clean up.
 - Document connectivity profile, credentials, command arguments, exit codes, and example payloads so both teams can automate confidently.
-- **ops-worker implementation**: Lab Gateway includes `ops-worker` (Python/Flask) that wraps these WinRM commands as REST APIs (`/api/wol`, `/api/winrm`, `/api/heartbeat/poll`).
+- **ops-worker implementation**: Lab Gateway includes `ops-worker` (Python/Flask) that wraps these WinRM commands as REST APIs (`/api/wol`, `/api/winrm`, `/api/heartbeat/poll`) and exposes the per-host trust lifecycle (`/api/hosts/{hostName}/winrm-trust`).
 
 ## 2. Connectivity profile
 | Item | Value |
 | --- | --- |
 | Transport | WinRM over HTTPS (`https://<hostname>:5986/wsman`) inside the managed/private network, using NTLM/Negotiate. Plain HTTP/5985 is deliberately disabled. |
 | Listener config | `LabStation.exe setup` or `LabStation.exe winrm configure` creates/reuses a server-auth certificate, exports it to `C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer`, configures the HTTPS listener, disables `AllowUnencrypted`, enables Negotiate, and opens only the HTTPS firewall rule. The certificate contains station IPv4 addresses as typed `IPAddress` SAN entries, not DNS names. |
-| Client trust | Import the exported `.cer` into the Lab Gateway host's trusted root/certificate store (or use a certificate issued by the organisation's trusted CA). The Gateway validates the server certificate; `TrustedHosts` is not a substitute for certificate trust. |
+| Client trust | Preferred flow: manage the exported public certificate from Lab Manager's `WinRM TLS trust` control for the target host. The Gateway stores it under the persistent per-host `ops-data/winrm-certificates/<winrm-trust-ref>/` directory and validates it only for that host. A manual copy is available for bootstrap/recovery; `TrustedHosts` is not a substitute for certificate trust. |
 | Rate limits | Default WinRM quotas (150 concurrent operations) are sufficient; stick to a max of 2 parallel commands per host. |
 | Logging | All Lab Station actions continue to log to `C:\LabStation\labstation\labstation.log`; service data artifacts (including `heartbeat.json` and `status.json`) live under `C:\LabStation\labstation\data\...`; WinRM transcripts stay on the gateway. |
 
@@ -25,29 +25,101 @@
 ## 4. Command contract
 All remote executions call the bundled binary: `C:\LabStation\LabStation.exe <command> [options]`.
 
-### Exit codes (applies to every command)
+### Exit codes
+
+The commands do not all use the same failure code. Use the command's exit code
+and the log/result payload together:
+
 | Code | Meaning | Typical remediation |
 | --- | --- | --- |
-| `0` | Success. Logs contain only informational entries. | None. |
-| `1` | Completed with warnings (handled condition, e.g., profile folder missing). | Inspect `labstation.log`, decide if retry is needed. |
-| `>=2` | Hard failure (command not run, privileges missing, PowerShell error). | Alert + manual investigation. |
+| `0` | Success. | None. |
+| `1` | Operational warning or failure, depending on the command. Session cleanup can use it for warnings; power, recovery, WinRM, service, and export commands also use it for a failed operation. | Inspect `labstation.log` and retry or investigate. |
+| `2` | Invalid or unsupported invocation, such as a missing subcommand or malformed usage. | Correct the command before retrying. |
 
-**Telemetry contract:** `status-json` and the `heartbeat.json` produced by the service include `schemaVersion` (current: **1.0.0**). Treat major bumps as breaking; fail fast or warn if `schemaVersion` is higher than the backend understands. Validate payloads against [`status-schema.json`](status-schema.json) and [`heartbeat-schema.json`](heartbeat-schema.json).
+Queued commands normalize their result to `0` (success), `1` (warning), or
+`2` (hard failure); see the [queue contract](command-queue.md).
+
+**Telemetry contract:** `status-json` and the `heartbeat.json` produced by the service include `schemaVersion` (current: **2.0.0**). Treat major bumps as breaking; fail fast or warn if `schemaVersion` is higher than the backend understands. Validate payloads against [`status-schema.json`](status-schema.json) and [`heartbeat-schema.json`](heartbeat-schema.json).
 
 ### Command surface
 | Command | Arguments | What it does | Artifacts |
 | --- | --- | --- | --- |
 | `session guard` | `--grace=<seconds>` (default 120; minimum 30), `--user=<LABUSER>` (default), `--message="text"`, `--silent`/`--no-notify`, `--soft` | Detects local/console users, optionally notifies them, waits the grace period, and forces or attempts logoff so remote reservations can take over. `--silent` suppresses the notification but does not skip the wait. | `labstation.log` entries, audit line in `data/telemetry/session-guard-events.jsonl`, plus warnings surfaced via `status.json` (`localSessionActive`, `lastForcedLogoff`). |
-| `prepare-session` | `--user=<LABUSER>` (optional), `--guard-grace=<seconds>` (default 90; minimum 30), `--no-guard`, `--guard-message="text"`, `--guard-silent`/`--guard-notify=no` | Invokes `session guard` automatically (unless disabled), closes controller processes, purges LABUSER temp/cache folders, resets controller log. Run immediately before a reservation is assigned. | Cleans directories inside the selected profile, emits audit entries if someone is expelled, and logs to `labstation.log`. |
-| `release-session` | `--user=<LABUSER>`, `--reboot`, `--reboot-timeout=<seconds>` | Closes controller, logs off LABUSER, and optionally schedules `shutdown /r /t <timeout> /f`. Run after reservation completes. Guard switches are not used by this command. | Forces logoff, optional reboot. |
-| `recovery reboot-if-needed` | `--force` bypasses health heuristics, `--timeout=<seconds>` overrides default 20s, `--reason=<text>` tags the order. | Evaluates `status.json` issues (RemoteApp/WoL/autostart/policy drift, lingering sessions) and only triggers a forced reboot when needed; `--force` handles manual overrides. | Writes a safeguard entry to `service-state.ini`, updates `telemetry/heartbeat.json`, and schedules `shutdown /r`. |
+| `prepare-session` | `--user=<LABUSER>` (optional), `--guard-grace=<seconds>` (default 90; minimum 30), `--no-guard`, `--guard-message="text"`, `--guard-silent`/`--guard-notify=no` | Invokes `session guard` automatically (unless disabled), requests AppControl to close the configured application cooperatively, purges LABUSER temp/cache folders, and resets the controller log. Run immediately before a reservation is assigned. | Cleans directories inside the selected profile, emits audit entries if someone is expelled, and logs to `labstation.log`. |
+| `release-session` | `--user=<LABUSER>`, `--reboot`, `--reboot-timeout=<seconds>` | Requests the interactive AppControl to close the configured lab application cooperatively, logs off LABUSER, and optionally schedules `shutdown /r /t <timeout> /f`. Run after reservation completes. Guard switches are not used by this command. | Controlled application close, logoff, optional reboot. |
+| `recovery reboot-if-needed` | `--force` bypasses health heuristics, `--timeout=<seconds>` overrides default 20s, `--reason=<text>` tags the order. | Evaluates `status.json` issues (RemoteApp/WoL/policy drift, lingering sessions) and only triggers a forced reboot when needed; legacy AppControl autostart is a configuration issue, not a reboot trigger; `--force` handles manual overrides. | Writes a safeguard entry to `service-state.ini`, updates `telemetry/heartbeat.json`, and schedules `shutdown /r`. |
 | `power shutdown` / `power hibernate` | `--delay=<seconds>` (default 0), `--reason=<text>`, `--no-force`, `--skip-wake-check`, `--repair-wake=<yes|no>` (default `yes`; `--repair-wake` and `--no-repair-wake` are equivalent aliases), `--require-wake`. | Re-validates Wake-on-LAN compliance (optionally reapplying adapter settings) and schedules a graceful shutdown or hibernate so the host can be powered off between reservations without breaking WoL. | Records `lastPowerAction` inside `service-state.ini`/telemetry and logs result to `labstation.log`. |
-| `status-json` | `status-json [absolute-path]` | Refreshes diagnostics (RemoteApp, WoL, autostart, account/lockdown, sessions) and writes JSON to the provided path; without a path it writes the JSON document to stdout. | JSON file/document including `summary.ready`, `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`, and the `operations` block. |
+| `status-json` | `status-json [absolute-path]` | Refreshes diagnostics (RemoteApp, WoL, legacy AppControl-autostart detection, account/lockdown, sessions) and writes JSON to the provided path; without a path it writes the JSON document to stdout and does not update the default status file. | JSON file/document including `summary.ready`, the `sessions` active-session classification, `localSessionActive`, `localModeEnabled`, `lastForcedLogoff`, and the `operations` block. |
 | `service start|stop|status|install|uninstall` | subcommand only | Manages the Lab Station background scheduled task when automation needs it (rare). | Task Scheduler entry `LabStation\BackgroundService`. |
 
-> Note: `release-session --reboot --reboot-timeout=15` remains the default end-of-reservation reboot. Use `recovery reboot-if-needed` only when the host is stuck in a degraded state or the backend wants a one-off safeguard reboot.
+> Note: `release-session` does not reboot by default. Pass `--reboot --reboot-timeout=15` only when an explicit reboot is required. Use `recovery reboot-if-needed` for a one-off safeguard reboot when the host is stuck in a degraded state.
 
-## 5. Recommended WinRM invocation patterns
+## 5. Per-host certificate trust
+
+`winrm configure` establishes the HTTPS listener identity on Lab Station. It
+does not contact Lab Gateway and it does not install the certificate in a
+Gateway-wide trust store. The command exports the public certificate and logs
+both its path and thumbprint:
+
+```text
+C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer
+```
+
+The managed handoff is:
+
+1. Run `LabStation.exe winrm configure` as an administrator on the station.
+2. In Lab Manager, open `Lab Station Ops` and save the generated account in
+   `WinRM Credentials` for the target host.
+3. Open the host card's `WinRM TLS trust` control. This control is the single
+   entry point for loading, replacing, verifying, and removing trust for that
+   host.
+4. Select `winrm-server.cer`, choose `Preview certificate`, and check the
+   subject, validity dates, SAN entries, and displayed fingerprints. Compare
+   the SHA-1 value with the thumbprint printed by Lab Station; approve the
+   SHA-256 value shown by the Gateway.
+5. Confirm the SHA-256 fingerprint and save the certificate. The Gateway
+   validates the certificate against the host before storing it and then uses
+   it for that host's subsequent WinRM sessions.
+6. Click `Verify connection` and confirm that a recent heartbeat is received.
+
+The default persistent layout is:
+
+```text
+ops-data/
+  winrm-certificates/
+    <lower-case-winrm-trust-ref>/
+      server.cer
+      server.pem
+      metadata.json
+```
+
+If `winrm_trust_ref` is not explicitly configured, the Gateway derives the
+reference from the host name (or address as a final fallback). `server.cer`
+is the public certificate received from the station. `server.pem` is the
+canonical PEM materialized by ops-worker for Requests/OpenSSL, and
+`metadata.json` contains fingerprints, SANs, validity, and audit metadata.
+The private key is never exported or stored.
+
+For bootstrap or recovery without the browser flow, copy only the public
+certificate to the matching host directory, then restart ops-worker or call
+the protected reload endpoint:
+
+```text
+ops-data/winrm-certificates/<lower-case-winrm-trust-ref>/server.cer
+POST /ops/api/hosts/reload
+GET  /ops/api/hosts
+```
+
+Use `winrmTrustStatus=ready` and the returned certificate metadata to confirm
+that the Gateway loaded the correct file. Re-running `winrm configure` can
+regenerate the station certificate and change its thumbprint; replace the
+host-specific trust through Lab Manager or repeat the manual copy. Do not
+copy a private key, disable TLS verification, or use `TrustedHosts` to bypass
+certificate validation. The current command contract has no automatic
+`winrm enroll` operation; station configuration remains independent of Gateway
+availability.
+
+## 6. Recommended WinRM invocation patterns
 ### PowerShell (Lab Gateway)
 ```powershell
 function Invoke-LabStationCommand {
@@ -110,7 +182,9 @@ import winrm
 session = winrm.Session(
     'https://lab-ws-07:5986/wsman',
     auth=('LABSTATION\\LabGatewaySvc', '***'),
-    transport='ntlm'
+    transport='ntlm',
+    ca_trust_path='/app/data/winrm-certificates/lab-ws-07/server.pem',
+    server_cert_validation='validate',
 )
 
 ps = r'''
@@ -138,17 +212,18 @@ status = json.loads(result.std_out)
 print(status['summary']['state'])
 ```
 
-## 6. Operational flow per reservation
+## 7. Operational flow per reservation
 1. **Wake host** (WoL handled elsewhere) and wait for WinRM to respond.
 2. **`prepare-session`** to ensure LABUSER is clean. This automatically runs `session guard` (unless you pass `--no-guard`) to evict local users before cleaning; abort if exit code >=2.
 3. **Assign reservation** via Guacamole/RemoteApp.
-4. **`release-session --reboot`** when Lab Gateway marks reservation complete. Reboot timeout default 15 seconds so the next wake cycle starts from a clean slate.
+4. **`release-session`** when Lab Gateway marks reservation complete. It closes the configured application cooperatively and logs off LABUSER without rebooting; pass `--reboot` only when an explicit restart is required.
 5. **Optional:** `power shutdown --delay=60 --reason="Reservation completed"` (or `power hibernate`) if the host must remain fully off until WoL wakes it up again.
 6. **`status-json`** every 5 minutes (or on demand) to copy health data back to the gateway for dashboards; alternatively poll `C:\LabStation\labstation\data\telemetry\heartbeat.json` if SMB access is already available.
 
-## 7. Open items / future enhancements
-- **HTTPS certificate trust:** `winrm configure` exports the certificate used by the listener. Install that certificate on every Lab Gateway node, or replace it with a certificate issued by the organisation's trusted CA before enabling the host.
+## 8. Open items / future enhancements
 - **Proactive alerts:** notifications on `ready=false` or stale heartbeat remain roadmap items; rely on ops-worker polling + dashboards until built-in alerts land.
+- **Optional enrollment:** a future operator-triggered enrollment command may automate the public-certificate handoff, but it is not part of the current `winrm configure` contract.
 
-## 8. Completed enhancements
+## 9. Completed enhancements
 - **ops-worker REST API:** simplifies integration compared with raw WinRM (see `ops-worker/README.md`).
+- **Per-host certificate trust:** Lab Manager can preview, approve, replace, verify, and remove public WinRM certificates in the Gateway's persistent `ops-data` store without creating global trust.

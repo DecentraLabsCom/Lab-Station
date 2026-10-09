@@ -1,20 +1,7 @@
 #Requires AutoHotkey v2.0
 #Include TestSupport.ahk
-
-class LS_SessionGuard {
-    static Run(options) {
-        return true
-    }
-}
-
-class LS_FmuExecutor {
-    static TerminateAllSessions() {
-    }
-
-    static CleanTempState() {
-    }
-}
-
+#Include ..\service\SessionGuard.ahk
+#Include ..\service\FmuExecutor.ahk
 #Include ..\service\SessionManager.ahk
 
 global TEST_FAILURES := 0
@@ -94,7 +81,7 @@ RunReservationFlowTests() {
         TestReleaseSessionWithReboot()
         TestReleaseSessionFailureStillRecordsFailure()
     } catch as err {
-        Fail("Unhandled reservation-flow test exception: " . err.Message)
+        LS_TestFail("Unhandled reservation-flow test exception: " . err.Message)
     }
 
     LAB_STATION_SERVICE_STATE_FILE := ORIGINAL_STATE_FILE
@@ -120,7 +107,7 @@ TestPrepareSessionSuccess() {
 
     success := RecordingSessionManager.PrepareSession(options)
 
-    Assert(success, "prepare-session succeeds when all operations succeed")
+    LS_TestAssert(success, "prepare-session succeeds when all operations succeed")
     AssertCallSequence([
         "guard",
         "close-controller",
@@ -131,12 +118,12 @@ TestPrepareSessionSuccess() {
     ], "prepare-session operation order")
 
     guardCall := RecordingSessionManager.calls[1]
-    Assert(guardCall["options"]["guard"] = false, "prepare-session forwards guard=false")
-    Assert(RecordingSessionManager.calls[4]["user"] = "LABUSER", "prepare-session forwards the selected user")
+    LS_TestAssert(guardCall["options"]["guard"] = false, "prepare-session forwards guard=false")
+    LS_TestAssert(RecordingSessionManager.calls[4]["user"] = "LABUSER", "prepare-session forwards the selected user")
 
     state := LS_ServiceState.ReadSection("prepare-session")
-    Assert(state.Has("success") && state["success"], "prepare-session records success")
-    Assert(state.Has("user") && state["user"] = "LABUSER", "prepare-session records the selected user")
+    LS_TestAssert(state.Has("success") && state["success"], "prepare-session records success")
+    LS_TestAssert(state.Has("user") && state["user"] = "LABUSER", "prepare-session records the selected user")
 }
 
 TestPrepareSessionFailureStillRunsCleanup() {
@@ -145,7 +132,7 @@ TestPrepareSessionFailureStillRunsCleanup() {
 
     success := RecordingSessionManager.PrepareSession(Map("user", "LABUSER"))
 
-    Assert(!success, "prepare-session reports failure when profile cleanup fails")
+    LS_TestAssert(!success, "prepare-session reports failure when profile cleanup fails")
     AssertCallSequence([
         "guard",
         "close-controller",
@@ -155,7 +142,7 @@ TestPrepareSessionFailureStillRunsCleanup() {
     ], "prepare-session continues cleanup after a failed operation")
 
     state := LS_ServiceState.ReadSection("prepare-session")
-    Assert(state.Has("success") && !state["success"], "prepare-session records failure")
+    LS_TestAssert(state.Has("success") && !state["success"], "prepare-session records failure")
 }
 
 TestReleaseSessionWithoutReboot() {
@@ -163,7 +150,7 @@ TestReleaseSessionWithoutReboot() {
 
     success := RecordingSessionManager.ReleaseSession(Map("user", "LABUSER"))
 
-    Assert(success, "release-session succeeds without reboot")
+    LS_TestAssert(success, "release-session succeeds without reboot")
     AssertCallSequence([
         "close-controller",
         "fmu-cleanup",
@@ -171,8 +158,8 @@ TestReleaseSessionWithoutReboot() {
     ], "release-session does not reboot by default")
 
     state := LS_ServiceState.ReadSection("release-session")
-    Assert(state.Has("success") && state["success"], "release-session records success")
-    Assert(!state.Has("rebootRequested"), "release-session omits reboot metadata when not requested")
+    LS_TestAssert(state.Has("success") && state["success"], "release-session records success")
+    LS_TestAssert(!state.Has("rebootRequested"), "release-session omits reboot metadata when not requested")
 }
 
 TestReleaseSessionWithReboot() {
@@ -181,18 +168,18 @@ TestReleaseSessionWithReboot() {
     options := Map("user", "LABUSER", "reboot", true, "rebootTimeout", 15)
     success := RecordingSessionManager.ReleaseSession(options)
 
-    Assert(success, "release-session succeeds with reboot")
+    LS_TestAssert(success, "release-session succeeds with reboot")
     AssertCallSequence([
         "close-controller",
         "fmu-cleanup",
         "logoff",
         "reboot"
     ], "release-session reboots after cleanup")
-    Assert(RecordingSessionManager.calls[4]["timeout"] = 15, "release-session forwards reboot timeout")
+    LS_TestAssert(RecordingSessionManager.calls[4]["timeout"] = 15, "release-session forwards reboot timeout")
 
     state := LS_ServiceState.ReadSection("release-session")
-    Assert(state.Has("rebootRequested") && state["rebootRequested"], "release-session records reboot request")
-    Assert(state.Has("rebootTimeout") && state["rebootTimeout"] = 15, "release-session records reboot timeout")
+    LS_TestAssert(state.Has("rebootRequested") && state["rebootRequested"], "release-session records reboot request")
+    LS_TestAssert(state.Has("rebootTimeout") && state["rebootTimeout"] = 15, "release-session records reboot timeout")
 }
 
 TestReleaseSessionFailureStillRecordsFailure() {
@@ -205,7 +192,7 @@ TestReleaseSessionFailureStillRecordsFailure() {
         "rebootTimeout", 20
     ))
 
-    Assert(!success, "release-session reports failure when logoff fails")
+    LS_TestAssert(!success, "release-session reports failure when logoff fails")
     AssertCallSequence([
         "close-controller",
         "fmu-cleanup",
@@ -214,7 +201,7 @@ TestReleaseSessionFailureStillRecordsFailure() {
     ], "release-session attempts the requested reboot after a failed cleanup step")
 
     state := LS_ServiceState.ReadSection("release-session")
-    Assert(state.Has("success") && !state["success"], "release-session records failure")
+    LS_TestAssert(state.Has("success") && !state["success"], "release-session records failure")
 }
 
 TestExtraCleaner(*) {
@@ -228,24 +215,13 @@ AssertCallSequence(expectedNames, description) {
         actualNames.Push(call["name"])
 
     if (actualNames.Length != expectedNames.Length) {
-        Fail(description . " expected " . expectedNames.Length . " calls but got " . actualNames.Length)
+        LS_TestFail(description . " expected " . expectedNames.Length . " calls but got " . actualNames.Length)
         return
     }
 
     for index, expectedName in expectedNames {
         if (actualNames[index] != expectedName) {
-            Fail(description . " mismatch at position " . index . " (expected " . expectedName . ", got " . actualNames[index] . ")")
+            LS_TestFail(description . " mismatch at position " . index . " (expected " . expectedName . ", got " . actualNames[index] . ")")
         }
     }
-}
-
-Assert(condition, message) {
-    if (!condition)
-        Fail(message)
-}
-
-Fail(message) {
-    global TEST_FAILURES
-    TEST_FAILURES += 1
-    LS_TestOutput(message . "`n")
 }

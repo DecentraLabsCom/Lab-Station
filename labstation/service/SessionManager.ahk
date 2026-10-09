@@ -84,17 +84,115 @@ class LS_SessionManager {
     }
 
     static CloseControllerProcesses() {
-        targets := ["AppControl.exe", "AppControl.ahk"]
-        result := true
-        for exe in targets {
-            cmd := Format('taskkill /IM "{1}" /F', exe)
-            exitCode := LS_RunCommand(cmd, "Terminate " . exe)
-            if (exitCode != 0 && exitCode != 128 && exitCode != 1) {
-                result := false
-                LS_LogWarning(Format("Unable to close {1} (exit={2})", exe, exitCode))
-            }
+        presence := this.ReadControllerPresence()
+        if (presence.Has("stale") && presence["stale"]) {
+            LS_LogWarning("AppControl presence marker is stale or invalid; refusing to force-close an unknown process")
+            return false
         }
+        if (!presence["present"]) {
+            if (ProcessExist("AppControl.exe")) {
+                LS_LogWarning("AppControl is running without cooperative-close support")
+                return false
+            }
+            return true
+        }
+
+        try FileDelete(LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE)
+        try FileDelete(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE)
+
+        token := A_TickCount . "-" . FormatTime(A_Now, "yyyyMMddHHmmss") . "-" . Random(1000, 9999)
+        if (!this.WriteControllerHandshake(LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE, token)) {
+            LS_LogWarning("Unable to request cooperative AppControl close")
+            return false
+        }
+
+        deadline := A_TickCount + LAB_STATION_CONTROLLER_CLOSE_TIMEOUT_MS
+        while (A_TickCount < deadline) {
+            if (FileExist(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE)) {
+                try {
+                    resultText := Trim(FileRead(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE, "UTF-8"))
+                } catch {
+                    resultText := ""
+                }
+                if (this.CloseResultMatches(resultText, token, "ok")) {
+                    try FileDelete(LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE)
+                    try FileDelete(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE)
+                    if (this.WaitForControllerPresenceToClear(deadline))
+                        return true
+                    LS_LogWarning("AppControl acknowledged close but remained active")
+                    return false
+                }
+                if (this.CloseResultMatches(resultText, token, "failed")) {
+                    try FileDelete(LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE)
+                    try FileDelete(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE)
+                    LS_LogWarning("AppControl could not close the controlled lab application")
+                    return false
+                }
+            }
+            Sleep(100)
+        }
+
+        try FileDelete(LAB_STATION_CONTROLLER_CLOSE_REQUEST_FILE)
+        try FileDelete(LAB_STATION_CONTROLLER_CLOSE_RESULT_FILE)
+        LS_LogWarning("Timed out waiting for cooperative AppControl close")
+        return false
+    }
+
+    static ReadControllerPresence() {
+        result := Map("present", false, "pid", 0, "stale", false)
+        if (!FileExist(LAB_STATION_CONTROLLER_PRESENCE_FILE))
+            return result
+
+        try {
+            content := Trim(FileRead(LAB_STATION_CONTROLLER_PRESENCE_FILE, "UTF-8"))
+        } catch {
+            content := ""
+        }
+        if (!RegExMatch(content, "^(\d+)\|(\d+)$", &marker)) {
+            LS_LogWarning("Invalid AppControl presence marker")
+            result["stale"] := true
+            try FileDelete(LAB_STATION_CONTROLLER_PRESENCE_FILE)
+            return result
+        }
+
+        pid := marker[1] + 0
+        result["pid"] := pid
+        if (pid && ProcessExist(pid)) {
+            result["present"] := true
+            return result
+        }
+
+        LS_LogWarning("Stale AppControl presence marker found")
+        try FileDelete(LAB_STATION_CONTROLLER_PRESENCE_FILE)
+        result["stale"] := true
         return result
+    }
+
+    static WriteControllerHandshake(path, token) {
+        tempPath := path . ".tmp-" . A_TickCount
+        try {
+            FileDelete(tempPath)
+            FileAppend(token, tempPath, "UTF-8")
+            FileMove(tempPath, path, 1)
+            return true
+        } catch as e {
+            try FileDelete(tempPath)
+            LS_LogWarning("Unable to write controller handshake: " . e.Message)
+            return false
+        }
+    }
+
+    static WaitForControllerPresenceToClear(deadline) {
+        while (A_TickCount < deadline) {
+            if (!FileExist(LAB_STATION_CONTROLLER_PRESENCE_FILE))
+                return true
+            Sleep(100)
+        }
+        return false
+    }
+
+    static CloseResultMatches(resultText, token, status) {
+        return Trim(resultText) = token . "|" . status
     }
 
     static ClearLabUserWorkingDirs(user := "") {
@@ -123,7 +221,7 @@ class LS_SessionManager {
     }
 
     static ResetControllerLogs() {
-        logPath := LAB_STATION_CONTROLLER_DIR "\AppControl.log"
+        logPath := LAB_STATION_REMOTE_APP_DIR "\AppControl.log"
         try {
             if (FileExist(logPath)) {
                 FileDelete(logPath)
@@ -153,13 +251,14 @@ class LS_SessionManager {
             return true
         }
         sanitized := StrReplace(path, "'", "''")
-        script := Format("
+        script := "
         (
-`$Path = '{1}'
-if (Test-Path `$Path) {{
+`$Path = '__PATH__'
+if (Test-Path `$Path) {
     Get-ChildItem -Path `$Path -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-}}
-        )", sanitized)
+}
+        )"
+        script := StrReplace(script, "__PATH__", sanitized)
         exitCode := LS_RunPowerShell(script, "Clean " . path)
         if (exitCode != 0) {
             LS_LogWarning(Format("Unable to clean {1} (exit={2})", path, exitCode))
@@ -194,30 +293,48 @@ if (`$p) {{ `$p.LocalPath }}
         if (!user || user = "") {
             user := LS_AccountManager.DefaultUser
         }
-        flag := force ? "/f" : ""
         sanitized := StrReplace(user, "'", "''")
-        script := Format("
+        script := "
         (
-`$User = '{1}'
-`$regex = '^\s*>?\s*' + [regex]::Escape(`$User) + '\s+\S+\s+(\d+)'
+`$User = '__USER__'
+`$regex = '^\s*>?\s*' + [regex]::Escape(`$User) + '\s+(?:\S+\s+)?(\d+)\s+\S+'
 `$lines = @()
-try {{ `$lines = quser }} catch {{}}
-`$found = `$false
-foreach (`$line in `$lines) {{
+try {
+    `$lines = @(quser)
+} catch {
+    Write-Error ("Unable to query active sessions: " + `$_.Exception.Message)
+    exit 2
+}
+`$matched = `$false
+`$allLoggedOff = `$true
+foreach (`$line in `$lines) {
     `$text = `$line.ToString()
-    if (`$text -match `$regex) {{
+    if (`$text -match `$regex) {
         `$sessionId = [int]`$Matches[1]
-        try {{ logoff `$sessionId {2} | Out-Null }} catch {{}}
-        `$found = `$true
-    }}
-}}
-if (`$found) {{ exit 0 }} else {{ exit 1 }}
-        )", sanitized, flag)
-        exitCode := LS_RunPowerShell(script, "Logoff " . user)
+        `$matched = `$true
+        logoff `$sessionId 2>`$null
+        if (`$LASTEXITCODE -ne 0) { `$allLoggedOff = `$false }
+    }
+}
+if (-not `$matched) {
+    Write-Output "NO_ACTIVE_SESSION"
+    exit 0
+}
+if (`$allLoggedOff) { exit 0 } else { exit 1 }
+        )"
+        script := StrReplace(script, "__USER__", sanitized)
+        capture := LS_RunPowerShellCapture(script, "Logoff " . user)
+        exitCode := capture["exitCode"]
         if (exitCode = 0) {
+            if (InStr(capture["stdout"], "NO_ACTIVE_SESSION"))
+                LS_LogInfo("No active session found for " . user . "; release already satisfied")
             return true
         }
-        LS_LogWarning("No active session found for " . user)
+        detail := LS_CaptureDetail(capture)
+        message := "Unable to log off active session for " . user
+        if (detail != "")
+            message .= ": " . detail
+        LS_LogWarning(message)
         return false
     }
 

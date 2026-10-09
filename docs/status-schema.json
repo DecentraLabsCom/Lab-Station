@@ -10,9 +10,10 @@
     "stationProfile",
     "remoteAppEnabled",
     "winrm",
-    "autoStartConfigured",
+    "legacyAppControlAutostart",
     "wake",
     "power",
+    "readiness",
     "summary",
     "operations",
     "localSessionActive",
@@ -21,15 +22,15 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "pattern": "^1\\.",
-      "description": "Telemetry contract version. Current value is 1.0.0."
+      "pattern": "^2\\.",
+      "description": "Telemetry contract version. Current value is 2.0.0."
     },
     "timestamp": {"type": "string", "format": "date-time"},
     "stationProfile": {"type": "string", "enum": ["server", "hybrid"]},
     "identity": {"type": "object", "additionalProperties": true},
     "remoteAppEnabled": {"type": "boolean"},
     "winrm": {"$ref": "#/definitions/object"},
-    "autoStartConfigured": {"type": "boolean"},
+    "legacyAppControlAutostart": {"type": "boolean"},
     "wake": {
       "type": "object",
       "properties": {
@@ -41,12 +42,13 @@
     "power": {"$ref": "#/definitions/object"},
     "biosChecklist": {"$ref": "#/definitions/object"},
     "policy": {"$ref": "#/definitions/object"},
-    "sessions": {"$ref": "#/definitions/object"},
+    "sessions": {"$ref": "#/definitions/sessionSummary"},
     "fmuExecutor": {
       "type": "object",
       "properties": {
         "available": {"type": "boolean"},
         "running": {"type": "boolean"},
+        "processRunning": {"type": "boolean"},
         "pid": {"type": "integer", "minimum": 0},
         "port": {"type": "integer", "minimum": 1, "maximum": 65535},
         "tokenConfigured": {"type": "boolean"},
@@ -54,6 +56,16 @@
         "lastHealth": {"type": "object", "additionalProperties": true}
       },
       "additionalProperties": true
+    },
+    "readiness": {
+      "type": "object",
+      "required": ["physicalLab", "wake", "fmu"],
+      "properties": {
+        "physicalLab": {"$ref": "#/definitions/capabilityReadiness"},
+        "wake": {"$ref": "#/definitions/capabilityReadiness"},
+        "fmu": {"$ref": "#/definitions/capabilityReadiness"}
+      },
+      "additionalProperties": false
     },
     "summary": {
       "type": "object",
@@ -72,6 +84,33 @@
   },
   "additionalProperties": true,
   "definitions": {
-    "object": {"type": "object", "additionalProperties": true}
+    "object": {"type": "object", "additionalProperties": true},
+    "sessionSummary": {
+      "type": "object",
+      "properties": {
+        "queryOk": {"type": "boolean"},
+        "active": {"type": "boolean"},
+        "kind": {
+          "type": "string",
+          "enum": ["none", "labuser-local", "labuser-remote", "local-user", "remote-user", "mixed", "unknown"]
+        },
+        "labUserActive": {"type": "boolean"},
+        "labUserRemoteActive": {"type": "boolean"},
+        "localUserActive": {"type": "boolean"},
+        "remoteSessionActive": {"type": "boolean"},
+        "entries": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+      },
+      "additionalProperties": true
+    },
+    "capabilityReadiness": {
+      "type": "object",
+      "required": ["ready", "issues"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "ready": {"type": "boolean"},
+        "issues": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    }
   }
 }

@@ -22,7 +22,7 @@ class LS_Status {
         data["identity"] := this.GetIdentityInformation()
         data["remoteAppEnabled"] := this.CheckRemoteAppPolicy()
         data["winrm"] := LS_WinRM.GetStatus()
-        data["autoStartConfigured"] := this.CheckRunEntry()
+        data["legacyAppControlAutostart"] := this.CheckLegacyAppControlAutostart()
         data["wake"] := this.GetWakeInformation()
         data["power"] := this.GetPowerInformation()
         data["biosChecklist"] := this.GetBiosChecklist()
@@ -30,6 +30,7 @@ class LS_Status {
         data["policy"] := this.GetPolicyInformation(data["identity"], rights)
         data["sessions"] := this.GetSessionInformation(data["identity"])
         data["fmuExecutor"] := this.GetFmuExecutorStatus()
+        data["readiness"] := this.BuildCapabilityReadiness(data)
         data["summary"] := this.BuildSummary(data)
         ops := LS_ServiceState.GetOperationsSummary()
         data["operations"] := ops
@@ -70,7 +71,9 @@ class LS_Status {
         lines.Push("RemoteApp: " . (data["remoteAppEnabled"] ? "OK" : "MISSING"))
         lines.Push("WinRM: " . (data["winrm"]["ready"] ? "OK" : "MISSING"))
         lines.Push("Profile: " . data["stationProfile"])
-        lines.Push("Autostart: " . (data["autoStartConfigured"] ? "OK" : "MISSING"))
+        lines.Push(data["legacyAppControlAutostart"]
+            ? "AppControl launch: LEGACY AUTOSTART (REMOVE)"
+            : "AppControl launch: GUACAMOLE REMOTE APP")
         lines.Push(Format("Wake-capable devices: {1}", data["wake"]["armedCount"]))
         lines.Push("Active power plan: " . data["power"]["activePlan"])
         return LS_StrJoin(lines, "`n")
@@ -97,16 +100,10 @@ class LS_Status {
     }
 
     static CheckRemoteAppPolicy() {
-        basePath := "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
-        try {
-            value := RegRead(basePath, "fAllowUnlistedRemotePrograms")
-            return value = 1
-        } catch {
-            return false
-        }
+        return LS_IsRemoteAppPolicyEnabled()
     }
 
-    static CheckRunEntry() {
+    static CheckLegacyAppControlAutostart() {
         basePath := "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
         try {
             command := RegRead(basePath, "LabStationAppControl")
@@ -478,8 +475,10 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     static GetSessionInformation(identity) {
         info := Map()
         capture := LS_RunCommandCapture("quser", "Query sessions")
-        entries := capture["exitCode"] = 0 ? this.ParseSessionEntries(capture["stdout"]) : []
+        queryOk := capture["exitCode"] = 0
+        entries := queryOk ? this.ParseSessionEntries(capture["stdout"]) : []
         info["entries"] := entries
+        info["queryOk"] := queryOk
         info["labUserState"] := "none"
         info["labUserSessionId"] := ""
         info["otherUsers"] := []
@@ -494,14 +493,99 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         }
         info["hasOtherUsers"] := info["otherUsers"].Length > 0
         info["localSessionActive"] := info["hasOtherUsers"]
+        summary := this.BuildSessionSummary(entries, target)
+        summary["queryOk"] := queryOk
+        if (!queryOk)
+            summary["kind"] := "unknown"
+        for key, value in summary
+            info[key] := value
         return info
+    }
+
+    static BuildSessionSummary(entries, target) {
+        summary := Map(
+            "active", false,
+            "kind", "none",
+            "labUserActive", false,
+            "labUserRemoteActive", false,
+            "localUserActive", false,
+            "remoteSessionActive", false
+        )
+        hasLabUserLocal := false
+        hasLabUserRemote := false
+        hasOtherLocal := false
+        hasOtherRemote := false
+
+        for entry in entries {
+            if (!this.IsActiveSession(entry))
+                continue
+
+            summary["active"] := true
+            isLabUser := this.EqualsUser(entry["user"], target)
+            isRemote := this.IsRemoteSession(entry)
+            if (isLabUser) {
+                summary["labUserActive"] := true
+                if (isRemote) {
+                    summary["labUserRemoteActive"] := true
+                    summary["remoteSessionActive"] := true
+                    hasLabUserRemote := true
+                } else {
+                    hasLabUserLocal := true
+                }
+            } else if (isRemote) {
+                summary["remoteSessionActive"] := true
+                hasOtherRemote := true
+            } else {
+                summary["localUserActive"] := true
+                hasOtherLocal := true
+            }
+        }
+
+        categoryCount := (hasLabUserLocal ? 1 : 0) + (hasLabUserRemote ? 1 : 0)
+            + (hasOtherLocal ? 1 : 0) + (hasOtherRemote ? 1 : 0)
+        if (!summary["active"])
+            return summary
+        if (categoryCount != 1) {
+            summary["kind"] := "mixed"
+        } else if (hasLabUserLocal) {
+            summary["kind"] := "labuser-local"
+        } else if (hasLabUserRemote) {
+            summary["kind"] := "labuser-remote"
+        } else if (hasOtherLocal) {
+            summary["kind"] := "local-user"
+        } else if (hasOtherRemote) {
+            summary["kind"] := "remote-user"
+        } else {
+            summary["kind"] := "unknown"
+        }
+        return summary
+    }
+
+    static IsActiveSession(entry) {
+        state := StrLower(Trim(entry.Has("state") ? entry["state"] : ""))
+        return state = "active"
+            || state = "activo"
+            || state = "activa"
+            || state = "connected"
+            || state = "conectado"
+            || state = "conectada"
+            || state = "actif"
+            || state = "aktiv"
+            || state = "ativo"
+    }
+
+    static IsRemoteSession(entry) {
+        session := StrLower(Trim(entry.Has("session") ? entry["session"] : ""))
+        if (session = "" || session = "console" || session = "consola")
+            return false
+        return true
     }
 
     static ParseSessionEntries(text) {
         entries := []
         for rawLine in StrSplit(text, "`n") {
             line := Trim(StrReplace(rawLine, "`r"))
-            if (line = "" || InStr(line, "USERNAME") = 1)
+            if (line = "")
                 continue
             if (SubStr(line, 1, 1) = ">")
                 line := Trim(SubStr(line, 2))
@@ -509,10 +593,13 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             parts := StrSplit(normalized, "|")
             if (parts.Length < 4)
                 continue
+            candidateId := parts.Length >= 3 ? Trim(parts[3]) : ""
+            if (!RegExMatch(candidateId, "^\d+$"))
+                continue
             entry := Map()
             entry["user"] := Trim(parts[1])
             entry["session"] := parts.Length >= 2 ? Trim(parts[2]) : ""
-            entry["id"] := parts.Length >= 3 ? Trim(parts[3]) : ""
+            entry["id"] := candidateId
             entry["state"] := parts.Length >= 4 ? Trim(parts[4]) : ""
             entry["idle"] := parts.Length >= 5 ? Trim(parts[5]) : ""
             remaining := []
@@ -541,7 +628,7 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         return LS_FmuExecutor.GetHealthSummary()
     }
 
-    static BuildSummary(data) {
+    static CollectStationIssues(data) {
         issues := []
         profile := data.Has("stationProfile") ? data["stationProfile"] : "server"
         dedicated := profile != "hybrid"
@@ -551,8 +638,8 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("RemoteApp policy missing")
         if (!data["winrm"]["ready"])
             issues.Push("WinRM not ready for Lab Gateway")
-        if (!data["autoStartConfigured"])
-            issues.Push("Controller autostart missing")
+        if (data["legacyAppControlAutostart"])
+            issues.Push("Legacy AppControl autostart must be removed")
         autoLogon := data["policy"]["autoLogon"]
         if (dedicated && !autoLogon["enabled"])
             issues.Push("AutoAdminLogon disabled")
@@ -570,6 +657,11 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("SeDenyInteractiveLogonRight not configured")
         if (deny["labUserDenied"])
             issues.Push("Lab user denied interactive logon")
+        return issues
+    }
+
+    static CollectWakeIssues(data) {
+        issues := []
         if (data["wake"]["armedCount"] = 0)
             issues.Push("No wake-armed devices detected")
         if (data["wake"]["nicNonCompliant"].Length > 0)
@@ -580,6 +672,11 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("Sleep timeout is not disabled")
         if (!data["power"]["hibernateCompliant"])
             issues.Push("Hibernate timeout is not disabled")
+        return issues
+    }
+
+    static CollectFmuIssues(data) {
+        issues := []
         if (data.Has("fmuExecutor") && data["fmuExecutor"]["available"]) {
             fmu := data["fmuExecutor"]
             if (fmu.Has("tokenConfigured") && !fmu["tokenConfigured"])
@@ -587,6 +684,42 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             if (!fmu["running"])
                 issues.Push("FMU executor is not running")
         }
+        return issues
+    }
+
+    static BuildCapabilityReadiness(data) {
+        stationIssues := this.CollectStationIssues(data)
+        wakeIssues := this.CollectWakeIssues(data)
+        fmuIssues := this.CollectFmuIssues(data)
+        fmuAvailable := data.Has("fmuExecutor") && data["fmuExecutor"]["available"]
+        return Map(
+            "physicalLab", Map(
+                "ready", stationIssues.Length = 0,
+                "issues", stationIssues
+            ),
+            "wake", Map(
+                "ready", wakeIssues.Length = 0,
+                "issues", wakeIssues
+            ),
+            "fmu", Map(
+                "available", fmuAvailable,
+                "ready", fmuAvailable && fmuIssues.Length = 0,
+                "issues", fmuIssues
+            )
+        )
+    }
+
+    static BuildSummary(data) {
+        stationIssues := this.CollectStationIssues(data)
+        wakeIssues := this.CollectWakeIssues(data)
+        fmuIssues := this.CollectFmuIssues(data)
+        issues := []
+        for issue in stationIssues
+            issues.Push(issue)
+        for issue in wakeIssues
+            issues.Push(issue)
+        for issue in fmuIssues
+            issues.Push(issue)
         summary := Map()
         summary["state"] := issues.Length > 0 ? "needs-action" : "ready"
         summary["ready"] := issues.Length = 0

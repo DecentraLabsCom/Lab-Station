@@ -54,12 +54,12 @@ LS_BuildConnectorsPanel() {
     panel.ConnectorState := panel.AddText("x230 y108 w430", "")
 
     panel.SetFont("s9 cE5E7EB")
-    panel.ConnectorDetails := panel.AddEdit("x230 y136 w440 h126 -Wrap ReadOnly -TabStop cD1FAE5 Background1F2937 +Border")
+    panel.ConnectorDetails := panel.AddEdit("x230 y136 w440 h126 +Wrap ReadOnly -TabStop cD1FAE5 Background1F2937 +Border")
 
     panel.SetFont("s9 Bold c9CA3AF")
     panel.AddText("x230 y278 w440", "Gateway configuration")
     panel.SetFont("s9 cE5E7EB")
-    panel.GatewayConfig := panel.AddEdit("x230 y300 w440 h78 -Wrap ReadOnly -TabStop cD1FAE5 Background111827 +Border")
+    panel.GatewayConfig := panel.AddEdit("x230 y300 w440 h78 +Wrap ReadOnly -TabStop cD1FAE5 Background111827 +Border")
 
     panel.SetFont("s9 cFFFFFF")
     panel.StartButton := panel.AddButton("x230 y394 w82 h30", "Start")
@@ -130,6 +130,8 @@ LS_ConnectorsPanelStateText(connector) {
             return "Running"
         case "available":
             return "Available"
+        case "needs-action":
+            return "Needs attention"
         case "stopped":
             return "Stopped"
         case "missing":
@@ -145,7 +147,7 @@ LS_ConnectorsPanelStateColor(connector) {
     state := connector["state"]
     if (state = "running" || state = "available")
         return "22C55E"
-    if (state = "stopped" || state = "planned")
+    if (state = "stopped" || state = "planned" || state = "needs-action")
         return "C08A2B"
     return "EF4444"
 }
