@@ -21,14 +21,13 @@ The repository contains two runtime components:
 - **AppControl** (`remote-app/`): the RemoteApp launcher that starts one or
   two lab applications and closes them on RDP/session events.
 
-The optional **FMU Executor** (`fmu-executor/`) runs as a Python sidecar,
-separate from the Windows executables. Its source snapshot is pinned to the
-shared `DecentraLabsCom/FMU-Executor` release in
-`fmu-executor/SOURCE.lock.json`. `Lab-Station.zip` includes that checked-in
-runtime source and its requirements, so stations do not download executable
-Python source at runtime. The Python interpreter and dependencies must be
-provisioned on the station. The sidecar is used when Lab Gateway is configured
-with `FMU_BACKEND_MODE=station`.
+The optional **FMU Executor** (`fmu-executor/`) runs as a sidecar alongside the
+Windows executables. Its source snapshot is pinned to the shared
+`DecentraLabsCom/FMU-Executor` release in `fmu-executor/SOURCE.lock.json`.
+`Lab-Station.zip` includes a standalone runtime with its private Python
+interpreter and dependencies, so stations do not need a separate Python
+installation. FMU model files are provisioned separately. The sidecar is used
+when Lab Gateway is configured with `FMU_BACKEND_MODE=station`.
 
 ## Choose the station profile
 
@@ -47,9 +46,9 @@ blocking or confirming remote reservations while the flag exists.
 
 The recommended release is `Lab-Station.zip`. Extract it as one unit; the
 archive contains `LabStation.exe`, `LabStationPanel.exe`, `WindowSpy.exe`, the
-branding image, `remote-app/AppControl.exe`, and the optional `fmu-executor/`
-runtime source with its requirements. It does not bundle Python or install
-Python dependencies.
+branding image, `remote-app/AppControl.exe`, and the optional
+`fmu-executor/` standalone runtime with Python and its application
+dependencies.
 
 From an elevated PowerShell session:
 
@@ -82,13 +81,14 @@ For a compiled local build, see [Development, build and verification](docs/devel
 
 ### Optional FMU Executor
 
-The release package already contains the optional sidecar source under
-`fmu-executor/`. When Lab Gateway uses `FMU_BACKEND_MODE=station`, install
-Python 3.11 or newer and the packaged requirements in an environment readable
-by the `SYSTEM` task, set a machine-level `FMU_INTERNAL_TOKEN`, and start the
-sidecar through `LabStation.exe fmu-executor start` or the background task.
-The complete installation, API, token, firewall, and provisioning contract is
-in the [FMU Executor guide](fmu-executor/README.md).
+The release package already contains the optional standalone sidecar under
+`fmu-executor/`; no Python installation or `pip install` step is needed. When
+Lab Gateway uses `FMU_BACKEND_MODE=station`, set a machine-level
+`FMU_INTERNAL_TOKEN` and start the sidecar through
+`LabStation.exe fmu-executor start` or the background task. FMU model files
+still need to be provisioned on the station. See the packaged
+[FMU Executor runtime guide](docs/fmu-executor-runtime.md) for runtime, token,
+firewall, and provisioning details.
 
 ## CLI reference
 

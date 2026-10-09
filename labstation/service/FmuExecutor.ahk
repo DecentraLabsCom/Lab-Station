@@ -1,7 +1,7 @@
 ; ============================================================================
 ; Lab Station - FMU Executor supervisor
 ; ============================================================================
-; Manages the Python fmu-executor sidecar as a child process supervised by
+; Manages the FMU Executor sidecar as a child process supervised by
 ; Lab Station's service loop.
 ; ============================================================================
 #Requires AutoHotkey v2.0
@@ -44,7 +44,9 @@ class LS_FmuExecutor {
     ; ── lifecycle ────────────────────────────────────────────
 
     static IsAvailable() {
-        return (DirExist(LAB_STATION_FMU_EXECUTOR_DIR) && FileExist(LAB_STATION_FMU_EXECUTOR_DIR "\app\main.py")) ? true : false
+        if (!DirExist(LAB_STATION_FMU_EXECUTOR_DIR))
+            return false
+        return (this._BundledExecutable() != "" || FileExist(LAB_STATION_FMU_EXECUTOR_DIR "\app\main.py")) ? true : false
     }
 
     static TokenConfigured() {
@@ -75,15 +77,20 @@ class LS_FmuExecutor {
             return true
         }
 
-        pythonExe := this._FindPython()
-        if (pythonExe = "") {
-            LS_LogError("FMU executor: Python not found on PATH")
-            return false
+        bundledExe := this._BundledExecutable()
+        if (bundledExe != "") {
+            command := Format('"{1}"', bundledExe)
+        } else {
+            pythonExe := this._FindPython()
+            if (pythonExe = "") {
+                LS_LogError("FMU executor: bundled runtime missing and Python not found on PATH")
+                return false
+            }
+            command := Format('"{1}" -m app', pythonExe)
         }
 
         LS_LogInfo("FMU executor: starting sidecar on port " . LAB_STATION_FMU_EXECUTOR_PORT)
 
-        command := Format('"{1}" -m app', pythonExe)
         try {
             pid := this.LaunchProcess(command, LAB_STATION_FMU_EXECUTOR_DIR, "Hide")
             this._pid := pid
@@ -257,6 +264,11 @@ if (Test-Path `$Path) {{
                 return cmd
         }
         return ""
+    }
+
+    static _BundledExecutable() {
+        executable := LAB_STATION_FMU_EXECUTOR_DIR "\runtime\FMUExecutor.exe"
+        return FileExist(executable) ? executable : ""
     }
 
     static _ProcessExists(pid) {

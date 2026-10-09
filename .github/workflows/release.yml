@@ -91,6 +91,45 @@ jobs:
           "compiler=$compiler" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
           "autohotkey_base=$base" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
 
+      - name: Set up Python for the bundled FMU runtime
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            fmu-executor/requirements.txt
+            fmu-executor/build-requirements.txt
+
+      - name: Build the standalone FMU Executor runtime
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install -r fmu-executor/requirements.txt -r fmu-executor/build-requirements.txt
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onedir `
+            --console `
+            --name FMUExecutor `
+            --paths fmu-executor `
+            --distpath dist/fmu-executor-runtime `
+            --workpath build/fmu-executor `
+            --specpath build/fmu-executor `
+            --hidden-import app.main `
+            --collect-all fastapi `
+            --collect-all pydantic `
+            --collect-all uvicorn `
+            --collect-all websockets `
+            --collect-all fmpy `
+            fmu-executor/launcher.py
+
+      - name: Smoke test the standalone FMU Executor runtime
+        shell: powershell
+        run: |
+          $runtime = Join-Path $PWD 'dist/fmu-executor-runtime/FMUExecutor/FMUExecutor.exe'
+          .\scripts\test-frozen-fmu-executor.ps1 -ExecutablePath $runtime
+
       - name: Compile AppControl
         shell: powershell
         run: |
@@ -405,9 +444,14 @@ jobs:
           foreach ($name in @(
             'AppControl.exe',
             'LabStation.exe',
-            'LabStationPanel.exe'
+            'LabStationPanel.exe',
+            'FMUExecutor.exe'
           )) {
-            $source = Join-Path $PWD "dist/$name"
+            if ($name -eq 'FMUExecutor.exe') {
+              $source = Join-Path $PWD 'dist/fmu-executor-runtime/FMUExecutor/FMUExecutor.exe'
+            } else {
+              $source = Join-Path $PWD "dist/$name"
+            }
             if (-not (Test-Path $source)) {
               throw "Executable not found: $source"
             }
@@ -448,8 +492,8 @@ jobs:
           $signedDir = Join-Path $PWD 'signed-artifact'
           $files = Get-ChildItem -LiteralPath $inputDir -File
 
-          if ($files.Count -ne 3) {
-            throw "Expected 3 executables in $inputDir, found $($files.Count)"
+          if ($files.Count -ne 4) {
+            throw "Expected 4 executables in $inputDir, found $($files.Count)"
           }
 
           Compress-Archive -Path $files.FullName -DestinationPath $inputArtifact -Force
@@ -476,7 +520,8 @@ jobs:
           $expected = @(
             'AppControl.exe',
             'LabStation.exe',
-            'LabStationPanel.exe'
+            'LabStationPanel.exe',
+            'FMUExecutor.exe'
           )
 
           foreach ($name in $expected) {
@@ -488,7 +533,11 @@ jobs:
               throw "Signed artifact not found: $name"
             }
 
-            $destination = Join-Path $PWD "dist/$name"
+            if ($name -eq 'FMUExecutor.exe') {
+              $destination = Join-Path $PWD 'dist/fmu-executor-runtime/FMUExecutor/FMUExecutor.exe'
+            } else {
+              $destination = Join-Path $PWD "dist/$name"
+            }
             Copy-Item -Path $signed.FullName -Destination $destination -Force
 
             $signature = Get-AuthenticodeSignature -FilePath $destination
@@ -505,6 +554,41 @@ jobs:
           .\scripts\package-release.ps1 `
             -DistPath (Join-Path $PWD 'dist') `
             -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip')
+
+      - name: Extract release notes from the changelog
+        shell: powershell
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_TAG -replace '^v', ''
+          $lines = @(Get-Content -LiteralPath 'CHANGELOG.md')
+          $headingPattern = '^## \[' + [Regex]::Escape($version) + '\](?:\s|$)'
+          $start = -1
+          for ($index = 0; $index -lt $lines.Count; $index++) {
+            if ($lines[$index] -match $headingPattern) {
+              $start = $index
+              break
+            }
+          }
+          if ($start -lt 0) {
+            throw "CHANGELOG.md has no release section for $version"
+          }
+
+          $end = $start + 1
+          while ($end -lt $lines.Count -and $lines[$end] -notmatch '^## \[') {
+            $end++
+          }
+          $noteLines = @()
+          if ($end -gt ($start + 1)) {
+            $noteLines = $lines[($start + 1)..($end - 1)]
+          }
+          $notes = ($noteLines -join "`n").Trim()
+          if ([string]::IsNullOrWhiteSpace($notes)) {
+            throw "CHANGELOG.md release notes for $version are empty"
+          }
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'dist/release-notes.md'), $notes, $utf8)
 
       - name: Upload AppControl artifact
         uses: actions/upload-artifact@v7
@@ -523,6 +607,12 @@ jobs:
         with:
           name: LabStationPanel
           path: dist/LabStationPanel.exe
+
+      - name: Upload FMU Executor artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: FMUExecutor
+          path: dist/fmu-executor-runtime/FMUExecutor
 
       - name: Upload assets
         uses: actions/upload-artifact@v7
@@ -546,6 +636,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: dist/Lab-Station.zip
+          body_path: dist/release-notes.md
           tag_name: ${{ steps.release_meta.outputs.tag }}
           prerelease: ${{ contains(steps.release_meta.outputs.tag, '-') }}
         env:

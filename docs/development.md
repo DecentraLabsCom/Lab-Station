@@ -74,15 +74,13 @@ at the repository root so the wizard can use it as a migration source; the
 release packaging step moves it to `remote-app\AppControl.exe`. Extracting the
 package creates a `Lab Station/` directory containing `LabStation.exe`,
 `LabStationPanel.exe`, `WindowSpy.exe`, the `remote-app\AppControl.exe`
-launcher, the branding image, and the FMU Executor runtime source under
-`fmu-executor/`. It includes the Python modules, requirements, and available
-source metadata, but not the Python interpreter, installed dependencies,
-FMU model data, or test suite. Copy this directory to a station as one unit.
-The FMU Executor still runs as a separately configured internal Python
-sidecar. Install Python and its requirements in an environment readable by
-the Station task, configure the machine environment variables, and start it
-through the Lab Station supervisor. See [`FMU Executor`](../fmu-executor/README.md)
-for its port, token, API, and provisioning rules.
+launcher, the branding image, and the FMU Executor runtime under
+`fmu-executor/`. The sidecar bundle includes a private Python interpreter and
+its application dependencies, but not FMU model data or the test suite. Copy
+this directory to a station as one unit. Configure the machine environment
+variables and start the sidecar through the Lab Station supervisor. No separate
+Python installation is needed. See the [FMU Executor runtime guide](fmu-executor-runtime.md)
+for its port, token, firewall, and provisioning rules.
 
 Never commit or pass passwords and internal tokens through source files,
 public URLs, shell history, or unprotected command arguments. Prefer the setup

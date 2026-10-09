@@ -53,7 +53,7 @@ try {
         Copy-Item -LiteralPath $logoSource -Destination (Join-Path $logoDirectory 'DecentraLabs.png') -Force
     }
 
-    # Ship the runtime sidecar source, but never station FMU data or test files.
+    # Ship the frozen, self-contained sidecar runtime produced by the release workflow.
     $fmuExecutorSourceDirectory = Join-Path $repositoryRoot 'fmu-executor'
     if (-not (Test-Path -LiteralPath $fmuExecutorSourceDirectory -PathType Container)) {
         throw "FMU Executor source directory not found: $fmuExecutorSourceDirectory"
@@ -62,49 +62,36 @@ try {
     $fmuExecutorPackageDirectory = Join-Path $packageDirectory 'fmu-executor'
     New-Item -ItemType Directory -Path $fmuExecutorPackageDirectory -Force | Out-Null
 
-    foreach ($name in @('README.md', 'requirements.txt')) {
-        $source = Join-Path $fmuExecutorSourceDirectory $name
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            throw "FMU Executor release file not found: $source"
-        }
-        Copy-Item -LiteralPath $source -Destination (Join-Path $fmuExecutorPackageDirectory $name) -Force
+    $fmuExecutorGuide = Join-Path $repositoryRoot 'docs\fmu-executor-runtime.md'
+    if (-not (Test-Path -LiteralPath $fmuExecutorGuide -PathType Leaf)) {
+        throw "FMU Executor runtime guide not found: $fmuExecutorGuide"
     }
+    Copy-Item -LiteralPath $fmuExecutorGuide -Destination (Join-Path $fmuExecutorPackageDirectory 'README.md') -Force
 
-    # Preserve release/source metadata when the checkout provides it.
-    foreach ($name in @('VERSION', 'SOURCE.lock.json', 'pyproject.toml')) {
+    # Preserve source provenance when the checkout provides it.
+    foreach ($name in @('VERSION', 'SOURCE.lock.json')) {
         $source = Join-Path $fmuExecutorSourceDirectory $name
         if (Test-Path -LiteralPath $source -PathType Leaf) {
             Copy-Item -LiteralPath $source -Destination (Join-Path $fmuExecutorPackageDirectory $name) -Force
         }
     }
 
-    $appSourceDirectory = Join-Path $fmuExecutorSourceDirectory 'app'
-    if (-not (Test-Path -LiteralPath $appSourceDirectory -PathType Container)) {
-        throw "FMU Executor app directory not found: $appSourceDirectory"
+    $fmuExecutorBuildDirectory = Join-Path $distDirectory 'fmu-executor-runtime\FMUExecutor'
+    $fmuExecutorExecutable = Join-Path $fmuExecutorBuildDirectory 'FMUExecutor.exe'
+    if (-not (Test-Path -LiteralPath $fmuExecutorExecutable -PathType Leaf)) {
+        throw "Standalone FMU Executor executable not found: $fmuExecutorExecutable"
     }
 
-    foreach ($name in @('__init__.py', '__main__.py', 'main.py')) {
-        $source = Join-Path $appSourceDirectory $name
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            throw "FMU Executor runtime entry point not found: $source"
-        }
+    $runtimePackageDirectory = Join-Path $fmuExecutorPackageDirectory 'runtime'
+    New-Item -ItemType Directory -Path $runtimePackageDirectory -Force | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $fmuExecutorBuildDirectory -Force) {
+        Copy-Item -LiteralPath $item.FullName -Destination $runtimePackageDirectory -Recurse -Force
     }
-
-    $appFiles = @(
-        Get-ChildItem -LiteralPath $appSourceDirectory -File -Filter '*.py' -Recurse |
-            Where-Object { $_.FullName -notmatch '[\\/](?:__pycache__|\.pytest_cache)(?:[\\/]|$)' }
+    $runtimePayloadFiles = @(
+        Get-ChildItem -LiteralPath $runtimePackageDirectory -File -Recurse
     )
-    if ($appFiles.Count -eq 0) {
-        throw "No FMU Executor Python modules found under: $appSourceDirectory"
-    }
-
-    $appPackageDirectory = Join-Path $fmuExecutorPackageDirectory 'app'
-    foreach ($file in $appFiles) {
-        $relativePath = $file.FullName.Substring($appSourceDirectory.Length + 1)
-        $destination = Join-Path $appPackageDirectory $relativePath
-        $destinationDirectory = Split-Path -Parent $destination
-        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
-        Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
+    if ($runtimePayloadFiles.Count -lt 2) {
+        throw 'FMU Executor runtime bundle is incomplete; expected the executable and its private Python payload.'
     }
 
     # The executor guide references this screenshot relative to its own directory.
@@ -135,10 +122,7 @@ try {
 
         $expectedFmuEntries = @(
             'Lab Station/fmu-executor/README.md',
-            'Lab Station/fmu-executor/requirements.txt',
-            'Lab Station/fmu-executor/app/__init__.py',
-            'Lab Station/fmu-executor/app/__main__.py',
-            'Lab Station/fmu-executor/app/main.py',
+            'Lab Station/fmu-executor/runtime/FMUExecutor.exe',
             'Lab Station/docs/images/labstation-connectors-fmi.png'
         )
         foreach ($expectedEntry in $expectedFmuEntries) {
@@ -149,6 +133,15 @@ try {
 
         if ($entryNames -match '^Lab Station/fmu-executor/(tests|fmu-data)(/|$)') {
             throw 'Release package must not contain FMU tests or local FMU model data.'
+        }
+        $runtimePythonEntries = @($entryNames | Where-Object {
+            $_ -match '^Lab Station/fmu-executor/runtime/_internal/python\d{2,3}\.dll$'
+        })
+        if ($runtimePythonEntries.Count -eq 0) {
+            throw 'Release package is missing the bundled Python runtime payload.'
+        }
+        if ($entryNames -match '^Lab Station/fmu-executor/(app/|requirements\.txt$)') {
+            throw 'Release package must contain the frozen FMU runtime, not source requiring a separate Python installation.'
         }
     } finally {
         $archive.Dispose()

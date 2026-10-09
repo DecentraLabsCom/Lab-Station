@@ -1,3 +1,4 @@
 /contracts/station/gateway-contracts/** text eol=lf
 /contracts/station/schema-bundle.lock.json text eol=lf
 /contracts/station/v3/test-parity.json text eol=lf
+/fmu-executor/** text eol=lf

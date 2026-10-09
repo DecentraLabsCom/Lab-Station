@@ -170,6 +170,7 @@ RunFmuExecutorTests() {
         TestAvailabilityUsesExecutorLayout()
         TestConfiguredPortUsesEnvironmentAndSafeFallback()
         TestStartRequiresAvailabilityAndToken()
+        TestStartPrefersBundledRuntime()
         TestStartRunsTheConfiguredPythonExecutor()
         TestStartStopsBeforeLaunchWhenFirewallFails()
         TestStartReportsLaunchFailure()
@@ -222,13 +223,41 @@ TestConfiguredPortUsesEnvironmentAndSafeFallback() {
 TestAvailabilityUsesExecutorLayout() {
     global LAB_STATION_FMU_EXECUTOR_DIR, TEST_ROOT
 
+    try FileDelete(TEST_ROOT "\runtime\FMUExecutor.exe")
+    try DirDelete(TEST_ROOT "\runtime", true)
     try FileDelete(TEST_ROOT "\app\main.py")
     try DirDelete(TEST_ROOT "\app", true)
-    LS_TestAssert(!LS_FmuExecutor.IsAvailable(), "FMU executor is unavailable without its application entrypoint")
+    LS_TestAssert(!LS_FmuExecutor.IsAvailable(), "FMU executor is unavailable without source or a bundled runtime")
 
     DirCreate(TEST_ROOT "\app")
     FileAppend("# test executor" . Chr(10), TEST_ROOT "\app\main.py", "UTF-8")
-    LS_TestAssert(LS_FmuExecutor.IsAvailable(), "FMU executor is available when app/main.py is present")
+    LS_TestAssert(LS_FmuExecutor.IsAvailable(), "FMU executor development source remains available")
+
+    DirCreate(TEST_ROOT "\runtime")
+    FileAppend("test executable", TEST_ROOT "\runtime\FMUExecutor.exe", "UTF-8")
+    LS_TestAssert(LS_FmuExecutor.IsAvailable(), "FMU executor is available when its bundled executable is present")
+}
+
+TestStartPrefersBundledRuntime() {
+    global LAB_STATION_FMU_EXECUTOR_DIR, TEST_ROOT
+
+    RecordingFmuExecutor.Reset()
+    RecordingFmuExecutor.available := true
+    RecordingFmuExecutor.tokenReady := true
+    RecordingFmuExecutor.pythonExecutable := "python-must-not-be-used"
+    DirCreate(TEST_ROOT "\runtime")
+    FileAppend("test executable", TEST_ROOT "\runtime\FMUExecutor.exe", "UTF-8")
+
+    result := RecordingFmuExecutor.Start()
+
+    expectedExe := LAB_STATION_FMU_EXECUTOR_DIR "\runtime\FMUExecutor.exe"
+    LS_TestAssert(result, "FMU start succeeds with the bundled standalone runtime")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls.Length = 1, "FMU start launches the bundled runtime once")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls[1]["command"] = Chr(34) . expectedExe . Chr(34), "FMU start prefers the bundled executable over PATH Python")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls[1]["workingDir"] = LAB_STATION_FMU_EXECUTOR_DIR, "Bundled FMU runtime uses the sidecar directory as its working directory")
+
+    FileDelete(TEST_ROOT "\runtime\FMUExecutor.exe")
+    DirDelete(TEST_ROOT "\runtime", true)
 }
 
 TestStartRequiresAvailabilityAndToken() {

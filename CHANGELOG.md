@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [3.5.11] - 2026-10-09
+
+### Changed
+- The release ZIP now includes a standalone FMU Executor with its private
+  Python interpreter and dependencies, removing the need to install Python on
+  the station. FMU model files still need to be provisioned separately.
+
 ## [3.5.10] - 2026-10-09
 
 ### Fixed
