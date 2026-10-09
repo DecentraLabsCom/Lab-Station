@@ -106,6 +106,49 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -m pip install --upgrade pip
           python -m pip install -r fmu-executor/requirements.txt -r fmu-executor/build-requirements.txt
+          $version = '0.1.0'
+          $sourceVersion = Join-Path $PWD 'fmu-executor/VERSION'
+          if (Test-Path -LiteralPath $sourceVersion -PathType Leaf) {
+            $version = (Get-Content -LiteralPath $sourceVersion -Raw).Trim()
+          }
+          $versionMatch = [regex]::Match($version, '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$')
+          if (-not $versionMatch.Success) {
+            throw "FMU Executor source version is not a three-part numeric version: $version"
+          }
+          $major = [int]$versionMatch.Groups['major'].Value
+          $minor = [int]$versionMatch.Groups['minor'].Value
+          $patch = [int]$versionMatch.Groups['patch'].Value
+          $versionResource = @"
+          VSVersionInfo(
+            ffi=FixedFileInfo(
+              filevers=($major, $minor, $patch, 0),
+              prodvers=($major, $minor, $patch, 0),
+              mask=0x3f,
+              flags=0x0,
+              OS=0x4,
+              fileType=0x1,
+              subtype=0x0,
+              date=(0, 0)
+            ),
+            kids=[
+              StringFileInfo([
+                StringTable('040904B0', [
+                  StringStruct('CompanyName', 'DecentraLabs'),
+                  StringStruct('FileDescription', 'FMU Executor for Lab Station'),
+                  StringStruct('FileVersion', '${version}.0'),
+                  StringStruct('InternalName', 'FMUExecutor'),
+                  StringStruct('OriginalFilename', 'FMUExecutor.exe'),
+                  StringStruct('ProductName', 'Lab Station FMU Executor'),
+                  StringStruct('ProductVersion', '${version}.0')
+                ])
+              ]),
+              VarFileInfo([VarStruct('Translation', [0x0409, 1200])])
+            ]
+          )
+          "@
+          $versionFile = Join-Path $PWD 'build/fmu-executor/version-info.txt'
+          New-Item -ItemType Directory -Path (Split-Path -Parent $versionFile) -Force | Out-Null
+          [System.IO.File]::WriteAllText($versionFile, $versionResource, [System.Text.UTF8Encoding]::new($false))
           python -m PyInstaller `
             --noconfirm `
             --clean `
@@ -116,6 +159,7 @@ jobs:
             --distpath dist/fmu-executor-runtime `
             --workpath build/fmu-executor `
             --specpath build/fmu-executor `
+            --version-file build/fmu-executor/version-info.txt `
             --hidden-import app.main `
             --collect-all fastapi `
             --collect-all pydantic `
