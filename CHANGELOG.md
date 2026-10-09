@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [3.5.10] - 2026-10-09
+
+### Fixed
+- The release ZIP now includes the optional FMU Executor runtime source,
+  requirements, and guide asset. Python itself and its dependencies still
+  require station provisioning; local FMU model data and tests are excluded.
+
 ## [3.5.9] - 2026-10-09
 
 ### Fixed
