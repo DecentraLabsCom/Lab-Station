@@ -25,3 +25,6 @@ labstation/data
 
 # Temporary test/result folders created during local validation
 .tmp-*/
+
+# Local release tools; the release workflow downloads pinned portable tools.
+/.release-tools/
