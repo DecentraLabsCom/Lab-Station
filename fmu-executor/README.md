@@ -3,6 +3,12 @@
 Python/FastAPI sidecar that provides the FMU execution plane on Lab Station.  
 Consumed by Lab Gateway's `fmu-runner` in `station` backend mode.
 
+The Lab Station release ZIP includes this runtime source under
+`Lab Station/fmu-executor/` with `requirements.txt`; it does not bundle the
+Python interpreter, install dependencies, or include local FMU model files.
+Install the requirements in a machine-wide environment or a virtual
+environment readable by the Lab Station task.
+
 ## Quick start
 
 ```bash
@@ -26,7 +32,7 @@ before starting the task, for example:
 
 ```powershell
 psexec -accepteula -s -i powershell.exe
-python -m pip install -r C:\LabStation\fmu-executor\requirements.txt
+python -m pip install -r 'C:/LabStation/Lab Station/fmu-executor/requirements.txt'
 python -c "import uvicorn"
 ```
 

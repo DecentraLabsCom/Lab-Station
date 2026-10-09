@@ -21,9 +21,11 @@ The repository contains two runtime components:
 - **AppControl** (`remote-app/`): the RemoteApp launcher that starts one or
   two lab applications and closes them on RDP/session events.
 
-The optional **FMU Executor** (`fmu-executor/`) is a Python sidecar deployed
-separately from the Windows executables. It is used when Lab Gateway is
-configured with `FMU_BACKEND_MODE=station`.
+The optional **FMU Executor** (`fmu-executor/`) runs as a Python sidecar,
+separate from the Windows executables. `Lab-Station.zip` includes its runtime
+source and requirements; the Python interpreter and installed dependencies
+must be provisioned on the station. It is used when Lab Gateway is configured
+with `FMU_BACKEND_MODE=station`.
 
 ## Choose the station profile
 
@@ -42,7 +44,9 @@ blocking or confirming remote reservations while the flag exists.
 
 The recommended release is `Lab-Station.zip`. Extract it as one unit; the
 archive contains `LabStation.exe`, `LabStationPanel.exe`, `WindowSpy.exe`, the
-branding image, and `remote-app\AppControl.exe`.
+branding image, `remote-app/AppControl.exe`, and the optional `fmu-executor/`
+runtime source with its requirements. It does not bundle Python or install
+Python dependencies.
 
 From an elevated PowerShell session:
 
@@ -75,12 +79,13 @@ For a compiled local build, see [Development, build and verification](docs/devel
 
 ### Optional FMU Executor
 
-The FMU sidecar is not part of the Windows release package. Copy
-`fmu-executor\` to the station, install its Python requirements in a
-machine-readable environment, set a machine-level `FMU_INTERNAL_TOKEN`, and
-start it through `LabStation.exe fmu-executor start` or the background task.
-The complete API, token, firewall, and provisioning contract is in the
-[FMU Executor guide](fmu-executor/README.md).
+The release package already contains the optional sidecar source under
+`fmu-executor/`. When Lab Gateway uses `FMU_BACKEND_MODE=station`, install
+Python 3.11 or newer and the packaged requirements in an environment readable
+by the `SYSTEM` task, set a machine-level `FMU_INTERNAL_TOKEN`, and start the
+sidecar through `LabStation.exe fmu-executor start` or the background task.
+The complete installation, API, token, firewall, and provisioning contract is
+in the [FMU Executor guide](fmu-executor/README.md).
 
 ## CLI reference
 
