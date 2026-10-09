@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.1] - 2026-10-09
+
+### Added
+- Added durable Windows reservation leases and dispatcher handling for the current Gateway station lifecycle.
+- Added shared Gateway station contract schemas and parity fixtures for Windows and Linux agents.
+
+### Changed
+- Updated the bundled standalone FMU Executor to the shared 0.1.1 source release.
+- Set the LabStation executable's file and product version to 3.6.0.
+
 ## [3.5.11] - 2026-10-09
 
 ### Changed
