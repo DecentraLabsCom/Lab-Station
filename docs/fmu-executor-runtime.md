@@ -18,4 +18,10 @@ The bundle does not contain lab FMU models. Provision model files under
 sidecar starts and remains outside the private runtime files, so releases can
 be upgraded without replacing the provisioned models.
 
+Job history and results are stored separately under
+`%ProgramData%\DecentraLabs\Lab Station\fmu-executor-state`. The service
+creates the directory and restricts access to `SYSTEM` and local
+Administrators. It persists across Station upgrades and is not part of the
+release ZIP.
+
 For source development and API details, see the [FMU Executor project guide](../fmu-executor/README.md).

@@ -25,6 +25,20 @@ station service; expose the configured port only to the Lab Gateway network and
 configure the same non-empty `FMU_INTERNAL_TOKEN` in the Station process
 environment and Gateway's `FMU_STATION_INTERNAL_TOKEN`.
 
+The repository's `Dockerfile` builds the container used by Lab Gateway's
+optional local Executor profile. It uses the Docker Official Python image
+from Amazon ECR Public. Pushing a `vX.Y.Z` tag publishes
+`ghcr.io/decentralabscom/fmu-executor:X.Y.Z`; the tag must match both
+`VERSION` and the package version in `pyproject.toml`. Gateway pins a
+versioned image by default, so installing that profile does not require a
+separate FMU-Executor checkout. Station releases continue to package the
+service through their platform installers.
+
+After the first image is published, set its GitHub Container Registry package
+visibility to Public if Gateway installations must pull it without GitHub
+authentication. The source repository is linked automatically by the image's
+OCI source label and the publishing workflow.
+
 On Windows, when Lab Station starts the sidecar through `LabStation\BackgroundService`,
 Windows Task Scheduler runs that task as `SYSTEM`. A per-user Python install or
 user-scoped `pip install` is not visible to that account. Install the
@@ -57,7 +71,9 @@ the Gateway environment expected for station mode:
 | `FMU_EXECUTOR_HOST` | `0.0.0.0` | Bind address |
 | `FMU_EXECUTOR_PORT` | `8091` | Bind port |
 | `FMU_ROOT` | `./fmu-data` | Directory with provisioned `.fmu` files |
+| `FMU_EXECUTOR_STATE_DIR` | Sibling `state/` beside `FMU_ROOT` | Persistent SQLite job history and quota store |
 | `FMU_INTERNAL_TOKEN` | *(required)* | Shared secret for `X-Internal-Session-Token`; requests fail closed when it is absent |
+| `FMU_INTERNAL_TOKEN_FILE` | *(unset)* | Optional path to a mounted token file; used when the direct token and base64 token are unset |
 | `FMU_MAX_SESSIONS` | `4` | Effective max concurrent FMU executions (one-shot, stream and realtime) |
 | `FMU_ATTACH_GRACE_SECONDS` | `120` | How long a disconnected realtime session remains attachable before its FMU state is terminated |
 | `FMU_EXECUTOR_TEMP` | `<FMU_ROOT>/.tmp` | Temp dir for FMU extraction |
@@ -100,6 +116,12 @@ All endpoints require `X-Internal-Session-Token` header (except `/internal/healt
 | GET | `/internal/fmu/quarantine` | Lists quarantined FMUs |
 | POST | `/internal/fmu/simulations/run` | One-shot simulation run; JSON body contains `accessKey` |
 | POST | `/internal/fmu/simulations/stream` | Streaming NDJSON simulation; JSON body contains `accessKey` |
+| POST | `/internal/fmu/simulations/jobs` | Submit a reservation-scoped cancellable one-shot job |
+| POST | `/internal/fmu/simulations/batches` | Submit a bounded reservation-scoped batch |
+| GET | `/internal/fmu/simulations/history` | Page the current reservation's history; requires `X-Gateway-Context` |
+| GET | `/internal/fmu/simulations/{job_id}` | Read reservation-scoped job status |
+| POST | `/internal/fmu/simulations/{job_id}/cancel` | Cancel a reservation-scoped job |
+| GET | `/internal/fmu/simulations/{job_id}/result` | Read a reservation-scoped terminal result |
 | WS | `/internal/fmu/sessions` | Realtime session (step, setInputs, getOutputs, authenticated reconnect) |
 
 `catalog` and `describe` also require the `X-FMU-Access-Key` header. The
@@ -139,7 +161,7 @@ with the original initialization options and inputs.
 | Scalar Real/Float32/Float64, integer, Boolean, String | Supported | Inputs and outputs |
 | FMI 3 arrays | Supported | Fixed-size arrays resolved by FMPy |
 | FMI 3 Binary and Clock | Supported | JSON uses base64 for Binary |
-| FMI 2/FMI 3 Model Exchange | Planned | Requires a solver/composition boundary; not claimed by the Station realtime API |
+| FMI 2/FMI 3 Model Exchange | Not supported; out of scope | DecentraLabs FMU execution is limited to FMI 2/FMI 3 Co-Simulation. |
 | FMI 3 Scheduled Execution | Planned | Not exposed by the current Station contract |
 | SSP/multi-FMU composition | Planned | OMSimulator adapter |
 
@@ -147,28 +169,43 @@ This table is the contract baseline for adding real FMU fixtures to the
 conformance suite; a new type must not be advertised as supported only because
 its model description can be parsed.
 
+`/internal/fmu/describe` reports the capabilities declared by the FMU artifact.
+Its `supportsModelExchange` field describes that artifact; it does not mean the
+Executor can run it. An FMU must provide Co-Simulation to be executable here.
+
 ### OMSimulator (future composition backend)
 
 OMSimulator is not a mandatory dependency of the Windows Station runtime and
-is not used for ordinary single-FMU requests today. The executor exposes its
-planned status and reserves `options.backend: "omsimulator"` for a future
-adapter that will execute SSP/multi-FMU compositions and Model Exchange
-scenarios. Until that adapter is implemented, such a request returns HTTP
-`501`; this keeps the backend choice explicit rather than silently pretending
-that a single-FMU FMPy execution was a composed model.
+is not used for ordinary single-FMU requests today. The executor reserves
+`options.backend: "omsimulator"` for a possible future SSP/multi-FMU composition
+adapter. FMI 2/FMI 3 Model Exchange is out of scope for DecentraLabs FMU
+execution. Until a composition adapter is implemented, an OMSimulator request
+returns HTTP `501`; this keeps the backend choice explicit rather than silently
+pretending that a single-FMU FMPy execution was a composed model.
 
 ### HTTP simulation payloads
 
-The one-shot and streaming endpoints accept this body shape:
+The synchronous `run` and `stream` routes remain for existing integrations and
+do not create retained job history. Authenticated Gateway calls include a
+`gatewayContext`, which the Executor validates and uses for reservation quotas.
+The jobs, batches, status, cancellation, history, and result routes always
+require a complete reservation scope; stored records are visible only to that
+scope. The private channel also requires `X-Internal-Session-Token`.
+
+Gateway calls to these routes use this body shape:
 
 ```json
 {
   "accessKey": "Heater.fmu",
+  "simId": "gateway-generated-id",
+  "gatewayContext": {
+    "accessKey": "Heater.fmu",
+    "labId": "lab-01",
+    "reservationKey": "reservation-123",
+    "claims": {"accessKey": "Heater.fmu", "labId": "lab-01", "reservationKey": "reservation-123", "pucHash": "...", "exp": 1893456000}
+  },
   "parameters": {"ambient": 293.15},
-  "options": {"startTime": 0, "stopTime": 10, "stepSize": 0.01},
-  "claims": {},
-  "labId": "lab-01",
-  "reservationKey": "reservation-123"
+  "options": {"startTime": 0, "stopTime": 10, "stepSize": 0.01}
 }
 ```
 
@@ -177,6 +214,64 @@ The one-shot and streaming endpoints accept this body shape:
 `seq`, `time`, and `outputs`, followed by `sim.done`; capacity or execution
 failures are emitted as an `error` object with a short `code` and, where
 applicable, `retryable: true`.
+
+### Jobs, batches, cancellation, and history
+
+The Gateway exposes these reservation-authorized routes; callers do not
+address the Executor directly:
+
+| Method | Gateway route | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/simulations/jobs` | Queue a cancellable one-shot simulation and return its ID |
+| `POST` | `/api/v1/simulations/batches` | Queue multiple scenarios against the same private FMU |
+| `GET` | `/api/v1/simulations/{id}` | Read status, elapsed time, and case progress |
+| `POST` | `/api/v1/simulations/{id}/cancel` | Stop the active child process or remaining batch cases |
+| `GET` | `/api/v1/simulations/{id}/result` | Read the completed result or terminal partial result |
+| `GET` | `/api/v1/simulations/history?limit=20&offset=0` | Page through this reservation's history |
+
+These public routes live in Lab Gateway. Its private Station-to-Executor
+contract uses `POST /internal/fmu/simulations/jobs` and
+`POST /internal/fmu/simulations/batches`; status, cancellation, result and
+history use corresponding `/internal/fmu/simulations/...` routes. Reads carry
+the Gateway-created reservation context in `X-Gateway-Context`, encoded as
+base64url JSON. The internal token authenticates the channel; the stored scope
+hash enforces reservation ownership.
+
+Batch requests have at most 8 scenarios. Each scenario can set up to 32
+parameters and at most 16 KiB of parameter JSON. A reservation is limited to
+100 scenario starts per UTC day by default. Authenticated Gateway one-shot
+runs, streams, async jobs, batch cases, realtime `sim.initialize`/`sim.reset`
+operations, and each non-empty realtime `sim.setInputs` update consume this
+budget. Direct legacy calls that omit the Gateway context are available only on
+the private token-protected channel and do not create history.
+Each initialization is limited to 10,000 communication steps, and one batch
+may use at most 20,000 steps across its scenarios. The limits are configurable
+with the environment variables below. They constrain automated parameter
+sweeps; they do not make a black-box model impossible to study through its
+authorized inputs and outputs.
+
+History defaults to 7 days, with a global cap of 10,000 records, 8 MiB per
+stored result, and 256 MiB of stored results in total. History and result reads
+are filtered by the same Gateway, lab, reservation, and pseudonymous-user
+scope used when the work was submitted. Terminal partial results remain
+available until retention or storage pruning removes their output data.
+
+| Environment variable | Default | Bound |
+|---|---:|---:|
+| `FMU_MAX_BATCH_CASES` | 8 | 1–20 |
+| `FMU_MAX_SCENARIOS_PER_RESERVATION_PER_DAY` | 100 | 1–10,000 |
+| `FMU_MAX_SIMULATION_STEPS` | 10,000 | 100–100,000 |
+| `FMU_HISTORY_RETENTION_DAYS` | 7 | 1–30 |
+| `FMU_MAX_HISTORY_RECORDS` | 10,000 | 100–100,000 |
+| `FMU_MAX_RESULT_BYTES` | 8 MiB | 64 KiB–32 MiB |
+| `FMU_MAX_HISTORY_BYTES` | 256 MiB | 16 MiB–2 GiB |
+
+`FMU_EXECUTOR_STATE_DIR` selects the directory for the SQLite job store. It
+must be persistent and writable by the Executor service account. The Windows
+Lab Station service sets it to `%ProgramData%\DecentraLabs\Lab Station\fmu-executor-state`
+and restricts that directory to `SYSTEM` and local Administrators. If the
+service restarts during a run, its row is retained as `interrupted`; native
+workers are not resumed.
 
 ### Realtime WebSocket protocol
 

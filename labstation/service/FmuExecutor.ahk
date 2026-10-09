@@ -68,6 +68,10 @@ class LS_FmuExecutor {
             LS_LogError("FMU executor: FMU_INTERNAL_TOKEN is not configured in the service environment")
             return false
         }
+        if (!this.EnsureStateDirectory()) {
+            LS_LogError("FMU executor: unable to secure persistent simulation history storage")
+            return false
+        }
         if (!this.EnsureFirewallRule()) {
             LS_LogError("FMU executor: unable to configure the private-network firewall rule for port " . LAB_STATION_FMU_EXECUTOR_PORT)
             return false
@@ -140,6 +144,24 @@ Remove-NetFirewallRule -Name 'LabStation-FMU-Executor' -ErrorAction SilentlyCont
 New-NetFirewallRule -Name 'LabStation-FMU-Executor' -DisplayName 'Lab Station FMU Executor' -Direction Inbound -Action Allow -Protocol TCP -LocalPort {1} -Profile Domain,Private -ErrorAction Stop | Out-Null
         )", LAB_STATION_FMU_EXECUTOR_PORT)
         return this.RunPowerShell(script, "Configure FMU executor firewall") = 0
+    }
+
+    static EnsureStateDirectory() {
+        stateDir := A_AppDataCommon "\DecentraLabs\Lab Station\fmu-executor-state"
+        script := Format("
+        (
+$ErrorActionPreference = 'Stop'
+$StatePath = '{1}'
+New-Item -ItemType Directory -Path $StatePath -Force | Out-Null
+& icacls.exe $StatePath /reset /T /C /Q | Out-Null
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
+& icacls.exe $StatePath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C /Q | Out-Null
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
+        )", StrReplace(stateDir, "'", "''"))
+        if (this.RunPowerShell(script, "Secure FMU executor state directory") != 0)
+            return false
+        EnvSet("FMU_EXECUTOR_STATE_DIR", stateDir)
+        return true
     }
 
     ; ── health probing ──────────────────────────────────────

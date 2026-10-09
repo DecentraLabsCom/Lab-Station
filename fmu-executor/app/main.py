@@ -7,6 +7,7 @@ consumed by Lab Gateway's fmu-runner in ``station`` backend mode.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import secrets
@@ -27,11 +28,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import auth, backends, config, engine, fmu_storage, process_runner
+from .simulation_jobs import SimulationJobManager
+from .simulation_store import QuotaExceededError, SimulationStore, reservation_scope
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="FMU Executor", version="0.1.1", docs_url=None, redoc_url=None)
+app = FastAPI(title="FMU Executor", version="0.2.1", docs_url=None, redoc_url=None)
 _session_cleanup_task: asyncio.Task | None = None
+_simulation_store = SimulationStore()
+_simulation_jobs = SimulationJobManager(_simulation_store)
 
 
 async def _cleanup_sessions_loop() -> None:
@@ -50,6 +55,7 @@ async def _startup() -> None:
     logging.basicConfig(level=getattr(logging, config.log_level(), logging.INFO))
     config.FMU_ROOT.mkdir(parents=True, exist_ok=True)
     config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(_simulation_store.initialize)
     logger.info(
         "FMU Executor starting – root=%s, port=%s, max_sessions=%s",
         config.FMU_ROOT, config.bind_port(), config.MAX_CONCURRENT_SESSIONS,
@@ -69,6 +75,7 @@ async def _shutdown() -> None:
             pass
         _session_cleanup_task = None
     logger.info("Shutting down – terminating all sessions")
+    await _simulation_jobs.shutdown()
     await asyncio.to_thread(engine.terminate_all)
 
 
@@ -193,10 +200,78 @@ async def list_quarantined():
 class SimulationBody(BaseModel):
     accessKey: str
     claims: dict = Field(default_factory=dict)
+    gatewayContext: dict | None = None
+    simId: str | None = None
     labId: str | None = None
     reservationKey: str | None = None
     parameters: dict = Field(default_factory=dict)
     options: dict = Field(default_factory=dict)
+
+
+class BatchScenario(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+    parameters: dict = Field(default_factory=dict)
+    options: dict = Field(default_factory=dict)
+
+
+class BatchSimulationBody(BaseModel):
+    accessKey: str
+    gatewayContext: dict
+    batchId: str | None = None
+    options: dict = Field(default_factory=dict)
+    scenarios: list[BatchScenario] = Field(min_length=1, max_length=config.MAX_BATCH_CASES)
+
+
+def _gateway_context_from_request(request: Request) -> dict[str, Any]:
+    encoded = request.headers.get("X-Gateway-Context") or ""
+    if len(encoded) > 12000:
+        raise HTTPException(status_code=400, detail="GATEWAY_CONTEXT_TOO_LARGE")
+    try:
+        padded = encoded + ("=" * (-len(encoded) % 4))
+        context = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED") from exc
+    if not isinstance(context, dict):
+        raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
+    return context
+
+
+def _scope_key(context: dict[str, Any], requested_access_key: str | None = None) -> str:
+    try:
+        access_key = requested_access_key or auth.extract_access_key_from_context(context)
+        if not access_key:
+            raise ValueError("gatewayContext has no FMU access key")
+        auth.validate_gateway_context(context, _validated_access_key(access_key))
+        return reservation_scope(context)[0]
+    except (HTTPException, ValueError) as exc:
+        raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED") from exc
+
+
+def _reserve_simulation_scenario(
+    context: dict[str, Any] | None,
+    access_key: str,
+    *,
+    require_scope: bool = False,
+) -> None:
+    if isinstance(context, dict):
+        claims = context.get("claims") or {}
+        if not isinstance(claims, dict):
+            claims = {}
+        lab_id = context.get("labId") or claims.get("labId")
+        reservation_key = context.get("reservationKey") or claims.get("reservationKey")
+    else:
+        lab_id = reservation_key = None
+    if not lab_id or not reservation_key:
+        if require_scope:
+            raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
+        return
+    try:
+        _simulation_store.reserve_scenarios(_scope_key(context, access_key), 1)
+    except QuotaExceededError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "RESERVATION_DAILY_SCENARIO_LIMIT", "remaining": max(0, int(exc.args[0]))},
+        ) from exc
 
 
 def _validate_backend_options(options: dict[str, Any]) -> None:
@@ -211,6 +286,9 @@ def _validate_backend_options(options: dict[str, Any]) -> None:
 @app.post("/internal/fmu/simulations/run", dependencies=[Depends(_check_token)])
 async def run_simulation(body: SimulationBody):
     access_key = _validated_access_key(body.accessKey)
+    if body.gatewayContext is not None:
+        auth.validate_gateway_context(body.gatewayContext, access_key)
+        await asyncio.to_thread(_reserve_simulation_scenario, body.gatewayContext, access_key, require_scope=True)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
     _validate_backend_options(body.options)
@@ -254,15 +332,92 @@ async def run_simulation(body: SimulationBody):
         engine.remove_session(slot.session_id)
 
 
+@app.post("/internal/fmu/simulations/jobs", status_code=202, dependencies=[Depends(_check_token)])
+async def submit_simulation_job(body: SimulationBody):
+    access_key = _validated_access_key(body.accessKey)
+    if not isinstance(body.gatewayContext, dict):
+        raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
+    _scope_key(body.gatewayContext, access_key)
+    if not fmu_storage.fmu_exists(access_key):
+        raise HTTPException(status_code=404, detail="FMU_NOT_FOUND")
+    _validate_backend_options(body.options)
+    return await _simulation_jobs.submit_single(
+        access_key=access_key,
+        gateway_context=body.gatewayContext,
+        parameters=body.parameters,
+        options=body.options,
+        requested_id=body.simId,
+    )
+
+
+@app.post("/internal/fmu/simulations/batches", status_code=202, dependencies=[Depends(_check_token)])
+async def submit_simulation_batch(body: BatchSimulationBody):
+    access_key = _validated_access_key(body.accessKey)
+    _scope_key(body.gatewayContext, access_key)
+    if not fmu_storage.fmu_exists(access_key):
+        raise HTTPException(status_code=404, detail="FMU_NOT_FOUND")
+    _validate_backend_options(body.options)
+    for scenario in body.scenarios:
+        _validate_backend_options({**body.options, **scenario.options})
+    return await _simulation_jobs.submit_batch(
+        access_key=access_key,
+        gateway_context=body.gatewayContext,
+        scenarios=[scenario.model_dump() for scenario in body.scenarios],
+        options=body.options,
+        requested_id=body.batchId,
+    )
+
+
+@app.get("/internal/fmu/simulations/history", dependencies=[Depends(_check_token)])
+async def simulation_history(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=config.MAX_STORED_HISTORY_RECORDS),
+):
+    scope_key = _scope_key(_gateway_context_from_request(request))
+    return _simulation_jobs.history(scope_key, limit=limit, offset=offset)
+
+
+@app.get("/internal/fmu/simulations/{job_id}/result", dependencies=[Depends(_check_token)])
+async def simulation_result(job_id: str, request: Request):
+    scope_key = _scope_key(_gateway_context_from_request(request))
+    result = _simulation_jobs.result(job_id, scope_key)
+    if result is None:
+        raise HTTPException(status_code=404, detail="SIMULATION_NOT_FOUND")
+    if result["status"] in {"queued", "running", "cancelling"}:
+        raise HTTPException(status_code=409, detail={"code": "SIMULATION_NOT_FINISHED", "status": result["status"]})
+    return result
+
+
+@app.get("/internal/fmu/simulations/{job_id}", dependencies=[Depends(_check_token)])
+async def simulation_status(job_id: str, request: Request):
+    scope_key = _scope_key(_gateway_context_from_request(request))
+    status = _simulation_jobs.status(job_id, scope_key)
+    if status is None:
+        raise HTTPException(status_code=404, detail="SIMULATION_NOT_FOUND")
+    return status
+
+
+@app.post("/internal/fmu/simulations/{job_id}/cancel", dependencies=[Depends(_check_token)])
+async def cancel_simulation_job(job_id: str, request: Request):
+    scope_key = _scope_key(_gateway_context_from_request(request))
+    result = await _simulation_jobs.cancel(job_id, scope_key)
+    if result is None:
+        raise HTTPException(status_code=404, detail="SIMULATION_NOT_FOUND")
+    return result
+
+
 # ── Simulation stream (NDJSON) ───────────────────────────────────
 
 @app.post("/internal/fmu/simulations/stream", dependencies=[Depends(_check_token)])
 async def stream_simulation(body: SimulationBody):
     access_key = _validated_access_key(body.accessKey)
+    if body.gatewayContext is not None:
+        auth.validate_gateway_context(body.gatewayContext, access_key)
+        await asyncio.to_thread(_reserve_simulation_scenario, body.gatewayContext, access_key, require_scope=True)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
     _validate_backend_options(body.options)
-
     fmu_path = fmu_storage.get_fmu_path(access_key)
     try:
         slot = engine.create_session(fmu_path)
@@ -551,7 +706,6 @@ async def _handle_ws_message(
 
         if not fmu_storage.fmu_exists(access_key):
             raise HTTPException(404, "FMU_NOT_FOUND")
-
         fmu_path = fmu_storage.get_fmu_path(access_key)
         claims = (gateway_ctx.get("claims") or {})
         exp = claims.get("exp")
@@ -663,10 +817,13 @@ async def _handle_ws_message(
         return {"type": "model.description", "sessionId": session.session_id, **desc}
 
     if msg_type == "sim.initialize":
-        if stop_runner is not None:
-            await stop_runner()
         options = msg.get("options", {})
         params = msg.get("parameters", {})
+        if not isinstance(options, dict) or not isinstance(params, dict):
+            raise HTTPException(status_code=422, detail="INVALID_SIMULATION_REQUEST")
+        await asyncio.to_thread(_reserve_simulation_scenario, session.gateway_context, access_key)
+        if stop_runner is not None:
+            await stop_runner()
         await asyncio.to_thread(
             session.initialize,
             start_time=float(options.get("startTime", 0.0)),
@@ -717,6 +874,7 @@ async def _handle_ws_message(
         }
 
     if msg_type == "sim.reset":
+        await asyncio.to_thread(_reserve_simulation_scenario, session.gateway_context, access_key)
         if stop_runner is not None:
             await stop_runner()
         await asyncio.to_thread(session.reset)
@@ -750,6 +908,8 @@ async def _handle_ws_message(
         values = msg.get("values", {})
         if not isinstance(values, dict):
             raise HTTPException(400, "sim.setInputs requires an object 'values'")
+        if values:
+            await asyncio.to_thread(_reserve_simulation_scenario, session.gateway_context, access_key)
         await asyncio.to_thread(session.set_inputs, values)
         return {
             "type": "sim.inputs.updated",

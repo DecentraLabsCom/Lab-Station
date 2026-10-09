@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.2] - 2026-10-09
+
+### Added
+- Added persistent reservation-scoped FMU job history and results in a protected ProgramData directory.
+- Bundled FMU Executor 0.2.1 with cancellable single jobs, bounded batches, and retained results.
+
+### Changed
+- Updated the bundled standalone FMU Executor snapshot to shared release 0.2.1.
+
 ## [3.6.0-preview.1] - 2026-10-09
 
 ### Added

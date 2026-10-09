@@ -7,6 +7,7 @@ not take the Station HTTP/WebSocket control plane down with it.
 
 from __future__ import annotations
 
+import json
 import multiprocessing as mp
 import queue
 import threading
@@ -399,6 +400,7 @@ def _execute_worker(
     options: dict[str, Any],
     output_queue: Any,
     streaming: bool,
+    capture_series: bool = False,
 ) -> None:
     """Worker entry point; imports the engine only inside the child process."""
     from .engine import FmuSession
@@ -421,11 +423,45 @@ def _execute_worker(
             parameters=parameters or None,
         )
         if streaming:
+            result_bytes = 0
             for snapshot in session.run_until_streaming(stop, step_size=step_value):
+                result_bytes += len(json.dumps(snapshot, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+                if result_bytes > config.MAX_STORED_RESULT_BYTES:
+                    output_queue.put({"kind": "error", "code": "RESULT_SIZE_LIMIT_EXCEEDED"})
+                    return
                 output_queue.put({"kind": "message", "payload": snapshot})
             output_queue.put({
                 "kind": "message",
                 "payload": {"type": "sim.done", "time": session._time},
+            })
+        elif capture_series:
+            initial = session.get_outputs()
+            time_values = [initial["time"]]
+            output_series = {name: [value] for name, value in initial["outputs"].items()}
+            result_bytes = len(json.dumps(initial, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+            for snapshot in session.run_until_streaming(stop, step_size=step_value):
+                result_bytes += len(
+                    json.dumps(
+                        {"time": snapshot["time"], "outputs": snapshot["outputs"]},
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                )
+                if result_bytes > config.MAX_STORED_RESULT_BYTES:
+                    output_queue.put({"kind": "error", "code": "RESULT_SIZE_LIMIT_EXCEEDED"})
+                    return
+                time_values.append(snapshot["time"])
+                for name, value in snapshot["outputs"].items():
+                    output_series.setdefault(name, []).append(value)
+            output_queue.put({
+                "kind": "result",
+                "payload": {
+                    "type": "sim.result",
+                    "time": time_values,
+                    "state": "terminated",
+                    "outputs": output_series,
+                    "outputVariables": list(output_series),
+                },
             })
         else:
             result = session.run_until(stop, step_size=step_value)
@@ -457,11 +493,15 @@ def _new_process(
     options: dict[str, Any],
     output_queue: Any,
     streaming: bool,
+    capture_series: bool = False,
 ) -> tuple[Any, Any]:
     context = mp.get_context("spawn")
+    worker_args = (str(fmu_path), access_key, parameters, options, output_queue, streaming)
+    if capture_series:
+        worker_args += (True,)
     process = context.Process(
         target=_execute_worker,
-        args=(str(fmu_path), access_key, parameters, options, output_queue, streaming),
+        args=worker_args,
         name="LabStation-FMU-Worker",
     )
     process.start()
@@ -474,14 +514,24 @@ def run(
     access_key: str,
     parameters: dict[str, Any],
     options: dict[str, Any],
+    cancel_event: threading.Event | None = None,
+    capture_series: bool = False,
 ) -> dict[str, Any]:
     """Run a one-shot simulation in a spawned process."""
     context = mp.get_context("spawn")
     output_queue = context.Queue(maxsize=1)
-    process, _ = _new_process(fmu_path, access_key, parameters, options, output_queue, False)
+    process, _ = _new_process(fmu_path, access_key, parameters, options, output_queue, False, capture_series)
     deadline = time.monotonic() + config.execution_timeout_seconds()
     try:
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                if process.is_alive():
+                    process.terminate()
+                raise ProcessExecutionError(
+                    "FMU simulation was cancelled",
+                    code="FMU_EXECUTION_CANCELLED",
+                    retryable=False,
+                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process.terminate()
@@ -522,6 +572,7 @@ def stream(
     access_key: str,
     parameters: dict[str, Any],
     options: dict[str, Any],
+    cancel_event: threading.Event | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield NDJSON payloads from an isolated streaming worker."""
     context = mp.get_context("spawn")
@@ -530,6 +581,14 @@ def stream(
     deadline = time.monotonic() + config.execution_timeout_seconds()
     try:
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                yield {
+                    "type": "error",
+                    "code": "FMU_EXECUTION_CANCELLED",
+                    "message": "FMU simulation was cancelled",
+                    "retryable": False,
+                }
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 yield {
