@@ -1,14 +1,30 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
+
+## [3.5.10] - 2026-10-09
+
+### Fixed
+- The release ZIP now includes the optional FMU Executor runtime source,
+  requirements, and guide asset. Python itself and its dependencies still
+  require station provisioning; local FMU model data and tests are excluded.
+
+## [3.5.9] - 2026-10-09
+
+### Fixed
+- Hardened FMU session startup and output lookup when instantiation fails or
+  model metadata is unavailable.
+- Tightened station JSON number parsing and added regression coverage for
+  valid and malformed number forms.
+
+### Changed
+- Updated the optional FMU Executor FastAPI and Uvicorn requirement ranges.
+- Updated the Windows release toolchain to AutoHotkey v2.0.29.
 
 ### Documentation
-
-- Reorganized the public documentation around a shorter Lab Station landing
-  page, a dedicated AppControl guide, and an explicit background command-queue
-  contract.
-- Synchronized status, WinRM, hybrid-operation, build, and private Gateway
-  runbooks with the current CLI, telemetry schema, and `ops-worker` routes.
+- Reorganized the public documentation and aligned command-queue, status,
+  WinRM, hybrid-operation, build, and AppControl guidance with the current
+  contracts.
 
 ## [3.5.8] - 2026-09-27
 
