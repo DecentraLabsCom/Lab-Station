@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Windows with PowerShell 5.1 or newer.
-- AutoHotkey v2.0.28 for running the source tests and compiling the AHK
+- AutoHotkey v2.0.29 for running the source tests and compiling the AHK
   executables. The CI workflow uses this exact version.
 - Python 3.11 or newer for the FMU Executor. CI tests Python 3.11, 3.12, and
   3.13.
@@ -46,6 +46,7 @@ $env:AHK_EXE = $ahk
 $tests = @(
   'labstation\tests\WizardActionCallbacksTests.ahk',
   'labstation\tests\IntegrationContractTests.ahk',
+  'labstation\tests\JsonParserTests.ahk',
   'labstation\tests\ReservationFlowTests.ahk',
   'labstation\tests\ControllerCloseRequestTests.ahk',
   'labstation\tests\CommandQueueTests.ahk',

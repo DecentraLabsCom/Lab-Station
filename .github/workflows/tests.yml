@@ -2,6 +2,7 @@ name: Tests
 
 on:
   push:
+    branches: ["main"]
   pull_request:
 
 permissions:
@@ -74,7 +75,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      AHK_VERSION: "2.0.28"
+      AHK_VERSION: "2.0.29"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
