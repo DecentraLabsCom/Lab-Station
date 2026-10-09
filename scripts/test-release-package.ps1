@@ -32,6 +32,11 @@ try {
     New-Item -ItemType Directory -Path $logoDir -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $logoDir 'DecentraLabs.png') -Value 'test-logo' -NoNewline
 
+    $runtimeDir = Join-Path $distPath 'fmu-executor-runtime\FMUExecutor'
+    New-Item -ItemType Directory -Path (Join-Path $runtimeDir '_internal') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $runtimeDir 'FMUExecutor.exe') -Value 'test-FMUExecutor.exe' -NoNewline
+    Set-Content -LiteralPath (Join-Path $runtimeDir '_internal\python312.dll') -Value 'test-python-runtime' -NoNewline
+
     & $packageScript -DistPath $distPath -OutputPath $outputPath
     Assert-Condition $? 'Release package script failed.'
     Assert-Condition (Test-Path -LiteralPath $outputPath) 'Release package ZIP was not created.'
@@ -47,6 +52,10 @@ try {
         Assert-Condition ($entryNames -contains 'Lab Station/remote-app/AppControl.exe') 'Missing packaged Remote App launcher.'
         Assert-Condition (-not ($entryNames -contains 'Lab Station/AppControl.exe')) 'AppControl leaked outside remote-app/.'
         Assert-Condition ($entryNames -contains 'Lab Station/img/DecentraLabs.png') 'Missing packaged logo.'
+        Assert-Condition ($entryNames -contains 'Lab Station/fmu-executor/runtime/FMUExecutor.exe') 'Missing packaged standalone FMU Executor.'
+        Assert-Condition ($entryNames -contains 'Lab Station/fmu-executor/runtime/_internal/python312.dll') 'Missing bundled Python runtime payload.'
+        Assert-Condition (-not ($entryNames -contains 'Lab Station/fmu-executor/requirements.txt')) 'Release still requires a separate Python dependency installation.'
+        Assert-Condition (-not ($entryNames -match '^Lab Station/fmu-executor/app/')) 'Python source was copied instead of the frozen runtime.'
     } finally {
         $archive.Dispose()
     }
