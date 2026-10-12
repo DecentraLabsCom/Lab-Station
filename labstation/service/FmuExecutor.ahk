@@ -53,6 +53,23 @@ class LS_FmuExecutor {
         return Trim(EnvGet("FMU_INTERNAL_TOKEN")) != ""
     }
 
+    static SetBuildCommit() {
+        lockPath := LAB_STATION_FMU_EXECUTOR_DIR "\SOURCE.lock.json"
+        if (!FileExist(lockPath))
+            return false
+        try {
+            lock := LS_ParseJson(FileRead(lockPath, "UTF-8"))
+            if (lock is Map && lock.Has("commit") && RegExMatch(Trim(lock["commit"]), "i)^[0-9a-f]{40}$")) {
+                EnvSet("FMU_EXECUTOR_COMMIT", StrLower(Trim(lock["commit"])))
+                return true
+            }
+        } catch as e {
+            LS_LogWarning("FMU executor: unable to read SOURCE.lock.json commit â€“ " . e.Message)
+        }
+        EnvSet("FMU_EXECUTOR_COMMIT", "unknown")
+        return false
+    }
+
     static IsRunning() {
         if (this._pid = 0)
             return false
@@ -68,6 +85,7 @@ class LS_FmuExecutor {
             LS_LogError("FMU executor: FMU_INTERNAL_TOKEN is not configured in the service environment")
             return false
         }
+        this.SetBuildCommit()
         if (!this.EnsureStateDirectory()) {
             LS_LogError("FMU executor: unable to secure persistent simulation history storage")
             return false
