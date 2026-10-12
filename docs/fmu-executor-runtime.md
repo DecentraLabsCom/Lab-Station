@@ -19,14 +19,26 @@ Job Object terminates descendants when the worker is stopped. A Windows worker
 also receives its own verified copy of the content-addressed FMU, so changes to
 that worker's copy cannot change later cases in the same batch.
 
-The Windows worker currently runs with the Executor sidecar's service identity.
-On the standard Station task that identity is `SYSTEM`. Windows currently has
-no Executor-enforced write restriction to the worker directory, network block,
-or aggregate temporary-disk quota; the per-file limit is available on Linux
-workers only. Operators requiring those controls should run the sidecar under a
-dedicated restricted service identity and apply host firewall and filesystem
-policy. The Executor's `/internal/fmu/validate/{accessKey}` response reports
-the effective `workerIsolation` capabilities for the Station.
+On Windows, each worker is launched in its own AppContainer with no network
+capabilities. Its package identity receives read/execute access to the bundled
+runtime and modify access to that worker's private directory; writes to the
+AppContainer's per-worker profile storage are isolated from other workers. The
+service's account SID is still the underlying account (normally `SYSTEM`), but
+the AppContainer token and ACL checks constrain the worker's effective access.
+The Job Object limits continue to apply. If AppContainer setup or ACL changes
+fail, that worker is not released to load the FMU. Abandoned worker profiles are
+removed during the next sidecar startup.
+
+The runtime directory is granted read/execute access to the Windows
+`ALL_APPLICATION_PACKAGES` principal so AppContainer workers can import Python
+and the packaged FMI runtime; it contains application code, not provisioned
+models or service state. Windows still has no per-file temporary-size limit or
+aggregate temporary-disk quota. The Executor's
+`/internal/fmu/validate/{accessKey}` response reports the effective
+`workerIsolation` capabilities for the Station. On Windows,
+`writesLimitedToWorkDirectory` stays false because AppContainer profile storage
+is another private write location; `writesLimitedToPrivateLocations` reports
+that both locations are isolated.
 
 On Linux workers, Landlock also limits reads to the Python/system runtime, the
 pinned FMU archive and the private work directory. The service token, job
