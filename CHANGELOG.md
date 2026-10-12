@@ -21,6 +21,14 @@
 - Updated the bundled standalone FMU Executor to the shared 0.1.1 source release.
 - Set the LabStation executable's file and product version to 3.6.0.
 
+## [3.5.12] - 2026-10-09
+
+### Fixed
+- Set the LabStation executable's file and product version to 3.5.12.
+
+### Changed
+- Align the SignPath artifact configuration with the signed release executables and remove the obsolete Ahk2Exe source submodule.
+
 ## [3.5.11] - 2026-10-09
 
 ### Changed
