@@ -32,7 +32,6 @@ jobs:
 
   analyze-python:
     name: Analyze (python)
-    if: github.event_name != 'push' || github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       actions: read
