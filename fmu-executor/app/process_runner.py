@@ -8,6 +8,7 @@ not take the Station HTTP/WebSocket control plane down with it.
 from __future__ import annotations
 
 import json
+import logging
 import multiprocessing as mp
 import queue
 import threading
@@ -18,6 +19,8 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from . import config
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessExecutionError(RuntimeError):
@@ -124,15 +127,15 @@ def _realtime_session_worker(
                     "error": str(exc) or "FMU worker command failed",
                     "snapshot": _realtime_snapshot(session),
                 })
-    except (EOFError, OSError):
-        pass
+    except (EOFError, OSError) as exc:
+        logger.debug("Realtime worker connection closed (%s)", type(exc).__name__)
     finally:
         if session is not None and not session._terminated:
             session.terminate()
         try:
             connection.close()
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("Unable to close realtime worker connection (%s)", type(exc).__name__)
 
 
 class RealtimeSession:
@@ -358,8 +361,8 @@ class RealtimeSession:
                 self._stop_process()
             try:
                 self._connection.close()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Unable to close FMU worker connection (%s)", type(exc).__name__)
             self._closed = True
             self._terminated = True
             self._state = "terminated"

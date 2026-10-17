@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import time
+from contextlib import suppress
 from typing import Any
 
 from fastapi import (
@@ -69,10 +70,8 @@ async def _shutdown() -> None:
     global _session_cleanup_task
     if _session_cleanup_task:
         _session_cleanup_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await _session_cleanup_task
-        except asyncio.CancelledError:
-            pass
         _session_cleanup_task = None
     logger.info("Shutting down – terminating all sessions")
     await _simulation_jobs.shutdown()
@@ -492,10 +491,8 @@ async def ws_sessions(ws: WebSocket):
         _runner_task = None
         if task and task is not asyncio.current_task():
             task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
     async def _run_session() -> None:
         try:
@@ -516,8 +513,6 @@ async def ws_sessions(ws: WebSocket):
                     }))
                     return
                 await asyncio.sleep(min(max(session._step_size, 0.01), 1.0))
-        except asyncio.CancelledError:
-            return
         except Exception:
             logger.exception("FMU realtime runner failed")
             if session and not session._terminated:
@@ -529,8 +524,11 @@ async def ws_sessions(ws: WebSocket):
                         "state": "error",
                         "simTime": session._time,
                     }))
-                except Exception:
-                    pass
+                except Exception as send_error:
+                    logger.debug(
+                        "Could not send FMU realtime error state (%s)",
+                        type(send_error).__name__,
+                    )
 
     def _start_runner() -> None:
         nonlocal _runner_task
