@@ -11,7 +11,12 @@ ProcessSetPriority "High"
 
 ; RemoteApp launches AppControl as a controller, so keep its own script window
 ; out of the published desktop while leaving the process alive to manage the lab app.
-WinHide("ahk_id " A_ScriptHwnd)
+DetectHiddenWindows true
+try {
+    WinHide("ahk_id " A_ScriptHwnd)
+} finally {
+    DetectHiddenWindows false
+}
 
 ; ============================================================================
 ; LOAD MODULES
