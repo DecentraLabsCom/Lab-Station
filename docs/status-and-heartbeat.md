@@ -31,12 +31,11 @@ physical-lab capability ready while keeping the affected capability unready;
 consumers should select the capability that matches the decision they are
 making.
 
-Use the Markdown schema guide for the field contract and the machine-readable
-schemas when validating ingestion:
+Use the Markdown schema guides for field descriptions and links to the
+machine-readable validation artifacts:
 
 - [`Status JSON schema`](status-json-schema.md)
-- [`status-schema.json`](status-schema.json)
-- [`heartbeat-schema.json`](heartbeat-schema.json)
+- [Heartbeat JSON schema (v2)](heartbeat-schema.md)
 - [`WinRM command contract`](winrm-command-contract.md)
 
 Consumers should treat a higher major schema version as incompatible. Unknown
