@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.5.14] - 2026-10-18
+
+### Fixed
+- Prevent startup errors when AppControl's AutoHotkey window is already hidden.
+
 ## [3.5.13] - 2026-10-18
 
 ### Fixed
