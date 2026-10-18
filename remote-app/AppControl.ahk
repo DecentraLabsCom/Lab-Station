@@ -9,6 +9,10 @@
 #Requires AutoHotkey v2.0
 ProcessSetPriority "High"
 
+; RemoteApp launches AppControl as a controller, so keep its own script window
+; out of the published desktop while leaving the process alive to manage the lab app.
+WinHide("ahk_id " A_ScriptHwnd)
+
 ; ============================================================================
 ; LOAD MODULES
 ; ============================================================================

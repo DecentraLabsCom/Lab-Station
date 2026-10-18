@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.5.13] - 2026-10-18
+
+### Fixed
+- Hide AppControl's AutoHotkey main window while it waits for and manages the RemoteApp target.
+
 ## [3.5.12] - 2026-10-09
 
 ### Fixed
