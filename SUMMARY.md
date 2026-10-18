@@ -12,6 +12,6 @@
 * [Background command queue](docs/command-queue.md)
 * [Status and heartbeat contract](docs/status-and-heartbeat.md)
 * [Status JSON schema](docs/status-json-schema.md)
-* [Heartbeat JSON schema](docs/heartbeat-schema.json)
+* [Heartbeat JSON schema](docs/heartbeat-schema.md)
 * [Build, tests and verification](docs/development.md)
-* [FMU Executor](fmu-executor/README.md)
+* [FMU Executor](docs/fmu-executor.md)

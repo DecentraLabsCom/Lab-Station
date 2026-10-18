@@ -65,4 +65,7 @@ creates the directory and restricts access to `SYSTEM` and local
 Administrators. It persists across Station upgrades and is not part of the
 release ZIP.
 
-For source development and API details, see the [FMU Executor project guide](../fmu-executor/README.md).
+The shared source, release history, container packaging, and API documentation
+live in the [DecentraLabsCom/FMU-Executor repository](https://github.com/DecentraLabsCom/FMU-Executor).
+The Station snapshot records the pinned source revision in
+[`fmu-executor/SOURCE.lock.json`](../fmu-executor/SOURCE.lock.json).

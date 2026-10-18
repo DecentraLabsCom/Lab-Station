@@ -34,12 +34,13 @@ consumers should select the capability that matches the decision they are
 making.
 
 The v2 files in this repository document the legacy Windows payload only. The
-canonical v3 schemas and cross-platform fixtures live in Lab Gateway at
-`contracts/station/v3/`; use them when validating current ingestion:
+canonical v3 schemas are maintained by Lab Gateway; the Station bundle carries
+a pinned copy for validation and publication:
 
-- [`Status JSON schema`](status-json-schema.md)
-- [`status-schema.json`](status-schema.json)
-- [`heartbeat-schema.json`](heartbeat-schema.json)
+- [Legacy Windows v2 status schema guide](status-json-schema.md)
+- [Heartbeat schema guide](heartbeat-schema.md)
+- [Current v3 status schema](https://github.com/DecentraLabsCom/Lab-Station/blob/feature/lab-station-linux/contracts/station/gateway-contracts/v3/status.schema.json)
+- [Current v3 heartbeat schema](https://github.com/DecentraLabsCom/Lab-Station/blob/feature/lab-station-linux/contracts/station/gateway-contracts/v3/heartbeat.schema.json)
 - [`WinRM command contract`](winrm-command-contract.md)
 
 Consumers should treat a higher major schema version as incompatible. Unknown
