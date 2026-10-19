@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
+import math
 import secrets
+import threading
 import time
-from contextlib import suppress
 from typing import Any
 
 from fastapi import (
@@ -25,16 +27,36 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from . import auth, backends, config, engine, fmu_storage, process_runner
-from .simulation_jobs import SimulationJobManager
-from .simulation_store import QuotaExceededError, SimulationStore, reservation_scope
+from .isolation import worker_isolation_capabilities
+from .simulation_jobs import (
+    SimulationJobManager,
+    _validate_parameters,
+    _validate_options,
+    execution_deadlines,
+    model_execution_policy,
+)
+from .simulation_store import (
+    InputUpdateQuotaExceededError,
+    QuotaExceededError,
+    SimulationStore,
+    reservation_scope,
+)
+from .reproducibility import (
+    applied_execution_policy,
+    attach_evidence as attach_run_evidence,
+    build_execution_evidence,
+    effective_execution_options,
+)
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="FMU Executor", version="0.2.1", docs_url=None, redoc_url=None)
+app = FastAPI(title="FMU Executor", version="0.3.0", docs_url=None, redoc_url=None)
+MAX_COMPANION_SCENE_BYTES = 50 * 1024 * 1024
 _session_cleanup_task: asyncio.Task | None = None
 _simulation_store = SimulationStore()
 _simulation_jobs = SimulationJobManager(_simulation_store)
@@ -56,7 +78,14 @@ async def _startup() -> None:
     logging.basicConfig(level=getattr(logging, config.log_level(), logging.INFO))
     config.FMU_ROOT.mkdir(parents=True, exist_ok=True)
     config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    abandoned_workers = await asyncio.to_thread(process_runner.cleanup_abandoned_worker_directories)
+    if abandoned_workers:
+        logger.info("Removed %s abandoned FMU worker directories", abandoned_workers)
     await asyncio.to_thread(_simulation_store.initialize)
+    # Reap abandoned sessions before startup returns. The background loop is
+    # deliberately periodic; relying on its first scheduled iteration races
+    # with immediate TestClient/server shutdown on short-lived processes.
+    await asyncio.to_thread(engine.cleanup_expired_sessions)
     logger.info(
         "FMU Executor starting – root=%s, port=%s, max_sessions=%s",
         config.FMU_ROOT, config.bind_port(), config.MAX_CONCURRENT_SESSIONS,
@@ -70,8 +99,10 @@ async def _shutdown() -> None:
     global _session_cleanup_task
     if _session_cleanup_task:
         _session_cleanup_task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await _session_cleanup_task
+        except asyncio.CancelledError:
+            pass
         _session_cleanup_task = None
     logger.info("Shutting down – terminating all sessions")
     await _simulation_jobs.shutdown()
@@ -100,6 +131,7 @@ async def health():
         "maxConcurrentExecutions": config.MAX_CONCURRENT_SESSIONS,
         "availableCapacity": max(0, config.MAX_CONCURRENT_SESSIONS - active),
         "executionMode": config.execution_mode(),
+        "workerIsolation": {**worker_isolation_capabilities(), "enabled": config.execution_mode() == "process"},
         "backends": backends.backend_status(),
         "timestamp": time.time(),
     }
@@ -124,6 +156,7 @@ async def backend_capabilities():
     """Expose current and planned execution backends to diagnostics/UI."""
     return {
         "executionMode": config.execution_mode(),
+        "workerIsolation": {**worker_isolation_capabilities(), "enabled": config.execution_mode() == "process"},
         "backends": backends.backend_status(),
     }
 
@@ -150,6 +183,39 @@ async def catalog(access_key: str = Header(..., alias="X-FMU-Access-Key")):
     }
 
 
+@app.get("/internal/fmu/companion-scene", dependencies=[Depends(_check_token)])
+async def companion_scene(access_key: str = Header(..., alias="X-FMU-Access-Key")):
+    """Return the same-stem GLB for an FMU to the authenticated Gateway."""
+    access_key = _validated_access_key(access_key)
+    try:
+        root = config.FMU_ROOT.resolve(strict=True)
+        fmu_path = fmu_storage.get_fmu_path(access_key).resolve(strict=True)
+        fmu_path.relative_to(root)
+        scene_path = fmu_path.with_suffix(".glb").resolve(strict=True)
+        scene_path.relative_to(root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="COMPANION_SCENE_NOT_FOUND") from exc
+
+    try:
+        if not scene_path.is_file():
+            raise HTTPException(status_code=404, detail="COMPANION_SCENE_NOT_FOUND")
+        with scene_path.open("rb") as scene_file:
+            content = scene_file.read(MAX_COMPANION_SCENE_BYTES + 1)
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="COMPANION_SCENE_UNAVAILABLE") from exc
+
+    if len(content) > MAX_COMPANION_SCENE_BYTES:
+        raise HTTPException(status_code=413, detail="COMPANION_SCENE_TOO_LARGE")
+
+    return Response(
+        content=content,
+        media_type="model/gltf-binary",
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 # ── Describe ─────────────────────────────────────────────────────
 
 @app.get("/internal/fmu/describe", dependencies=[Depends(_check_token)])
@@ -163,13 +229,77 @@ async def describe(access_key: str = Header(..., alias="X-FMU-Access-Key")):
 # ── Validate / Quarantine ────────────────────────────────────────
 
 @app.post("/internal/fmu/validate/{access_key:path}", dependencies=[Depends(_check_token)])
-async def validate_fmu(access_key: str, auto_quarantine: bool = Query(False)):
-    """Validate an FMU and optionally quarantine it if broken."""
+async def validate_fmu(
+    access_key: str,
+    auto_quarantine: bool = Query(False),
+    probe: bool = Query(False),
+):
+    """Report archive and host compatibility, with an optional isolated load probe."""
     access_key = _validated_access_key(access_key)
-    ok, reason = fmu_storage.validate_fmu(access_key)
-    if not ok and auto_quarantine:
-        fmu_storage.quarantine(access_key, reason)
-    return {"accessKey": access_key, "valid": ok, "reason": reason}
+    report = fmu_storage.inspect_fmu(access_key)
+    probe_failure_code = None
+    report["workerIsolation"] = {
+        **worker_isolation_capabilities(),
+        "enabled": probe or config.execution_mode() == "process",
+    }
+    if probe and report["archiveValid"] and report["stationCompatible"]:
+        try:
+            token = engine.reserve_capacity()
+        except engine.CapacityExceededError:
+            raise HTTPException(status_code=429, detail="STATION_CAPACITY_EXHAUSTED")
+        try:
+            path, digest = fmu_storage.snapshot_fmu(fmu_storage.get_fmu_path(access_key))
+            report = fmu_storage.inspect_fmu_path(path, access_key=access_key)
+            report["workerIsolation"] = {
+                **worker_isolation_capabilities(),
+                "enabled": True,
+            }
+            if report["archiveValid"] and report["modelDescriptionValid"] and report["stationCompatible"]:
+                description = fmu_storage.describe_path(path)
+                experiment = {
+                    "startTime": description.get("defaultStartTime", 0.0),
+                    "stopTime": description.get("defaultStopTime", 1.0),
+                }
+                if description.get("defaultStepSize") is not None:
+                    experiment["stepSize"] = description["defaultStepSize"]
+                await asyncio.to_thread(
+                    process_runner.run,
+                    path,
+                    access_key=access_key,
+                    parameters={},
+                    options=experiment,
+                    probe_only=True,
+                )
+                report["executionChecked"] = True
+                report["dependenciesChecked"] = True
+                report["probeResult"] = "passed"
+                report["sha256"] = digest
+            else:
+                report["probeResult"] = "failed"
+        except process_runner.ProcessExecutionError as exc:
+            probe_failure_code = exc.code
+            infrastructure_failure = exc.code in {
+                "FMU_WORKER_ISOLATION_UNAVAILABLE",
+                "FMU_WORKER_START_FAILED",
+            }
+            report["executionChecked"] = not infrastructure_failure
+            report["dependenciesChecked"] = not infrastructure_failure
+            report["probeResult"] = "failed"
+            report["issues"].append(f"Isolated instantiation probe failed ({exc.code})")
+        finally:
+            engine.release_capacity(token)
+    valid = report["archiveValid"] and report["modelDescriptionValid"] and report["stationCompatible"]
+    if probe:
+        valid = valid and report.get("probeResult") == "passed"
+    report["valid"] = valid
+    probe_infrastructure_errors = {"FMU_WORKER_ISOLATION_UNAVAILABLE", "FMU_WORKER_START_FAILED"}
+    if auto_quarantine and not valid and probe_failure_code not in probe_infrastructure_errors:
+        fmu_storage.quarantine(access_key, "; ".join(report["issues"][:5]))
+        report["quarantined"] = True
+    elif auto_quarantine and probe_failure_code in probe_infrastructure_errors:
+        report["quarantined"] = False
+        report["quarantineSkippedReason"] = "FMU_PROBE_INFRASTRUCTURE_UNAVAILABLE"
+    return report
 
 
 @app.post("/internal/fmu/quarantine/{access_key:path}", dependencies=[Depends(_check_token)])
@@ -251,26 +381,54 @@ def _reserve_simulation_scenario(
     access_key: str,
     *,
     require_scope: bool = False,
+    model_sha256: str | None = None,
 ) -> None:
-    if isinstance(context, dict):
-        claims = context.get("claims") or {}
-        if not isinstance(claims, dict):
-            claims = {}
-        lab_id = context.get("labId") or claims.get("labId")
-        reservation_key = context.get("reservationKey") or claims.get("reservationKey")
-    else:
-        lab_id = reservation_key = None
+    if not isinstance(context, dict):
+        if require_scope:
+            raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
+        return
+    claims = context.get("claims") or {}
+    if not isinstance(claims, dict):
+        claims = {}
+    lab_id = context.get("labId") or claims.get("labId")
+    reservation_key = context.get("reservationKey") or claims.get("reservationKey")
     if not lab_id or not reservation_key:
         if require_scope:
             raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
         return
     try:
-        _simulation_store.reserve_scenarios(_scope_key(context, access_key), 1)
+        if model_sha256 is None:
+            _, model_sha256 = fmu_storage.snapshot_fmu(fmu_storage.get_fmu_path(access_key))
+        policy = model_execution_policy(context)
+        _simulation_store.reserve_scenarios(
+            _scope_key(context, access_key),
+            1,
+            model_sha256=model_sha256,
+            maximum=policy["maxDailyScenarios"],
+        )
     except QuotaExceededError as exc:
         raise HTTPException(
             status_code=429,
             detail={"code": "RESERVATION_DAILY_SCENARIO_LIMIT", "remaining": max(0, int(exc.args[0]))},
         ) from exc
+
+
+def _reserve_input_update(context: dict[str, Any] | None, access_key: str, values: dict[str, Any]) -> None:
+    if not isinstance(context, dict):
+        raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
+    scope_key = _scope_key(context, access_key)
+    try:
+        payload_bytes = len(
+            json.dumps(values, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        )
+        _simulation_store.reserve_input_update(scope_key, access_key, payload_bytes)
+    except InputUpdateQuotaExceededError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": exc.code, "remaining": exc.remaining},
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="INVALID_INPUT_PAYLOAD") from exc
 
 
 def _validate_backend_options(options: dict[str, Any]) -> None:
@@ -282,31 +440,121 @@ def _validate_backend_options(options: dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _strict_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a JSON number")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{name} is outside the numeric range") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    return number
+
+
+def _validate_active_reservation_deadline(context: dict[str, Any]) -> None:
+    claims = context.get("claims") or {}
+    if not isinstance(claims, dict):
+        raise HTTPException(status_code=403, detail="INVALID_RESERVATION_END")
+    raw_end = context.get("reservationEndsAt", claims.get("reservationEndsAt"))
+    if raw_end is None:
+        return
+    try:
+        end = float(raw_end)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=403, detail="INVALID_RESERVATION_END") from exc
+    if not math.isfinite(end):
+        raise HTTPException(status_code=403, detail="INVALID_RESERVATION_END")
+    if end <= time.time():
+        raise HTTPException(status_code=403, detail="RESERVATION_NOT_ACTIVE")
+
+
 @app.post("/internal/fmu/simulations/run", dependencies=[Depends(_check_token)])
 async def run_simulation(body: SimulationBody):
     access_key = _validated_access_key(body.accessKey)
     if body.gatewayContext is not None:
         auth.validate_gateway_context(body.gatewayContext, access_key)
-        await asyncio.to_thread(_reserve_simulation_scenario, body.gatewayContext, access_key, require_scope=True)
+        if config.execution_mode() != "process":
+            raise HTTPException(status_code=409, detail="FMU_PROCESS_ISOLATION_REQUIRED")
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
     _validate_backend_options(body.options)
+    _validate_parameters(body.parameters or {})
+    policy = model_execution_policy(body.gatewayContext)
+    _validate_options(access_key, body.options, policy)
+    if body.gatewayContext is not None:
+        auth_expiry, reservation_end = execution_deadlines(body.gatewayContext)
+    else:
+        auth_expiry = reservation_end = None
 
-    fmu_path = fmu_storage.get_fmu_path(access_key)
+    source_path = fmu_storage.get_fmu_path(access_key)
+    source_report = fmu_storage.inspect_fmu(access_key, include_hash=False)
+    if not source_report["archiveValid"] or not source_report["modelDescriptionValid"] or not source_report["stationCompatible"]:
+        raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": source_report["issues"][:8]})
+    fmu_path, model_sha256 = fmu_storage.snapshot_fmu(source_path)
+    report = fmu_storage.inspect_fmu_path(fmu_path, access_key=access_key, include_hash=False)
+    if not report["archiveValid"] or not report["modelDescriptionValid"] or not report["stationCompatible"]:
+        raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": report["issues"][:8]})
+    model_metadata = fmu_storage.describe_path(fmu_path)
+    _validate_options(access_key, body.options, policy, model_metadata=model_metadata)
+    evidence_options = effective_execution_options(
+        model_metadata,
+        body.options,
+        early_return_default=config.execution_mode() == "process",
+    )
+    slot: engine.FmuSession | None = None
+    capacity_token = None
     try:
-        slot = engine.create_session(fmu_path)
+        capacity_token = engine.reserve_capacity()
+        if config.execution_mode() != "process":
+            slot = engine.FmuSession(
+                f"run_{secrets.token_hex(6)}", fmu_path, access_key=access_key,
+            )
     except engine.CapacityExceededError as exc:
         raise HTTPException(429, "STATION_CAPACITY_EXHAUSTED") from exc
     try:
+        if body.gatewayContext is not None:
+            await asyncio.to_thread(
+                _reserve_simulation_scenario,
+                body.gatewayContext,
+                access_key,
+                require_scope=True,
+                model_sha256=model_sha256,
+            )
         if config.execution_mode() == "process":
-            return await asyncio.to_thread(
-                process_runner.run,
-                fmu_path,
-                access_key=access_key,
+            cancel_event = threading.Event()
+            worker_task = asyncio.create_task(
+                asyncio.to_thread(
+                    process_runner.run,
+                    fmu_path,
+                    access_key=access_key,
+                    parameters=body.parameters or {},
+                    options=body.options,
+                    cancel_event=cancel_event,
+                    authorization_expires_at=auth_expiry,
+                    reservation_ends_at=reservation_end,
+                    resource_policy=policy,
+                )
+            )
+            try:
+                result = await asyncio.shield(worker_task)
+            except asyncio.CancelledError:
+                cancel_event.set()
+                try:
+                    await asyncio.shield(worker_task)
+                except Exception:
+                    pass
+                raise
+            return attach_run_evidence(
+                result,
+                model_sha256=model_sha256,
                 parameters=body.parameters or {},
-                options=body.options,
+                options=evidence_options,
+                policy=applied_execution_policy(policy, evidence_options),
             )
 
+        if slot is None:
+            raise RuntimeError("In-process FMU session was not initialized")
         slot.load()
         start = body.options.get("startTime", 0.0)
         stop = body.options.get("stopTime", 1.0)
@@ -316,19 +564,45 @@ async def run_simulation(body: SimulationBody):
             stop_time=float(stop),
             step_size=float(step) if step is not None else None,
             parameters=body.parameters or None,
+            early_return_allowed=body.options.get("earlyReturnAllowed", False),
         )
         result = slot.run_until(float(stop), step_size=float(step) if step is not None else None)
         outputs = slot.get_outputs()
-        return {
+        selected_outputs = outputs.get("outputs", {})
+        if body.options.get("outputVariables") is not None:
+            selected_outputs = {name: selected_outputs[name] for name in body.options["outputVariables"]}
+        result_payload = {
             "type": "sim.result",
             "time": result["time"],
             "state": "terminated",
-            "outputs": outputs.get("outputs", {}),
+            "outputs": selected_outputs,
+            "outputVariables": list(selected_outputs),
+            "finishReason": result.get("finishReason"),
         }
+        return attach_run_evidence(
+            result_payload,
+            model_sha256=model_sha256,
+            parameters=body.parameters or {},
+            options=evidence_options,
+            policy=applied_execution_policy(policy, evidence_options),
+        )
     except process_runner.ProcessExecutionError as exc:
-        raise HTTPException(status_code=504 if exc.code == "FMU_EXECUTION_TIMEOUT" else 500, detail=exc.code) from exc
+        status = {
+            "FMU_EXECUTION_TIMEOUT": 504,
+            "FMU_ARCHIVE_SIZE_LIMIT_EXCEEDED": 413,
+            "FMU_SNAPSHOT_HASH_MISMATCH": 409,
+            "EXECUTION_AUTHORIZATION_EXPIRED": 403,
+            "RESERVATION_ENDED": 403,
+            "RESULT_SIZE_LIMIT_EXCEEDED": 413,
+            "FMU_WORKER_ISOLATION_UNAVAILABLE": 503,
+            "FMU_WORKER_START_FAILED": 503,
+            "FMU_PROCESS_ISOLATION_REQUIRED": 409,
+        }.get(exc.code, 500)
+        raise HTTPException(status_code=status, detail=exc.code) from exc
     finally:
-        engine.remove_session(slot.session_id)
+        if slot is not None:
+            slot.terminate()
+        engine.release_capacity(capacity_token)
 
 
 @app.post("/internal/fmu/simulations/jobs", status_code=202, dependencies=[Depends(_check_token)])
@@ -413,25 +687,77 @@ async def stream_simulation(body: SimulationBody):
     access_key = _validated_access_key(body.accessKey)
     if body.gatewayContext is not None:
         auth.validate_gateway_context(body.gatewayContext, access_key)
-        await asyncio.to_thread(_reserve_simulation_scenario, body.gatewayContext, access_key, require_scope=True)
+        if config.execution_mode() != "process":
+            raise HTTPException(status_code=409, detail="FMU_PROCESS_ISOLATION_REQUIRED")
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
     _validate_backend_options(body.options)
-    fmu_path = fmu_storage.get_fmu_path(access_key)
+    _validate_parameters(body.parameters or {})
+    policy = model_execution_policy(body.gatewayContext)
+    _validate_options(access_key, body.options, policy)
+    if body.gatewayContext is not None:
+        auth_expiry, reservation_end = execution_deadlines(body.gatewayContext)
+    else:
+        auth_expiry = reservation_end = None
+    source_report = fmu_storage.inspect_fmu(access_key, include_hash=False)
+    if not source_report["archiveValid"] or not source_report["modelDescriptionValid"] or not source_report["stationCompatible"]:
+        raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": source_report["issues"][:8]})
+    fmu_path, model_sha256 = fmu_storage.snapshot_fmu(fmu_storage.get_fmu_path(access_key))
+    report = fmu_storage.inspect_fmu_path(fmu_path, access_key=access_key, include_hash=False)
+    if not report["archiveValid"] or not report["modelDescriptionValid"] or not report["stationCompatible"]:
+        raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": report["issues"][:8]})
+    model_metadata = fmu_storage.describe_path(fmu_path)
+    _validate_options(access_key, body.options, policy, model_metadata=model_metadata)
+    evidence_options = effective_execution_options(
+        model_metadata,
+        body.options,
+        early_return_default=config.execution_mode() == "process",
+    )
+    slot: engine.FmuSession | None = None
+    capacity_token = None
     try:
-        slot = engine.create_session(fmu_path)
-    except engine.CapacityExceededError:
-        return StreamingResponse(
-            iter([json.dumps({
-                "type": "error",
-                "code": "STATION_CAPACITY_EXHAUSTED",
-                "message": "Station execution capacity is exhausted",
-                "retryable": True,
-            }) + "\n"]),
-            media_type="application/x-ndjson",
-        )
+        capacity_token = engine.reserve_capacity()
+        if config.execution_mode() != "process":
+            slot = engine.FmuSession(f"stream_{secrets.token_hex(6)}", fmu_path, access_key=access_key)
+    except engine.CapacityExceededError as exc:
+        raise HTTPException(status_code=429, detail="STATION_CAPACITY_EXHAUSTED") from exc
+
+    try:
+        if body.gatewayContext is not None:
+            await asyncio.to_thread(
+                _reserve_simulation_scenario,
+                body.gatewayContext,
+                access_key,
+                require_scope=True,
+                model_sha256=model_sha256,
+            )
+    except Exception:
+        if slot is not None:
+            slot.terminate()
+        engine.release_capacity(capacity_token)
+        raise
+
+    capacity_release_lock = threading.Lock()
+    capacity_released = False
+
+    def _release_stream_capacity() -> None:
+        nonlocal capacity_released
+        with capacity_release_lock:
+            if capacity_released:
+                return
+            capacity_released = True
+        try:
+            if slot is not None:
+                slot.terminate()
+        finally:
+            engine.release_capacity(capacity_token)
 
     def _generate():
+        stream_digest = hashlib.sha256()
+
+        def encode_line(payload: dict[str, Any]) -> str:
+            return json.dumps(payload, default=str, separators=(",", ":"), allow_nan=False) + "\n"
+
         try:
             if config.execution_mode() == "process":
                 for snapshot in process_runner.stream(
@@ -439,9 +765,29 @@ async def stream_simulation(body: SimulationBody):
                     access_key=access_key,
                     parameters=body.parameters or {},
                     options=body.options,
+                    authorization_expires_at=auth_expiry,
+                    reservation_ends_at=reservation_end,
+                    resource_policy=policy,
                 ):
-                    yield json.dumps(snapshot, default=str) + "\n"
+                    if snapshot.get("type") == "sim.done":
+                        policy_evidence = applied_execution_policy(policy, evidence_options)
+                        evidence = build_execution_evidence(
+                            model_sha256=model_sha256,
+                            parameters=body.parameters or {},
+                            options=evidence_options,
+                            result={"ndjsonSha256": stream_digest.hexdigest()},
+                            finish_reason=snapshot.get("finishReason") or "completed",
+                            policy=policy_evidence,
+                            result_sha256=stream_digest.hexdigest(),
+                        )
+                        snapshot = {**snapshot, "fmuSha256": model_sha256, "evidence": evidence}
+                    line = encode_line(snapshot)
+                    if snapshot.get("type") not in {"sim.done", "error"}:
+                        stream_digest.update(line.encode("utf-8"))
+                    yield line
             else:
+                if slot is None:
+                    raise RuntimeError("In-process FMU session was not initialized")
                 slot.load()
                 start = body.options.get("startTime", 0.0)
                 stop = body.options.get("stopTime", 1.0)
@@ -451,20 +797,44 @@ async def stream_simulation(body: SimulationBody):
                     stop_time=float(stop),
                     step_size=float(step) if step is not None else None,
                     parameters=body.parameters or None,
+                    early_return_allowed=body.options.get("earlyReturnAllowed", False),
                 )
                 for snapshot in slot.run_until_streaming(
                     float(stop),
                     step_size=float(step) if step is not None else None,
                 ):
-                    yield json.dumps(snapshot, default=str) + "\n"
-                yield json.dumps({"type": "sim.done", "time": float(stop)}) + "\n"
+                    line = encode_line(snapshot)
+                    stream_digest.update(line.encode("utf-8"))
+                    yield line
+                final_payload = {
+                    "type": "sim.done",
+                    "time": float(slot._time),
+                    "finishReason": slot._finished_reason,
+                }
+                final_evidence = build_execution_evidence(
+                    model_sha256=model_sha256,
+                    parameters=body.parameters or {},
+                    options=evidence_options,
+                    result={"ndjsonSha256": stream_digest.hexdigest()},
+                    finish_reason=slot._finished_reason or "completed",
+                    policy=applied_execution_policy(policy, evidence_options),
+                    result_sha256=stream_digest.hexdigest(),
+                )
+                yield encode_line({**final_payload, "fmuSha256": model_sha256, "evidence": final_evidence})
+        except process_runner.ProcessExecutionError as exc:
+            logger.warning("FMU streaming execution stopped: %s", exc.code)
+            yield json.dumps({"type": "error", "code": exc.code, "retryable": exc.retryable}) + "\n"
         except Exception:
             logger.exception("FMU streaming simulation failed")
             yield json.dumps({"type": "error", "message": "FMU simulation failed"}) + "\n"
         finally:
-            engine.remove_session(slot.session_id)
+            _release_stream_capacity()
 
-    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        _generate(),
+        media_type="application/x-ndjson",
+        background=BackgroundTask(_release_stream_capacity),
+    )
 
 
 # ── Realtime WebSocket sessions ──────────────────────────────────
@@ -484,6 +854,7 @@ async def ws_sessions(ws: WebSocket):
     _runner_task: asyncio.Task | None = None
     _expiry_task: asyncio.Task | None = None
     attachment_owner = object()
+    _output_sampler_changed = asyncio.Event()
 
     async def _stop_runner() -> None:
         nonlocal _runner_task
@@ -491,28 +862,53 @@ async def ws_sessions(ws: WebSocket):
         _runner_task = None
         if task and task is not asyncio.current_task():
             task.cancel()
-            with suppress(asyncio.CancelledError):
+            try:
                 await task
+            except asyncio.CancelledError:
+                pass
 
     async def _run_session() -> None:
         try:
+            simulated_origin = session._time if session else 0.0
+            wall_origin = time.monotonic()
+            last_progress = wall_origin
+            progress_interval = config.FMU_PROGRESS_INTERVAL_MS / 1000.0
             while session and session.state == "running" and not session._terminated:
-                await asyncio.to_thread(session.step)
-                await ws.send_text(json.dumps({
-                    "type": "sim.progress",
-                    "sessionId": session.session_id,
-                    "simTime": session._time,
-                }))
-                if session._time >= session._stop_time - 1e-12:
-                    session._state = "stopped"
+                result = await asyncio.to_thread(session.step)
+                now = time.monotonic()
+                finished = bool(result.get("finished")) or session.state == "stopped"
+                if finished or now - last_progress >= progress_interval:
+                    await ws.send_text(json.dumps({
+                        "type": "sim.progress",
+                        "sessionId": session.session_id,
+                        "simTime": session._time,
+                        "timeAdvanced": result.get("timeAdvanced", 0.0),
+                        "earlyReturn": result.get("earlyReturn", False),
+                        "eventOccurred": result.get("eventOccurred", False),
+                        "eventHandlingNeeded": result.get("eventHandlingNeeded", False),
+                        "terminateSimulation": result.get("terminateSimulation", False),
+                    }))
+                    last_progress = now
+                if finished:
                     await ws.send_text(json.dumps({
                         "type": "sim.state",
                         "sessionId": session.session_id,
                         "state": "stopped",
                         "simTime": session._time,
+                        "reason": session._finished_reason,
                     }))
                     return
-                await asyncio.sleep(min(max(session._step_size, 0.01), 1.0))
+                if session._time_mode == "realtime":
+                    target_wall_time = wall_origin + (session._time - simulated_origin) / session._playback_speed
+                    delay = target_wall_time - time.monotonic()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                else:
+                    # Keep the event loop responsive while simulating as fast as
+                    # the FMU permits; output subscriptions have their own rate cap.
+                    await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            return
         except Exception:
             logger.exception("FMU realtime runner failed")
             if session and not session._terminated:
@@ -524,11 +920,8 @@ async def ws_sessions(ws: WebSocket):
                         "state": "error",
                         "simTime": session._time,
                     }))
-                except Exception as send_error:
-                    logger.debug(
-                        "Could not send FMU realtime error state (%s)",
-                        type(send_error).__name__,
-                    )
+                except Exception:
+                    pass
 
     def _start_runner() -> None:
         nonlocal _runner_task
@@ -538,21 +931,37 @@ async def ws_sessions(ws: WebSocket):
     async def _expire_session_after_deadline(expiring_session: Any):
         nonlocal session
         try:
-            expires_at = expiring_session.expires_at
-            if expires_at is None:
+            deadlines: list[tuple[float, str]] = []
+            if expiring_session.expires_at is not None:
+                auth_expiry = float(expiring_session.expires_at)
+                if not math.isfinite(auth_expiry):
+                    raise ValueError("Authorization expiry must be finite")
+                deadlines.append((auth_expiry, "expired"))
+            context = getattr(expiring_session, "gateway_context", {}) or {}
+            claims = context.get("claims") or {} if isinstance(context, dict) else {}
+            reservation_end = context.get("reservationEndsAt") if isinstance(context, dict) else None
+            if reservation_end is None and isinstance(claims, dict):
+                reservation_end = claims.get("reservationEndsAt")
+            if reservation_end is not None:
+                reservation_ends_at = float(reservation_end)
+                if not math.isfinite(reservation_ends_at):
+                    raise ValueError("Reservation end must be finite")
+                deadlines.append((reservation_ends_at, "reservation_ended"))
+            if not deadlines:
                 return
-            expires_at = float(expires_at)
+            expires_at, finish_reason = min(deadlines, key=lambda item: item[0])
             await asyncio.sleep(max(0.0, expires_at - time.time()))
-            if session is not expiring_session or expiring_session._terminated:
+            if session is not expiring_session:
                 return
+            await _stop_runner()
             await asyncio.to_thread(engine.remove_session, expiring_session.session_id)
             session = None
             await ws.send_text(json.dumps({
                 "type": "session.closed",
                 "sessionId": expiring_session.session_id,
-                "reason": "expired",
+                "reason": finish_reason,
             }))
-            await ws.close(code=4003, reason="SESSION_EXPIRED")
+            await ws.close(code=4003, reason="RESERVATION_ENDED" if finish_reason == "reservation_ended" else "SESSION_EXPIRED")
         except asyncio.CancelledError:
             return
         except (TypeError, ValueError):
@@ -564,11 +973,33 @@ async def ws_sessions(ws: WebSocket):
         """Background task that streams subscribed outputs to the WS client."""
         try:
             while True:
-                if session and session.subscription and session._initialised and not session._terminated:
-                    payload = await asyncio.to_thread(session.sample_subscription)
-                    if payload:
-                        await ws.send_text(json.dumps(payload, default=str))
-                await asyncio.sleep(0.01)  # 10 ms polling resolution
+                active_session = session
+                subscription = active_session.subscription if active_session else None
+                if (
+                    not active_session
+                    or not subscription
+                    or not active_session._initialised
+                    or active_session._terminated
+                ):
+                    _output_sampler_changed.clear()
+                    await _output_sampler_changed.wait()
+                    continue
+
+                wait_seconds = subscription.seconds_until_due()
+                read_waiter = getattr(active_session, "output_read_wait_seconds", None)
+                if callable(read_waiter):
+                    wait_seconds = max(wait_seconds, read_waiter())
+                if wait_seconds > 0:
+                    try:
+                        await asyncio.wait_for(_output_sampler_changed.wait(), timeout=wait_seconds)
+                    except asyncio.TimeoutError:
+                        pass
+                    _output_sampler_changed.clear()
+                    continue
+
+                payload = await asyncio.to_thread(active_session.sample_subscription)
+                if payload:
+                    await ws.send_text(json.dumps(payload, default=str))
         except WebSocketDisconnect:
             logger.debug("Output emitter stopped after WebSocket disconnect")
         except asyncio.CancelledError:
@@ -601,11 +1032,16 @@ async def ws_sessions(ws: WebSocket):
                             _expiry_task = None
                         session = bound_session
                         bound_session.mark_attached(attachment_owner)
-                        if bound_session.expires_at is not None:
+                        gateway_claims = (bound_session.gateway_context or {}).get("claims", {})
+                        gateway_reservation_end = (bound_session.gateway_context or {}).get("reservationEndsAt")
+                        if gateway_reservation_end is None and isinstance(gateway_claims, dict):
+                            gateway_reservation_end = gateway_claims.get("reservationEndsAt")
+                        if bound_session.expires_at is not None or gateway_reservation_end is not None:
                             _expiry_task = asyncio.create_task(_expire_session_after_deadline(bound_session))
-                        # Start emitter task on session creation
+                        # Start emitter task on session creation and wake it if it already exists.
                         if _emitter_task is None or _emitter_task.done():
                             _emitter_task = asyncio.create_task(_output_emitter())
+                        _output_sampler_changed.set()
                 elif msg_type == "session.terminate":
                     await _stop_runner()
                     if _expiry_task:
@@ -614,6 +1050,15 @@ async def ws_sessions(ws: WebSocket):
                     if session:
                         await asyncio.to_thread(engine.remove_session, session.session_id)
                     session = None
+                    _output_sampler_changed.set()
+                elif msg_type in (
+                    "sim.initialize",
+                    "sim.reset",
+                    "sim.resume",
+                    "sim.subscribeOutputs",
+                    "sim.unsubscribeOutputs",
+                ):
+                    _output_sampler_changed.set()
 
                 if request_id:
                     response["requestId"] = request_id
@@ -621,9 +1066,22 @@ async def ws_sessions(ws: WebSocket):
 
             except HTTPException as exc:
                 detail = exc.detail or ""
-                # Extract short code from detail strings like "INVALID_COMMAND – ..."
-                code = detail.split(" \u2013 ")[0].split(" - ")[0].strip() if detail else "ERROR"
-                err = {"type": "error", "code": code, "message": detail, "retryable": False}
+                if isinstance(detail, dict):
+                    code = str(detail.get("code") or "ERROR")
+                    message = code
+                    err: dict[str, Any] = {
+                        "type": "error",
+                        "code": code,
+                        "message": detail.get("message") or message,
+                        "retryable": bool(detail.get("retryable", False)),
+                    }
+                    for field in ("remaining", "retryAfterMs"):
+                        if field in detail:
+                            err[field] = detail.get(field)
+                else:
+                    # Extract short code from detail strings like "INVALID_COMMAND – ..."
+                    code = detail.split(" \u2013 ")[0].split(" - ")[0].strip() if detail else "ERROR"
+                    err = {"type": "error", "code": code, "message": detail, "retryable": False}
                 if request_id:
                     err["requestId"] = request_id
                 await ws.send_text(json.dumps(err))
@@ -663,7 +1121,11 @@ async def ws_sessions(ws: WebSocket):
             )
 
 
-def _sim_outputs_payload(session: engine.FmuSession, outputs: dict[str, Any]) -> dict[str, Any]:
+def _sim_outputs_payload(
+    session: engine.FmuSession,
+    outputs: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     next_sequence = getattr(session, "next_sequence", None)
     sequence = next_sequence() if callable(next_sequence) else session.seq
     payload = {
@@ -676,7 +1138,26 @@ def _sim_outputs_payload(session: engine.FmuSession, outputs: dict[str, Any]) ->
     }
     if not callable(next_sequence):
         session.seq += 1
+    if metadata:
+        for key in (
+            "requestedTime", "timeAdvanced", "earlyReturn", "eventOccurred", "eventHandlingNeeded",
+            "terminateSimulation", "finished", "finishReason", "steps",
+        ):
+            if key in metadata:
+                payload[key] = metadata[key]
     return payload
+
+
+def _output_read_rate_limit_exception(exc: process_runner.OutputReadRateLimitError) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail={
+            "code": "OUTPUT_READ_RATE_LIMITED",
+            "message": str(exc),
+            "retryable": True,
+            "retryAfterMs": exc.retry_after_ms,
+        },
+    )
 
 
 async def _handle_ws_message(
@@ -701,12 +1182,22 @@ async def _handle_ws_message(
             raise HTTPException(400, "Missing accessKey in gatewayContext")
         access_key = _validated_access_key(access_key)
         auth.validate_gateway_context(gateway_ctx, access_key)
+        _validate_active_reservation_deadline(gateway_ctx)
+        if config.execution_mode() != "process":
+            raise HTTPException(status_code=409, detail="FMU_PROCESS_ISOLATION_REQUIRED")
 
         if not fmu_storage.fmu_exists(access_key):
             raise HTTPException(404, "FMU_NOT_FOUND")
-        fmu_path = fmu_storage.get_fmu_path(access_key)
+        source_report = fmu_storage.inspect_fmu(access_key, include_hash=False)
+        if not source_report["archiveValid"] or not source_report["modelDescriptionValid"] or not source_report["stationCompatible"]:
+            raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": source_report["issues"][:8]})
+        fmu_path, model_sha256 = fmu_storage.snapshot_fmu(fmu_storage.get_fmu_path(access_key))
+        report = fmu_storage.inspect_fmu_path(fmu_path, access_key=access_key, include_hash=False)
+        if not report["archiveValid"] or not report["modelDescriptionValid"] or not report["stationCompatible"]:
+            raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": report["issues"][:8]})
         claims = (gateway_ctx.get("claims") or {})
         exp = claims.get("exp")
+        policy = model_execution_policy(gateway_ctx)
         try:
             session_factory = (
                 process_runner.RealtimeSession
@@ -720,9 +1211,11 @@ async def _handle_ws_message(
                 expires_at=exp,
                 gateway_context=gateway_ctx,
                 session_factory=session_factory,
+                resource_policy=policy if config.execution_mode() == "process" else None,
             )
         except engine.CapacityExceededError as exc:
             raise HTTPException(429, "STATION_CAPACITY_EXHAUSTED") from exc
+        new_session.fmu_sha256 = model_sha256
         try:
             await asyncio.to_thread(new_session.load)
         except Exception:
@@ -734,6 +1227,7 @@ async def _handle_ws_message(
             "sessionId": new_session.session_id,
             "serverTime": time.time(),
             "expiresAt": new_session.expires_at,
+            "fmuSha256": model_sha256,
             "capabilities": {
                 "modelDescribe": True,
                 "getState": True,
@@ -744,7 +1238,7 @@ async def _handle_ws_message(
                 "step": True,
                 "setInputs": True,
                 "streamOutputs": True,
-                "timeMode": ["simtime"],
+                "timeMode": ["simtime", "realtime", "external"],
             },
             "_session": new_session,
         }
@@ -816,27 +1310,78 @@ async def _handle_ws_message(
 
     if msg_type == "sim.initialize":
         options = msg.get("options", {})
-        params = msg.get("parameters", {})
-        if not isinstance(options, dict) or not isinstance(params, dict):
+        root_params = msg.get("parameters", {})
+        if not isinstance(options, dict) or not isinstance(root_params, dict):
             raise HTTPException(status_code=422, detail="INVALID_SIMULATION_REQUEST")
-        await asyncio.to_thread(_reserve_simulation_scenario, session.gateway_context, access_key)
+        option_params = options.get("inputs", root_params)
+        if not isinstance(option_params, dict) or (root_params and option_params != root_params):
+            raise HTTPException(status_code=422, detail="INVALID_SIMULATION_REQUEST - conflicting inputs")
+        params = option_params
+        time_mode = options.get("timeMode", "simtime")
+        if not isinstance(time_mode, str) or time_mode not in {"simtime", "realtime", "external"}:
+            raise HTTPException(status_code=400, detail="INVALID_TIME_MODE")
+        try:
+            start_time = _strict_number(options.get("startTime", 0.0), "startTime")
+            stop_time = _strict_number(options.get("stopTime", 1.0), "stopTime")
+            step_value = _strict_number(options["stepSize"], "stepSize") if options.get("stepSize") is not None else None
+            playback_speed = _strict_number(options.get("playbackSpeed", 1.0), "playbackSpeed")
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="INVALID_SIMULATION_OPTIONS") from exc
+        effective_step = step_value if step_value is not None else (
+            float(session._md.defaultExperiment.stepSize)
+            if session._md and session._md.defaultExperiment and session._md.defaultExperiment.stepSize
+            else 0.001
+        )
+        if (
+            not all(math.isfinite(value) for value in (start_time, stop_time, effective_step, playback_speed))
+            or stop_time <= start_time
+            or not math.isfinite(stop_time - start_time)
+            or effective_step <= 0
+            or not 0.1 <= playback_speed <= 100.0
+        ):
+            raise HTTPException(status_code=400, detail="INVALID_SIMULATION_OPTIONS")
+        early_return_allowed = options.get("earlyReturnAllowed", False)
+        if type(early_return_allowed) is not bool:
+            raise HTTPException(status_code=400, detail="INVALID_SIMULATION_OPTIONS")
+        try:
+            await asyncio.to_thread(session.validate_initial_values, params)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"INVALID_INPUT - {exc}") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=f"INVALID_SESSION_STATE - {exc}") from exc
+        await asyncio.to_thread(
+            _reserve_simulation_scenario,
+            session.gateway_context,
+            access_key,
+            model_sha256=getattr(session, "fmu_sha256", None),
+        )
         if stop_runner is not None:
             await stop_runner()
-        await asyncio.to_thread(
-            session.initialize,
-            start_time=float(options.get("startTime", 0.0)),
-            stop_time=float(options.get("stopTime", 1.0)),
-            step_size=float(options.get("stepSize")) if options.get("stepSize") is not None else None,
-            parameters=params or None,
-        )
+        try:
+            await asyncio.to_thread(
+                session.initialize,
+                start_time=start_time,
+                stop_time=stop_time,
+                step_size=step_value,
+                parameters=params or None,
+                time_mode=time_mode,
+                playback_speed=playback_speed,
+                early_return_allowed=early_return_allowed,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"INVALID_SIMULATION_OPTIONS - {exc}") from exc
         return {
             "type": "sim.state",
             "sessionId": session.session_id,
             "state": session.state,
             "simTime": session._time,
+            "timeMode": session._time_mode,
+            "playbackSpeed": session._playback_speed,
         }
 
     if msg_type == "sim.start":
+        if session._time_mode == "external":
+            raise HTTPException(409, "EXTERNAL_STEP_MODE")
         if session.state not in ("initialized", "paused"):
             raise HTTPException(409, f"Cannot start from state {session.state}")
         await asyncio.to_thread(session.resume)
@@ -861,6 +1406,8 @@ async def _handle_ws_message(
         }
 
     if msg_type == "sim.resume":
+        if session._time_mode == "external":
+            raise HTTPException(409, "EXTERNAL_STEP_MODE")
         await asyncio.to_thread(session.resume)
         if start_runner is not None:
             start_runner()
@@ -872,10 +1419,24 @@ async def _handle_ws_message(
         }
 
     if msg_type == "sim.reset":
-        await asyncio.to_thread(_reserve_simulation_scenario, session.gateway_context, access_key)
+        defer_initialization = msg.get("deferInitialization", False)
+        if type(defer_initialization) is not bool:
+            raise HTTPException(400, "INVALID_RESET_OPTIONS")
+        if not defer_initialization:
+            await asyncio.to_thread(
+                _reserve_simulation_scenario,
+                session.gateway_context,
+                access_key,
+                model_sha256=getattr(session, "fmu_sha256", None),
+            )
         if stop_runner is not None:
             await stop_runner()
-        await asyncio.to_thread(session.reset)
+        try:
+            await asyncio.to_thread(session.reset, defer_initialization=defer_initialization)
+        except RuntimeError as exc:
+            raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
+        except ValueError as exc:
+            raise HTTPException(400, f"INVALID_RESET_OPTIONS - {exc}") from exc
         return {
             "type": "sim.state",
             "sessionId": session.session_id,
@@ -885,30 +1446,84 @@ async def _handle_ws_message(
 
     if msg_type == "sim.step":
         step_size = msg.get("deltaT", msg.get("stepSize"))
-        await asyncio.to_thread(session.step, float(step_size) if step_size is not None else None)
-        outputs = await asyncio.to_thread(session.get_outputs)
-        return _sim_outputs_payload(session, outputs["outputs"])
+        try:
+            current_point = msg.get("currentCommunicationPoint", msg.get("currentTime"))
+            if session._time_mode == "external" and current_point is None:
+                raise ValueError("currentCommunicationPoint is required in external-step mode")
+            if current_point is not None:
+                requested_current_time = _strict_number(current_point, "currentCommunicationPoint")
+                tolerance = max(1e-12, abs(session._time) * 1e-12)
+                if abs(requested_current_time - session._time) > tolerance:
+                    raise ValueError("currentCommunicationPoint does not match the session time")
+            delta = _strict_number(step_size, "deltaT") if step_size is not None else None
+            step_with_outputs = getattr(session, "step_with_outputs", None)
+            if callable(step_with_outputs):
+                step_result, outputs = await asyncio.to_thread(step_with_outputs, delta)
+            else:
+                step_result = await asyncio.to_thread(session.step, delta)
+                outputs = await asyncio.to_thread(session.get_outputs)
+        except process_runner.OutputReadRateLimitError as exc:
+            raise _output_read_rate_limit_exception(exc) from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"INVALID_STEP - {exc}") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
+        return _sim_outputs_payload(session, outputs["outputs"], step_result)
 
     if msg_type == "sim.runUntil":
         target = msg.get("time", msg.get("targetTime"))
         if target is None:
             raise HTTPException(400, "INVALID_COMMAND – missing targetTime")
+        if session._time_mode == "external":
+            raise HTTPException(409, "EXTERNAL_STEP_MODE")
         step_size = msg.get("stepSize", msg.get("deltaT"))
-        await asyncio.to_thread(
-            session.run_until,
-            float(target),
-            step_size=float(step_size) if step_size is not None else None,
-        )
-        outputs = await asyncio.to_thread(session.get_outputs)
-        return _sim_outputs_payload(session, outputs["outputs"])
+        try:
+            target_time = _strict_number(target, "targetTime")
+            requested_step_size = (
+                _strict_number(step_size, "stepSize")
+                if step_size is not None
+                else None
+            )
+            run_until_with_outputs = getattr(session, "run_until_with_outputs", None)
+            if callable(run_until_with_outputs):
+                run_result, outputs = await asyncio.to_thread(
+                    run_until_with_outputs,
+                    target_time,
+                    requested_step_size,
+                )
+            else:
+                run_result = await asyncio.to_thread(
+                    session.run_until,
+                    target_time,
+                    step_size=requested_step_size,
+                )
+                outputs = await asyncio.to_thread(session.get_outputs)
+        except process_runner.OutputReadRateLimitError as exc:
+            raise _output_read_rate_limit_exception(exc) from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"INVALID_RUN_UNTIL - {exc}") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
+        return _sim_outputs_payload(session, outputs["outputs"], run_result)
 
     if msg_type == "sim.setInputs":
         values = msg.get("values", {})
         if not isinstance(values, dict):
             raise HTTPException(400, "sim.setInputs requires an object 'values'")
         if values:
-            await asyncio.to_thread(_reserve_simulation_scenario, session.gateway_context, access_key)
-        await asyncio.to_thread(session.set_inputs, values)
+            try:
+                await asyncio.to_thread(session.validate_inputs, values)
+            except ValueError as exc:
+                raise HTTPException(400, f"INVALID_INPUT - {exc}") from exc
+            except RuntimeError as exc:
+                raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
+            await asyncio.to_thread(_reserve_input_update, session.gateway_context, access_key, values)
+        try:
+            await asyncio.to_thread(session.set_inputs, values)
+        except ValueError as exc:
+            raise HTTPException(400, f"INVALID_INPUT - {exc}") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
         return {
             "type": "sim.inputs.updated",
             "sessionId": session.session_id,
@@ -923,26 +1538,73 @@ async def _handle_ws_message(
             model_description = session._md
             if model_description is None:
                 raise HTTPException(409, "MODEL_DESCRIPTION_NOT_LOADED")
+            output_names = {
+                variable.name for variable in model_description.modelVariables
+                if variable.causality == "output"
+            }
+            if any(not isinstance(name, str) for name in variables) or set(variables) - output_names:
+                raise HTTPException(400, "UNKNOWN_OUTPUT_VARIABLE")
             selected = set(variables)
             refs = [
                 int(variable.valueReference)
                 for variable in model_description.modelVariables
-                if variable.name in selected
+                if variable.name in selected and variable.causality == "output"
             ]
         else:
             refs = msg.get("valueReferences")
-        result = await asyncio.to_thread(session.get_outputs, refs)
+            if refs is not None and (
+                not isinstance(refs, list)
+                or any(isinstance(ref, bool) or not isinstance(ref, int) for ref in refs)
+            ):
+                raise HTTPException(400, "INVALID_VALUE_REFERENCES")
+        limited_get_outputs = getattr(session, "get_outputs_limited", None)
+        try:
+            if callable(limited_get_outputs):
+                result = await asyncio.to_thread(limited_get_outputs, refs)
+            else:
+                result = await asyncio.to_thread(session.get_outputs, refs)
+        except process_runner.OutputReadRateLimitError as exc:
+            raise _output_read_rate_limit_exception(exc) from exc
         return _sim_outputs_payload(session, result["outputs"])
 
     if msg_type == "sim.subscribeOutputs":
         variables = msg.get("variables")
         if variables is not None and not isinstance(variables, list):
             raise HTTPException(400, "sim.subscribeOutputs requires 'variables' as array")
+        if variables is not None:
+            output_names = {
+                variable.name for variable in (session._md.modelVariables if session._md else [])
+                if variable.causality == "output"
+            }
+            if any(not isinstance(name, str) for name in variables) or set(variables) - output_names:
+                raise HTTPException(400, "UNKNOWN_OUTPUT_VARIABLE")
+        try:
+            period_value = msg.get("periodMs", 100)
+            batch_value = msg.get("maxBatchSize", 64)
+            if isinstance(period_value, bool) or not isinstance(period_value, int):
+                raise ValueError("periodMs must be an integer")
+            if isinstance(batch_value, bool) or not isinstance(batch_value, int):
+                raise ValueError("maxBatchSize must be an integer")
+            period_ms = period_value
+            max_batch_size = batch_value
+            max_hz = (
+                _strict_number(msg["maxHz"], "maxHz")
+                if msg.get("maxHz") is not None
+                else float(config.MAX_OUTPUT_SUBSCRIPTION_HZ)
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "INVALID_OUTPUT_SUBSCRIPTION") from exc
+        if (
+            not 1 <= period_ms <= 60000
+            or not 1 <= max_batch_size <= config.MAX_OUTPUT_SUBSCRIPTION_BATCH
+            or (max_hz is not None and (not math.isfinite(max_hz) or not 0 < max_hz <= config.MAX_OUTPUT_SUBSCRIPTION_HZ))
+        ):
+            raise HTTPException(400, "INVALID_OUTPUT_SUBSCRIPTION")
         subscription = engine.OutputSubscription(
             variables=variables,
-            period_ms=max(1, int(msg.get("periodMs", 100))),
-            max_batch_size=max(1, int(msg.get("maxBatchSize", 64))),
-            max_hz=float(msg["maxHz"]) if msg.get("maxHz") is not None else None,
+            period_ms=period_ms,
+            max_batch_size=max_batch_size,
+            max_hz=max_hz,
         )
         session.subscription = subscription
         return {

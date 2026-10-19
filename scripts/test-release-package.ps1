@@ -1,3 +1,7 @@
+param(
+    [string]$SmartFactoryExamplePath = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("lab-station-release-test-" + [Guid]::NewGuid().ToString('N'))
@@ -37,7 +41,14 @@ try {
     Set-Content -LiteralPath (Join-Path $runtimeDir 'FMUExecutor.exe') -Value 'test-FMUExecutor.exe' -NoNewline
     Set-Content -LiteralPath (Join-Path $runtimeDir '_internal\python312.dll') -Value 'test-python-runtime' -NoNewline
 
-    & $packageScript -DistPath $distPath -OutputPath $outputPath
+    if ([string]::IsNullOrWhiteSpace($SmartFactoryExamplePath)) {
+        $SmartFactoryExamplePath = $env:FMU_EXECUTOR_SMART_FACTORY_EXAMPLE_PATH
+    }
+    if ([string]::IsNullOrWhiteSpace($SmartFactoryExamplePath)) {
+        $SmartFactoryExamplePath = Join-Path $PSScriptRoot '..\..\FMU-Executor\examples\smart-factory-cell'
+    }
+
+    & $packageScript -DistPath $distPath -OutputPath $outputPath -SmartFactoryExamplePath $SmartFactoryExamplePath
     Assert-Condition $? 'Release package script failed.'
     Assert-Condition (Test-Path -LiteralPath $outputPath) 'Release package ZIP was not created.'
 

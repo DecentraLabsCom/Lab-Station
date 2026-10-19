@@ -50,6 +50,23 @@ jobs:
         with:
           ref: ${{ steps.release_meta.outputs.ref }}
 
+      - name: Read pinned FMU Executor commit
+        id: fmu_executor_pin
+        shell: powershell
+        run: |
+          $lock = Get-Content -LiteralPath 'fmu-executor/SOURCE.lock.json' -Raw | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($lock.commit)) {
+            throw 'The FMU Executor source lock does not contain a pinned commit.'
+          }
+          "commit=$($lock.commit)" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
+
+      - name: Checkout canonical Smart Factory example
+        uses: actions/checkout@v7
+        with:
+          repository: DecentraLabsCom/FMU-Executor
+          ref: ${{ steps.fmu_executor_pin.outputs.commit }}
+          path: .fmu-executor-demo-source
+
       - name: Setup portable AutoHotkey v2 + Ahk2Exe
         id: setup-tools
         shell: powershell
@@ -597,7 +614,8 @@ jobs:
         run: |
           .\scripts\package-release.ps1 `
             -DistPath (Join-Path $PWD 'dist') `
-            -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip')
+            -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip') `
+            -SmartFactoryExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-factory-cell')
 
       - name: Extract release notes from the changelog
         shell: powershell

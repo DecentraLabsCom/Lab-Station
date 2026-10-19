@@ -60,7 +60,7 @@ The same integration is visible from the Lab Station **Connectors** panel,
 which reports the FMU endpoint, local model directory, port, token status, and
 the Gateway environment expected for station mode:
 
-![Lab Station FMI/FMU connector](../docs/images/labstation-connectors-fmi.png)
+![Lab Station FMI/FMU connector](docs/images/labstation-connectors-fmi.png)
 
 *FMI/FMU connector view from the Lab Station desktop UI.*
 
@@ -74,11 +74,27 @@ the Gateway environment expected for station mode:
 | `FMU_EXECUTOR_STATE_DIR` | Sibling `state/` beside `FMU_ROOT` | Persistent SQLite job history and quota store |
 | `FMU_INTERNAL_TOKEN` | *(required)* | Shared secret for `X-Internal-Session-Token`; requests fail closed when it is absent |
 | `FMU_INTERNAL_TOKEN_FILE` | *(unset)* | Optional path to a mounted token file; used when the direct token and base64 token are unset |
-| `FMU_MAX_SESSIONS` | `4` | Effective max concurrent FMU executions (one-shot, stream and realtime) |
+| `FMU_MAX_SESSIONS` | `4` | Shared max concurrent FMU executions (runs, jobs, streams, probes and realtime) |
 | `FMU_ATTACH_GRACE_SECONDS` | `120` | How long a disconnected realtime session remains attachable before its FMU state is terminated |
 | `FMU_EXECUTOR_TEMP` | `<FMU_ROOT>/.tmp` | Temp dir for FMU extraction |
-| `FMU_EXECUTION_MODE` | `process` | One-shot/stream execution boundary: `process` (recommended) or `in-process` (diagnostics) |
+| `FMU_EXECUTION_MODE` | `process` | Execution boundary: `process` (recommended) or `in-process` (diagnostics only) |
 | `FMU_EXECUTION_TIMEOUT_SECONDS` | `3600` | Deadline for an isolated one-shot/stream worker |
+| `FMU_MAX_ARCHIVE_BYTES` | `512 MiB` | Maximum compressed FMU size |
+| `FMU_MAX_EXPANDED_BYTES` | `2 GiB` | Maximum total expanded size of archive entries |
+| `FMU_MAX_ARCHIVE_ENTRIES` | `20,000` | Maximum ZIP entries in an FMU |
+| `FMU_MAX_MODEL_DESCRIPTION_BYTES` | `8 MiB` | Maximum `modelDescription.xml` size |
+| `FMU_WORKER_CPU_SECONDS` | `300` | Per-worker CPU-time limit |
+| `FMU_WORKER_MEMORY_MIB` | `1024` | Per-worker memory limit |
+| `FMU_WORKER_FILE_MIB` | `128` | Linux per-file write limit; Windows AppContainer workers have no per-file quota |
+| `FMU_EXECUTOR_COMMIT` | Build metadata | Source commit recorded in execution evidence |
+| `FMU_MAX_INPUT_UPDATE_BYTES` | `65536` | Maximum JSON size for one `sim.setInputs` update |
+| `FMU_MAX_INPUT_UPDATES_PER_DAY` | `100000` | Daily runtime input update limit per reservation and FMU |
+| `FMU_MAX_INPUT_UPDATE_BYTES_PER_DAY` | `67108864` | Daily input payload limit per reservation and FMU |
+| `FMU_MAX_INPUT_UPDATES_PER_WINDOW` | `30` | Short-window input update burst limit |
+| `FMU_INPUT_UPDATE_WINDOW_SECONDS` | `10` | Window for the input update burst limit |
+| `FMU_MAX_OUTPUT_SUBSCRIPTION_HZ` | `60` | Per-session cap for realtime output reads and samples |
+| `FMU_MAX_OUTPUT_SUBSCRIPTION_BATCH` | `256` | Maximum retained samples in a subscription batch |
+| `FMU_PROGRESS_INTERVAL_MS` | `50` | Minimum interval between automatic progress messages |
 | `FMU_OMSIMULATOR_ENABLED` | `false` | Enables OMSimulator discovery for the future composition backend; does not switch current execution automatically |
 | `FMU_OMSIMULATOR_COMMAND` | `OMSimulator` | OMSimulator executable or command name |
 | `FMU_OMSIMULATOR_TIMEOUT_SECONDS` | `3600` | Reserved timeout for the future OMSimulator adapter |
@@ -109,8 +125,9 @@ All endpoints require `X-Internal-Session-Token` header (except `/internal/healt
 | GET | `/internal/health` | Health & diagnostics |
 | GET | `/internal/fmu/catalog` | FMU inventory; `X-FMU-Access-Key` header |
 | GET | `/internal/fmu/describe` | Model description; `X-FMU-Access-Key` header |
+| GET | `/internal/fmu/companion-scene` | Same-stem `.glb` for an FMU; requires both internal and FMU access-key headers |
 | GET | `/internal/fmu/capacity` | Effective execution capacity; internal token required |
-| POST | `/internal/fmu/validate/{access_key}?auto_quarantine=false` | Validates an FMU and optionally quarantines it when invalid |
+| POST | `/internal/fmu/validate/{access_key}?auto_quarantine=false&probe=false` | Reports archive, station compatibility, and an optional isolated execution probe |
 | POST | `/internal/fmu/quarantine/{access_key}?reason=manual` | Explicitly quarantines an FMU |
 | DELETE | `/internal/fmu/quarantine/{access_key}` | Removes an FMU from quarantine |
 | GET | `/internal/fmu/quarantine` | Lists quarantined FMUs |
@@ -126,6 +143,11 @@ All endpoints require `X-Internal-Session-Token` header (except `/internal/healt
 
 `catalog` and `describe` also require the `X-FMU-Access-Key` header. The
 `access_key` path segment is URL-encoded when it contains nested directories.
+`companion-scene` uses that same access key to resolve a sibling `.glb` inside
+`FMU_ROOT`, returns `model/gltf-binary`, and rejects missing, out-of-root, or
+over-50-MiB scenes. Lab Gateway uses the route when the configured FMU backend
+is a Lab Station; local Gateway mode reads its companion scene from local
+`fmu-data`.
 
 `GET /internal/fmu/backends` reports the active FMPy backend and the planned
 OMSimulator backend. The same information is included in `/internal/health`.
@@ -140,9 +162,9 @@ the FMU runtime exposes the corresponding API. Binary values use base64 in the
 JSON contract, and FMI 3 `Int64`/`UInt64` outputs are serialized as strings to
 avoid loss of precision in JavaScript clients.
 
-One-shot and NDJSON streaming simulations run in spawned worker processes.
-Each realtime session also owns a separate spawned worker; the API process keeps
-only the session registry and sends an allowlisted control set over private IPC.
+One-shot, NDJSON streaming, and realtime sessions run in spawned worker
+processes. The API process keeps only the session registry and sends an
+allowlisted control set over private IPC.
 This keeps native FMU crashes and blocking calls scoped to one session while
 preserving session reconnects during the configured grace period. Set
 `FMU_EXECUTION_MODE=in-process` only for diagnostics or environments where
@@ -150,7 +172,100 @@ native FMU isolation is managed elsewhere.
 
 The realtime session advertises `start`, `pause`, `resume`, `reset`, `step`,
 input/output and reconnect capabilities. `reset` recreates the FMU instance
-with the original initialization options and inputs.
+with the original initialization options and inputs. Initialization inputs are
+read from `options.inputs` (the legacy top-level `parameters` object is also
+accepted); runtime writes accept only declared input variables and validate all
+names, types, ranges and array lengths before calling the FMU.
+The FMI proxy uses `sim.reset` with `deferInitialization: true` so a subsequent
+`sim.initialize` can apply the caller's updated experiment and initial inputs.
+
+`sim.initialize.options.timeMode` selects the session clock:
+
+- `simtime` runs automatic sessions as fast as the FMU can advance;
+- `realtime` paces simulated seconds against wall-clock seconds, scaled by
+  `playbackSpeed` (default `1`, allowed range `0.1` through `100`);
+- `external` disables automatic start/resume and `runUntil`; clients advance it
+  with `sim.step` and must send the current `currentCommunicationPoint`.
+
+FMI 3 event mode is negotiated with the FMU and resolved inside the isolated
+Executor before returning a step. Step responses include the last successful
+simulation time, early-return/termination flags, and whether an event occurred.
+Automatic progress messages are throttled independently of `stepSize`. Realtime
+output reads share the `FMU_MAX_OUTPUT_SUBSCRIPTION_HZ` cap per session across
+subscriptions, direct `sim.getOutputs` calls, and the output responses from
+`sim.step` and `sim.runUntil`. Subscription `periodMs` and `maxHz` can request a
+lower rate but cannot exceed the configured cap. A direct read, step or
+`runUntil` request that arrives too soon returns a retryable
+`OUTPUT_READ_RATE_LIMITED` error with `retryAfterMs`.
+After that delay, retry through Lab Gateway with a new `requestId`; the Gateway
+replays responses for request IDs it has already seen.
+
+Simulation scenarios and runtime input updates use separate budgets. The
+existing scenario limit remains 100 per reservation per UTC day by default.
+Input quotas are tracked by reservation and FMU: 100,000 updates and 64 MiB per
+day, 30 updates per 10-second window, and 64 KiB per update by default. These
+limits are globally configurable with the environment variables above; a
+`sim.setInputs` call no longer spends a simulation scenario. Runtime input
+updates require a valid reservation scope (`labId` and `reservationKey`); the
+Executor rejects non-empty `sim.setInputs` requests when that scope is missing.
+
+### Admission, expiry, isolation, and execution evidence
+
+Interactive sessions, synchronous runs, streams, async jobs, and validation
+probes reserve from the same `FMU_MAX_SESSIONS` capacity. Jobs reserve a slot
+before their scenario quota is charged. Admission is immediate: when no slot is
+available the request returns `STATION_CAPACITY_EXHAUSTED` (HTTP 429) and does
+not debit the run quota. `queued` means an admitted worker is starting; it is
+not a waiting queue.
+
+Gateway execution context carries two independent deadlines:
+`executionAuthorizationExpiresAt` (bounded by the signed authorization `exp`)
+and `reservationEndsAt` (the on-chain booking end). The Executor checks both
+before a batch case and while its worker is running. It terminates the worker
+at the first deadline and records `authorization_expired` separately from
+`reservation_ended`; the short-lived WebSocket ticket is not used as the
+reservation boundary.
+
+The provider may place an `fmuExecutionPolicy` object in the signed Gateway
+claims. The Executor accepts only `maxDailyScenarios`, `maxSteps`,
+`maxCpuSeconds`, `maxMemoryMiB`, and `maxResultBytes`, and clamps each value to
+the Station's configured hard limit. Omitted values use the Station defaults.
+
+Workers receive private temporary directories and have inherited environment
+variables with credential-like names removed. Linux workers additionally use
+CPU, memory, per-file and descriptor limits, Landlock write restrictions, and
+Landlock read rules limited to the Python/system runtime and the pinned FMU,
+and seccomp rules that deny network sockets and executable child processes. These
+Linux controls fail closed when unavailable. Windows workers use per-worker
+AppContainers with no network capabilities and filesystem access granted to the
+bundled runtime and private work directory. Their isolated package profile
+storage is private to each worker. Windows Job Objects enforce CPU time, memory,
+child-process count and complete tree termination. The Linux worker is bound to
+its supervisor's lifetime; startup removes abandoned worker directories and
+AppContainer profiles. The worker's underlying account remains the sidecar's
+account, normally `SYSTEM`, and Windows still has no per-file or aggregate
+temporary-disk quota. `workerIsolation` in `/internal/fmu/validate` reports the
+controls available on the current Station.
+The image defaults to a dedicated non-root user. The local Docker profile adds
+a read-only root, resource limits, process cap, and bounded `/tmp` tmpfs.
+
+FMU pre-publication validation separates `archiveValid`,
+`modelDescriptionValid`, `stationCompatible`, and `executionChecked`. It checks
+compressed and expanded archive bounds, traversal and duplicate paths, FMI
+version/capabilities, GUID, the exact Co-Simulation binary for this OS and
+architecture, and reports whether native dependency loading was checked. Use
+`POST /internal/fmu/validate/{access_key}?probe=true` to load and initialize the
+FMU in an isolated worker. A passing probe checks the dependencies needed for
+that initialization; it does not certify every simulation path.
+
+Accepted runs keep a read-only, content-addressed FMU snapshot for every case
+in a batch. Evidence records the snapshot SHA-256, Executor version/commit,
+FMPy and platform versions, effective parameters/options/policy, finish reason,
+warnings, and result SHA-256. The evidence describes what this provider-side
+Executor ran; it is not an independent institutional attestation. HTTP run,
+stream, job and batch options may select `outputVariables` and reduce output
+volume with `outputSampleEverySteps` (default `1`). Both per-result and stored
+result byte limits remain enforced after selection and sampling.
 
 ### FMI conformance baseline
 
@@ -182,6 +297,9 @@ adapter. FMI 2/FMI 3 Model Exchange is out of scope for DecentraLabs FMU
 execution. Until a composition adapter is implemented, an OMSimulator request
 returns HTTP `501`; this keeps the backend choice explicit rather than silently
 pretending that a single-FMU FMPy execution was a composed model.
+Backend diagnostics report whether the OMSimulator executable is installed
+separately from whether the Executor can run it. Until the adapter exists,
+`available` and `executable` remain false and `supports` remains empty.
 
 ### HTTP simulation payloads
 
@@ -213,7 +331,9 @@ Gateway calls to these routes use this body shape:
 `outputs`. `stream` returns newline-delimited JSON: `sim.step` snapshots with
 `seq`, `time`, and `outputs`, followed by `sim.done`; capacity or execution
 failures are emitted as an `error` object with a short `code` and, where
-applicable, `retryable: true`.
+applicable, `retryable: true`. On successful streams, `sim.done.evidence`
+contains the FMU/runtime metadata and the SHA-256 of the preceding NDJSON data
+lines, allowing the receiver to verify exactly the samples it collected.
 
 ### Jobs, batches, cancellation, and history
 
@@ -340,6 +460,23 @@ fmu-data/
   my-model/
     model.fmu          # accessKey = "my-model"
 ```
+
+The reproducible FMI 2.0 Smart Factory Cell demo is in
+[`examples/smart-factory-cell`](examples/smart-factory-cell/README.md). Build its
+Windows x64 FMU with the included PowerShell script or its Linux x64 FMU with
+the included Bash script. The Windows Lab Station release ships the reviewed
+artifact as `fmu-executor/fmu-data/SmartFactoryCell.fmu`; Gateway local
+development uses the Linux x64 artifact under the same access key. Lab Station
+packages the Windows build from this source.
+
+The previous Gateway FMI example models are now canonical in
+[`examples/reference-fmus`](examples/reference-fmus/README.md). Their FMU
+archives include Linux x64 binaries; FMI 2 uses `linux64` and FMI 3 uses
+`x86_64-linux`. `BinaryClockTest.fmu` now includes both Windows and Linux x64
+builds, generated from its included source. Gateway refreshes all development
+copies, including Smart Factory, with `Lab Gateway/scripts/sync_fmu_examples.py`.
+The example directories document their sources, licenses, builds and platform
+variants.
 
 ## Tests
 

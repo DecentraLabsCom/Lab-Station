@@ -80,6 +80,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Checkout canonical Smart Factory example
+        uses: actions/checkout@v7
+        with:
+          repository: DecentraLabsCom/FMU-Executor
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
+          path: .fmu-executor-demo-source
+
       - name: Validate AHK v2 migration guardrails
         shell: powershell
         run: |
@@ -125,7 +132,7 @@ jobs:
 
       - name: Test release package layout
         shell: powershell
-        run: .\scripts\test-release-package.ps1
+        run: .\scripts\test-release-package.ps1 -SmartFactoryExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-factory-cell')
 
       - name: Run LabStation wizard callback tests
         shell: powershell
