@@ -80,11 +80,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Checkout canonical Smart Factory example
+      - name: Read pinned FMU Executor demo revision
+        id: demo-pin
+        shell: pwsh
+        run: |
+          $lock = Get-Content fmu-executor/SOURCE.lock.json -Raw | ConvertFrom-Json
+          "commit=$($lock.commit)" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout pinned FMU Executor demo assets
         uses: actions/checkout@v7
         with:
           repository: DecentraLabsCom/FMU-Executor
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
+          ref: ${{ steps.demo-pin.outputs.commit }}
           path: .fmu-executor-demo-source
 
       - name: Validate AHK v2 migration guardrails
@@ -132,7 +139,10 @@ jobs:
 
       - name: Test release package layout
         shell: powershell
-        run: .\scripts\test-release-package.ps1 -SmartFactoryExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-factory-cell')
+        run: |
+          .\scripts\test-release-package.ps1 `
+            -SmartFactoryExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-factory-cell') `
+            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell')
 
       - name: Run LabStation wizard callback tests
         shell: powershell

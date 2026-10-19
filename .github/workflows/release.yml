@@ -60,7 +60,7 @@ jobs:
           }
           "commit=$($lock.commit)" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
 
-      - name: Checkout canonical Smart Factory example
+      - name: Checkout canonical FMU Executor examples
         uses: actions/checkout@v7
         with:
           repository: DecentraLabsCom/FMU-Executor
@@ -615,7 +615,8 @@ jobs:
           .\scripts\package-release.ps1 `
             -DistPath (Join-Path $PWD 'dist') `
             -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip') `
-            -SmartFactoryExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-factory-cell')
+            -SmartFactoryExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-factory-cell') `
+            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell')
 
       - name: Extract release notes from the changelog
         shell: powershell

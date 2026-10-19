@@ -6,14 +6,17 @@ Lab Station keeps a version-pinned release snapshot in `fmu-executor/`; Station
 packages do not fetch executable code from that repository at runtime.
 
 The Windows `Lab-Station.zip` package includes the optional sidecar, its private
-Python runtime, its dependencies, and the public Smart Factory Cell demo FMU at
-`fmu-executor/fmu-data/SmartFactoryCell.fmu`. No system Python installation or
-`pip install` step is required. Provider-owned FMU models are still provisioned
-separately. Its prepared companion `SmartFactoryCell.glb` and MIT license are
-included alongside the FMU. Release packaging copies these assets from the
-canonical `FMU-Executor/examples/smart-factory-cell` source. The provider
-Gateway retrieves that scene from Station through the protected internal FMU
-endpoint during AAS synchronization; Station does not publish the GLB directly.
+Python runtime, its dependencies, and the public Smart Factory Cell and Smart
+Warehouse Cell demos under `fmu-executor/fmu-data/`. No system Python
+installation or `pip install` step is required. Provider-owned FMU models are
+still provisioned separately. Each demo includes its prepared GLB and license;
+Smart Warehouse also includes `SmartWarehouseCell.webapp.zip`, an optional
+Three.js application. Release packaging copies these assets from the canonical
+`FMU-Executor/examples` sources. During AAS synchronization, the provider
+chooses the GLB or app in Lab Manager. Gateway retrieves the selected asset from
+Station through the protected internal FMU endpoint; Marketplace uses the AAS
+File MIME type to choose the matching viewer. Station does not publish visual
+assets directly.
 
 To use the sidecar, configure `FMU_BACKEND_MODE=station` in Lab Gateway, set a
 machine-level `FMU_INTERNAL_TOKEN` on the station and the matching

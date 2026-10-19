@@ -54,25 +54,27 @@ Linux per-file limit). Archive checks are bounded by `FMU_MAX_ARCHIVE_BYTES`
 `?probe=true` option performs an isolated load and initialization before
 publication.
 
-The release includes the public Smart Factory Cell demo at
-`fmu-executor/fmu-data/SmartFactoryCell.fmu`, with its companion
-`SmartFactoryCell.glb` and license alongside. Its access key is
-`SmartFactoryCell.fmu`. It is ready for provider registration after installing
-the Station package. Release packaging copies these files from the canonical
-FMU-Executor example source. The demo assets are separate package files, not
-part of the private Executor runtime. Other provider FMU models remain separately
-provisioned under `fmu-executor/fmu-data/`; the release package contains no
-other models. The FMU runs on the Windows x64 Station execution backend. When
-the AAS is synchronized, the Gateway requests the matching GLB from Station's
-internal endpoint, stores it in the Gateway's public immutable asset volume,
-and records that Gateway path in the AAS. Station never serves the scene as a
-public asset.
+The release includes two public FMU demos under `fmu-executor/fmu-data/`:
+Smart Factory Cell (`SmartFactoryCell.fmu`) and Smart Warehouse Cell
+(`SmartWarehouseCell.fmu`). Each has its Windows x64 FMU, companion GLB and
+license. Smart Warehouse also includes `SmartWarehouseCell.webapp.zip`, an
+optional self-contained Three.js application. These are ready for provider
+registration after installing the Station package. Release packaging copies
+the assets from the canonical FMU-Executor example sources; they remain
+separate from the private Executor runtime. Other provider FMU models are
+provisioned separately and are not included in the release package. Both demos
+run on the Windows x64 Station execution backend. During AAS synchronization,
+the provider selects the GLB or Three.js app in Lab Manager. Gateway requests
+that same-stem asset from Station's protected internal endpoint, stores it in
+Gateway's public immutable asset volume, and records its path and MIME type in
+the AAS. Station never serves visual assets publicly.
 
-Station serves `GET /internal/fmu/companion-scene` only with the configured
-`X-Internal-Session-Token` and an `X-FMU-Access-Key`. It derives the `.glb`
-filename from the validated `.fmu` and returns it only when the sibling file
-is inside the configured FMU root. Lab Gateway uses this endpoint during its
-authenticated Lab Manager import; the route is not a public asset URL.
+Station serves `GET /internal/fmu/companion-asset?assetType=glb|threejs-app`
+only with the configured `X-Internal-Session-Token` and an `X-FMU-Access-Key`.
+It derives the `.glb` or `.webapp.zip` filename from the validated `.fmu` and
+returns it only when the sibling file is inside the configured FMU root. Lab
+Gateway uses this endpoint during its authenticated Lab Manager import; the
+route is not a public asset URL.
 
 The data directory remains outside the private runtime files, so releases can
 be upgraded without replacing provider-owned models.

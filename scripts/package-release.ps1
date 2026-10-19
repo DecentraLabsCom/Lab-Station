@@ -2,10 +2,21 @@
 param(
     [string]$DistPath = (Join-Path $PSScriptRoot '..\dist'),
     [string]$OutputPath = '',
-    [string]$SmartFactoryExamplePath = ''
+    [string]$SmartFactoryExamplePath = '',
+    [string]$SmartWarehouseExamplePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Get-Sha256HexFromStream([System.IO.Stream]$Stream) {
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $algorithm.ComputeHash($Stream)
+        return ([System.BitConverter]::ToString($digest)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
 
 $executableNames = @(
     'LabStation.exe',
@@ -25,6 +36,16 @@ if (-not (Test-Path -LiteralPath $SmartFactoryExamplePath -PathType Container)) 
     throw "Canonical Smart Factory example not found at '$SmartFactoryExamplePath'. Pass -SmartFactoryExamplePath from the FMU-Executor checkout."
 }
 $SmartFactoryExamplePath = (Resolve-Path -LiteralPath $SmartFactoryExamplePath).Path
+if ([string]::IsNullOrWhiteSpace($SmartWarehouseExamplePath)) {
+    $SmartWarehouseExamplePath = $env:FMU_EXECUTOR_SMART_WAREHOUSE_EXAMPLE_PATH
+}
+if ([string]::IsNullOrWhiteSpace($SmartWarehouseExamplePath)) {
+    $SmartWarehouseExamplePath = Join-Path $repositoryRoot '..\FMU-Executor\examples\smart-warehouse-cell'
+}
+if (-not (Test-Path -LiteralPath $SmartWarehouseExamplePath -PathType Container)) {
+    throw "Canonical Smart Warehouse example not found at '$SmartWarehouseExamplePath'. Pass -SmartWarehouseExamplePath from the FMU-Executor checkout."
+}
+$SmartWarehouseExamplePath = (Resolve-Path -LiteralPath $SmartWarehouseExamplePath).Path
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $distDirectory 'Lab-Station.zip'
 }
@@ -140,6 +161,89 @@ try {
     }
     Copy-Item -LiteralPath $demoLicenseSource -Destination (Join-Path $demoFmuDirectory 'SmartFactoryCell.LICENSE.txt') -Force
 
+    # Package the Smart Warehouse FMU with its GLB and optional static app.
+    $warehouseFmuSource = Join-Path $SmartWarehouseExamplePath 'SmartWarehouseCell.fmu'
+    if (-not (Test-Path -LiteralPath $warehouseFmuSource -PathType Leaf)) {
+        throw "Smart Warehouse demo FMU not found: $warehouseFmuSource"
+    }
+    $warehouseArchive = [System.IO.Compression.ZipFile]::OpenRead($warehouseFmuSource)
+    try {
+        $warehouseEntries = @($warehouseArchive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
+        foreach ($expectedEntry in @('modelDescription.xml', 'binaries/win64/SmartWarehouseCell.dll', 'resources/smart-warehouse-cell.glb')) {
+            if ($warehouseEntries -notcontains $expectedEntry) {
+                throw "Canonical Station demo FMU is missing Windows x64 entry '$expectedEntry'."
+            }
+        }
+        if ($warehouseEntries -match '^binaries/(linux64|darwin64|win32)/') {
+            throw 'Lab Station release requires the Windows x64 Smart Warehouse FMU.'
+        }
+    } finally {
+        $warehouseArchive.Dispose()
+    }
+    $warehouseSceneSource = Join-Path $SmartWarehouseExamplePath 'smart-warehouse-cell.glb'
+    $warehouseAppSource = Join-Path $SmartWarehouseExamplePath 'SmartWarehouseCell.webapp.zip'
+    foreach ($source in @($warehouseSceneSource, $warehouseAppSource)) {
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Smart Warehouse demo asset not found: $source"
+        }
+    }
+
+    $warehouseSceneFmuArchive = [System.IO.Compression.ZipFile]::OpenRead($warehouseFmuSource)
+    $warehouseSceneArchiveStream = $null
+    $warehouseSceneSourceStream = $null
+    try {
+        $warehouseSceneArchiveEntry = $warehouseSceneFmuArchive.Entries |
+            Where-Object { ($_.FullName -replace '\\', '/') -eq 'resources/smart-warehouse-cell.glb' } |
+            Select-Object -First 1
+        if ($null -eq $warehouseSceneArchiveEntry) {
+            throw 'Smart Warehouse FMU is missing its embedded GLB scene.'
+        }
+        $warehouseSceneArchiveStream = $warehouseSceneArchiveEntry.Open()
+        $warehouseSceneSourceStream = [System.IO.File]::OpenRead($warehouseSceneSource)
+        $embeddedSceneHash = Get-Sha256HexFromStream $warehouseSceneArchiveStream
+        $standaloneSceneHash = Get-Sha256HexFromStream $warehouseSceneSourceStream
+    } finally {
+        if ($null -ne $warehouseSceneArchiveStream) { $warehouseSceneArchiveStream.Dispose() }
+        if ($null -ne $warehouseSceneSourceStream) { $warehouseSceneSourceStream.Dispose() }
+        $warehouseSceneFmuArchive.Dispose()
+    }
+    if ($embeddedSceneHash -ne $standaloneSceneHash) {
+        throw 'Smart Warehouse standalone GLB differs from the scene embedded in its FMU.'
+    }
+
+    $warehouseAppArchive = [System.IO.Compression.ZipFile]::OpenRead($warehouseAppSource)
+    try {
+        $warehouseAppIndex = $warehouseAppArchive.GetEntry('index.html')
+        $warehouseAppScene = $warehouseAppArchive.GetEntry('warehouse.glb')
+        if ($null -eq $warehouseAppIndex -or $null -eq $warehouseAppScene) {
+            throw 'Smart Warehouse Three.js app must contain root index.html and warehouse.glb.'
+        }
+        $warehouseAppSceneStream = $warehouseAppScene.Open()
+        try {
+            $appSceneHash = Get-Sha256HexFromStream $warehouseAppSceneStream
+        } finally {
+            $warehouseAppSceneStream.Dispose()
+        }
+        if ($appSceneHash -ne $standaloneSceneHash) {
+            throw 'Smart Warehouse Three.js app uses a different scene from its FMU.'
+        }
+    } finally {
+        $warehouseAppArchive.Dispose()
+    }
+
+    Copy-Item -LiteralPath $warehouseFmuSource -Destination (Join-Path $demoFmuDirectory 'SmartWarehouseCell.fmu') -Force
+    foreach ($file in @(
+        @{ Source = 'smart-warehouse-cell.glb'; Target = 'SmartWarehouseCell.glb' },
+        @{ Source = 'SmartWarehouseCell.webapp.zip'; Target = 'SmartWarehouseCell.webapp.zip' },
+        @{ Source = 'LICENSE.txt'; Target = 'SmartWarehouseCell.LICENSE.txt' }
+    )) {
+        $source = Join-Path $SmartWarehouseExamplePath $file.Source
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Smart Warehouse demo asset not found: $source"
+        }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $demoFmuDirectory $file.Target) -Force
+    }
+
     # The executor guide references this screenshot relative to its own directory.
     $fmuGuideImageSource = Join-Path $repositoryRoot 'docs\images\labstation-connectors-fmi.png'
     if (-not (Test-Path -LiteralPath $fmuGuideImageSource -PathType Leaf)) {
@@ -153,7 +257,12 @@ try {
         Remove-Item -LiteralPath $OutputPath -Force
     }
 
-    Compress-Archive -LiteralPath $packageDirectory -DestinationPath $OutputPath -CompressionLevel Optimal
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $packageDirectory,
+        $OutputPath,
+        [System.IO.Compression.CompressionLevel]::Optimal,
+        $true
+    )
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($OutputPath)
@@ -172,6 +281,10 @@ try {
             'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.fmu',
             'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.glb',
             'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.LICENSE.txt',
+            'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu',
+            'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.glb',
+            'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.webapp.zip',
+            'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.LICENSE.txt',
             'Lab Station/docs/images/labstation-connectors-fmi.png'
         )
         foreach ($expectedEntry in $expectedFmuEntries) {
@@ -186,8 +299,8 @@ try {
         $packagedFmuModels = @($entryNames | Where-Object {
             $_ -match '^Lab Station/fmu-executor/fmu-data/.+\.fmu$'
         })
-        if ($packagedFmuModels.Count -ne 1 -or $packagedFmuModels[0] -ne 'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.fmu') {
-            throw 'Release package must contain only the reviewed Smart Factory demo FMU.'
+        if ($packagedFmuModels.Count -ne 2 -or $packagedFmuModels -notcontains 'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.fmu' -or $packagedFmuModels -notcontains 'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu') {
+            throw 'Release package must contain the reviewed Smart Factory and Smart Warehouse demo FMUs.'
         }
         $runtimePythonEntries = @($entryNames | Where-Object {
             $_ -match '^Lab Station/fmu-executor/runtime/_internal/python\d{2,3}\.dll$'
