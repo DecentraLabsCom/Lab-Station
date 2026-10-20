@@ -6,11 +6,10 @@ Lab Station keeps a version-pinned release snapshot in `fmu-executor/`; Station
 packages do not fetch executable code from that repository at runtime.
 
 The Windows `Lab-Station.zip` package includes the optional sidecar, its private
-Python runtime, its dependencies, and the public Smart Factory Cell and Smart
-Warehouse Cell demos under `fmu-executor/fmu-data/`. No system Python
-installation or `pip install` step is required. Provider-owned FMU models are
-still provisioned separately. Each demo includes its prepared GLB and license;
-Smart Warehouse also includes `SmartWarehouseCell.webapp.zip`, an optional
+Python runtime, its dependencies, and the public Smart Warehouse Cell demo
+under `fmu-executor/fmu-data/`. No system Python installation or `pip install`
+step is required. Provider-owned FMU models are still provisioned separately.
+The demo includes its prepared GLB, license and `SmartWarehouseCell.webapp.zip`
 Three.js application. Release packaging copies these assets from the canonical
 `FMU-Executor/examples` sources. During AAS synchronization, the provider
 chooses the GLB or app in Lab Manager. Gateway retrieves the selected asset from

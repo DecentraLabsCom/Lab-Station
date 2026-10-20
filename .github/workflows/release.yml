@@ -615,7 +615,6 @@ jobs:
           .\scripts\package-release.ps1 `
             -DistPath (Join-Path $PWD 'dist') `
             -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip') `
-            -SmartFactoryExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-factory-cell') `
             -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell')
 
       - name: Extract release notes from the changelog

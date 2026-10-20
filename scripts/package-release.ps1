@@ -2,7 +2,6 @@
 param(
     [string]$DistPath = (Join-Path $PSScriptRoot '..\dist'),
     [string]$OutputPath = '',
-    [string]$SmartFactoryExamplePath = '',
     [string]$SmartWarehouseExamplePath = ''
 )
 
@@ -26,16 +25,6 @@ $executableNames = @(
 
 $distDirectory = (Resolve-Path -LiteralPath $DistPath).Path
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($SmartFactoryExamplePath)) {
-    $SmartFactoryExamplePath = $env:FMU_EXECUTOR_SMART_FACTORY_EXAMPLE_PATH
-}
-if ([string]::IsNullOrWhiteSpace($SmartFactoryExamplePath)) {
-    $SmartFactoryExamplePath = Join-Path $repositoryRoot '..\FMU-Executor\examples\smart-factory-cell'
-}
-if (-not (Test-Path -LiteralPath $SmartFactoryExamplePath -PathType Container)) {
-    throw "Canonical Smart Factory example not found at '$SmartFactoryExamplePath'. Pass -SmartFactoryExamplePath from the FMU-Executor checkout."
-}
-$SmartFactoryExamplePath = (Resolve-Path -LiteralPath $SmartFactoryExamplePath).Path
 if ([string]::IsNullOrWhiteSpace($SmartWarehouseExamplePath)) {
     $SmartWarehouseExamplePath = $env:FMU_EXECUTOR_SMART_WAREHOUSE_EXAMPLE_PATH
 }
@@ -126,42 +115,11 @@ try {
         throw 'FMU Executor runtime bundle is incomplete; expected the executable and its private Python payload.'
     }
 
-    # Ship the public Smart Factory demo FMU as a provisioned model, separate
-    # from the pinned Executor runtime and from provider-owned models.
-    $demoFmuSource = Join-Path $SmartFactoryExamplePath 'SmartFactoryCell.fmu'
-    if (-not (Test-Path -LiteralPath $demoFmuSource -PathType Leaf)) {
-        throw "Smart Factory demo FMU not found: $demoFmuSource"
-    }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $demoArchive = [System.IO.Compression.ZipFile]::OpenRead($demoFmuSource)
-    try {
-        $demoEntries = @($demoArchive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
-        foreach ($expectedEntry in @('modelDescription.xml', 'binaries/win64/SmartFactoryCell.dll', 'resources/smart-factory-cell.glb')) {
-            if ($demoEntries -notcontains $expectedEntry) {
-                throw "Canonical Station demo FMU is missing Windows x64 entry '$expectedEntry'."
-            }
-        }
-        if ($demoEntries -match '^binaries/(linux64|darwin64|win32)/') {
-            throw 'Lab Station release requires the Windows x64 Smart Factory FMU, not a development build for another platform.'
-        }
-    } finally {
-        $demoArchive.Dispose()
-    }
     $demoFmuDirectory = Join-Path $fmuExecutorPackageDirectory 'fmu-data'
     New-Item -ItemType Directory -Path $demoFmuDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $demoFmuSource -Destination (Join-Path $demoFmuDirectory 'SmartFactoryCell.fmu') -Force
-    $demoSceneSource = Join-Path $SmartFactoryExamplePath 'smart-factory-cell.glb'
-    if (-not (Test-Path -LiteralPath $demoSceneSource -PathType Leaf)) {
-        throw "Smart Factory demo GLB not found: $demoSceneSource"
-    }
-    Copy-Item -LiteralPath $demoSceneSource -Destination (Join-Path $demoFmuDirectory 'SmartFactoryCell.glb') -Force
-    $demoLicenseSource = Join-Path $SmartFactoryExamplePath 'LICENSE.txt'
-    if (-not (Test-Path -LiteralPath $demoLicenseSource -PathType Leaf)) {
-        throw "Smart Factory demo license not found: $demoLicenseSource"
-    }
-    Copy-Item -LiteralPath $demoLicenseSource -Destination (Join-Path $demoFmuDirectory 'SmartFactoryCell.LICENSE.txt') -Force
 
-    # Package the Smart Warehouse FMU with its GLB and optional static app.
+    # Package the Smart Warehouse FMU with its GLB and Three.js app.
     $warehouseFmuSource = Join-Path $SmartWarehouseExamplePath 'SmartWarehouseCell.fmu'
     if (-not (Test-Path -LiteralPath $warehouseFmuSource -PathType Leaf)) {
         throw "Smart Warehouse demo FMU not found: $warehouseFmuSource"
@@ -278,9 +236,6 @@ try {
         $expectedFmuEntries = @(
             'Lab Station/fmu-executor/README.md',
             'Lab Station/fmu-executor/runtime/FMUExecutor.exe',
-            'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.fmu',
-            'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.glb',
-            'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.LICENSE.txt',
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu',
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.glb',
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.webapp.zip',
@@ -299,8 +254,8 @@ try {
         $packagedFmuModels = @($entryNames | Where-Object {
             $_ -match '^Lab Station/fmu-executor/fmu-data/.+\.fmu$'
         })
-        if ($packagedFmuModels.Count -ne 2 -or $packagedFmuModels -notcontains 'Lab Station/fmu-executor/fmu-data/SmartFactoryCell.fmu' -or $packagedFmuModels -notcontains 'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu') {
-            throw 'Release package must contain the reviewed Smart Factory and Smart Warehouse demo FMUs.'
+        if ($packagedFmuModels.Count -ne 1 -or $packagedFmuModels -notcontains 'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu') {
+            throw 'Release package must contain the Smart Warehouse demo FMU.'
         }
         $runtimePythonEntries = @($entryNames | Where-Object {
             $_ -match '^Lab Station/fmu-executor/runtime/_internal/python\d{2,3}\.dll$'

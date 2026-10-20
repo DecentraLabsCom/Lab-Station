@@ -54,20 +54,18 @@ Linux per-file limit). Archive checks are bounded by `FMU_MAX_ARCHIVE_BYTES`
 `?probe=true` option performs an isolated load and initialization before
 publication.
 
-The release includes two public FMU demos under `fmu-executor/fmu-data/`:
-Smart Factory Cell (`SmartFactoryCell.fmu`) and Smart Warehouse Cell
-(`SmartWarehouseCell.fmu`). Each has its Windows x64 FMU, companion GLB and
-license. Smart Warehouse also includes `SmartWarehouseCell.webapp.zip`, an
-optional self-contained Three.js application. These are ready for provider
-registration after installing the Station package. Release packaging copies
-the assets from the canonical FMU-Executor example sources; they remain
-separate from the private Executor runtime. Other provider FMU models are
-provisioned separately and are not included in the release package. Both demos
-run on the Windows x64 Station execution backend. During AAS synchronization,
-the provider selects the GLB or Three.js app in Lab Manager. Gateway requests
-that same-stem asset from Station's protected internal endpoint, stores it in
-Gateway's public immutable asset volume, and records its path and MIME type in
-the AAS. Station never serves visual assets publicly.
+The release includes the public Smart Warehouse Cell FMU demo under
+`fmu-executor/fmu-data/`, with its Windows x64 FMU, companion GLB, license and
+`SmartWarehouseCell.webapp.zip` self-contained Three.js application. It is
+ready for provider registration after installing the Station package. Release
+packaging copies the assets from the canonical FMU-Executor example sources;
+they remain separate from the private Executor runtime. Other provider FMU
+models are provisioned separately and are not included in the release package.
+The demo runs on the Windows x64 Station execution backend. During AAS
+synchronization, the provider selects the GLB or Three.js app in Lab Manager.
+Gateway requests that same-stem asset from Station's protected internal
+endpoint, stores it in Gateway's public immutable asset volume, and records its
+path and MIME type in the AAS. Station never serves visual assets publicly.
 
 Station serves `GET /internal/fmu/companion-asset?assetType=glb|threejs-app`
 only with the configured `X-Internal-Session-Token` and an `X-FMU-Access-Key`.
