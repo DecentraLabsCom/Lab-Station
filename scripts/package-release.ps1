@@ -173,9 +173,12 @@ try {
     try {
         $warehouseAppIndex = $warehouseAppArchive.GetEntry('index.html')
         $warehouseAppScript = $warehouseAppArchive.GetEntry('app.js')
-        $warehouseAppScene = $warehouseAppArchive.GetEntry('warehouse.glb')
-        if ($null -eq $warehouseAppIndex -or $null -eq $warehouseAppScript -or $null -eq $warehouseAppScene) {
-            throw 'Smart Warehouse Three.js app must contain root index.html, app.js and warehouse.glb.'
+        $warehouseAppSceneModule = $warehouseAppArchive.GetEntry('scene.js')
+        if ($null -eq $warehouseAppIndex -or $null -eq $warehouseAppScript -or $null -eq $warehouseAppSceneModule) {
+            throw 'Smart Warehouse Three.js app must contain root index.html, app.js and scene.js.'
+        }
+        if ($null -ne $warehouseAppArchive.GetEntry('warehouse.glb') -or $null -ne $warehouseAppArchive.GetEntry('vendor/GLTFLoader.js')) {
+            throw 'Smart Warehouse Three.js app must build its own scene without bundling the GLB companion.'
         }
         $warehouseAppScriptStream = $warehouseAppScript.Open()
         try {
@@ -188,6 +191,9 @@ try {
         } finally {
             $warehouseAppScriptStream.Dispose()
         }
+        if (-not $warehouseAppScriptText.Contains('createSmartWarehouseScene') -or -not $warehouseAppScriptText.Contains('scene.js')) {
+            throw 'Smart Warehouse Three.js app does not load its procedural scene module.'
+        }
         foreach ($protocolMessage in @(
             'decentralabs:digital-twin-host-ready',
             'decentralabs:digital-twin-ready',
@@ -197,15 +203,6 @@ try {
             if (-not $warehouseAppScriptText.Contains($protocolMessage)) {
                 throw "Smart Warehouse Three.js app is missing Marketplace host protocol message '$protocolMessage'."
             }
-        }
-        $warehouseAppSceneStream = $warehouseAppScene.Open()
-        try {
-            $appSceneHash = Get-Sha256HexFromStream $warehouseAppSceneStream
-        } finally {
-            $warehouseAppSceneStream.Dispose()
-        }
-        if ($appSceneHash -ne $standaloneSceneHash) {
-            throw 'Smart Warehouse Three.js app uses a different scene from its FMU.'
         }
     } finally {
         $warehouseAppArchive.Dispose()
