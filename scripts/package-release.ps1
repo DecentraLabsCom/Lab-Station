@@ -172,9 +172,31 @@ try {
     $warehouseAppArchive = [System.IO.Compression.ZipFile]::OpenRead($warehouseAppSource)
     try {
         $warehouseAppIndex = $warehouseAppArchive.GetEntry('index.html')
+        $warehouseAppScript = $warehouseAppArchive.GetEntry('app.js')
         $warehouseAppScene = $warehouseAppArchive.GetEntry('warehouse.glb')
-        if ($null -eq $warehouseAppIndex -or $null -eq $warehouseAppScene) {
-            throw 'Smart Warehouse Three.js app must contain root index.html and warehouse.glb.'
+        if ($null -eq $warehouseAppIndex -or $null -eq $warehouseAppScript -or $null -eq $warehouseAppScene) {
+            throw 'Smart Warehouse Three.js app must contain root index.html, app.js and warehouse.glb.'
+        }
+        $warehouseAppScriptStream = $warehouseAppScript.Open()
+        try {
+            $warehouseAppScriptReader = [System.IO.StreamReader]::new($warehouseAppScriptStream, [System.Text.Encoding]::UTF8, $true)
+            try {
+                $warehouseAppScriptText = $warehouseAppScriptReader.ReadToEnd()
+            } finally {
+                $warehouseAppScriptReader.Dispose()
+            }
+        } finally {
+            $warehouseAppScriptStream.Dispose()
+        }
+        foreach ($protocolMessage in @(
+            'decentralabs:digital-twin-host-ready',
+            'decentralabs:digital-twin-ready',
+            'decentralabs:digital-twin-error',
+            'decentralabs:fmi-sample'
+        )) {
+            if (-not $warehouseAppScriptText.Contains($protocolMessage)) {
+                throw "Smart Warehouse Three.js app is missing Marketplace host protocol message '$protocolMessage'."
+            }
         }
         $warehouseAppSceneStream = $warehouseAppScene.Open()
         try {
