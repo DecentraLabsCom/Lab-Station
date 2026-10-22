@@ -470,15 +470,17 @@ assets. The Linux arm64 package omits this x86_64-only demo. Lab Manager can
 link either the GLB or the app, and Marketplace selects the viewer from the AAS
 File MIME type.
 
-The previous Gateway FMI example models are now canonical in
-[`examples/reference-fmus`](examples/reference-fmus/README.md). Their FMU
-archives include Linux x64 binaries; FMI 2 uses `linux64` and FMI 3 uses
-`x86_64-linux`. `BinaryClockTest.fmu` now includes both Windows and Linux x64
-builds, generated from its included source. Gateway refreshes all development
-copies, including Smart Warehouse assets, with the
-`Lab Gateway/scripts/sync_fmu_examples.py` script.
-The example directories document their sources, licenses, builds and platform
-variants.
+The six reference FMUs are canonical in the separate
+[FMU-Executor repository](https://github.com/DecentraLabsCom/FMU-Executor/tree/main/examples/reference-fmus).
+Windows and Linux x86_64 Station releases include all six and the bundled BSD
+license. Linux arm64 releases include the three FMI 3 examples with native
+arm64 binaries (`Stair`, `StateSpace`, and `VanDerPol`). FMI 2 x86_64 uses the
+`linux64` archive directory, while FMI 3 x86_64 uses `x86_64-linux`.
+`BinaryClockTest.fmu` contains both Windows and Linux x64 builds generated
+from its included source. Gateway refreshes all six local development copies
+and the Smart Warehouse assets with
+`Lab Gateway/scripts/sync_fmu_examples.py`. The canonical example directories
+document provenance, licenses, build steps and supported platforms.
 
 ## Tests
 

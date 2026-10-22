@@ -54,13 +54,15 @@ Linux per-file limit). Archive checks are bounded by `FMU_MAX_ARCHIVE_BYTES`
 `?probe=true` option performs an isolated load and initialization before
 publication.
 
-The release includes the public Smart Warehouse Cell FMU demo under
-`fmu-executor/fmu-data/`, with its Windows x64 FMU, companion GLB, license and
-`SmartWarehouseCell.webapp.zip` self-contained Three.js application. It is
-ready for provider registration after installing the Station package. Release
-packaging copies the assets from the canonical FMU-Executor example sources;
-they remain separate from the private Executor runtime. Other provider FMU
-models are provisioned separately and are not included in the release package.
+The release includes the six reference FMUs and the Smart Warehouse Cell demo
+under `fmu-executor/fmu-data/`. Each reference FMU has a Windows x64 binary and
+is distributed with `Reference-FMUs.LICENSE.txt`. Smart Warehouse includes its
+Windows x64 FMU, companion GLB, license and `SmartWarehouseCell.webapp.zip`
+self-contained Three.js application. These examples are ready for provider
+registration after installing the Station package. Release packaging copies
+them from the canonical FMU-Executor example sources; they remain separate
+from the private Executor runtime. Other provider FMU models are provisioned
+separately and are not included in the release package.
 The demo runs on the Windows x64 Station execution backend. During AAS
 synchronization, the provider selects the GLB or Three.js app in Lab Manager.
 Gateway requests that same-stem asset from Station's protected internal

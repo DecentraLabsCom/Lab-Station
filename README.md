@@ -26,8 +26,10 @@ Windows executables. Its source snapshot is pinned to the shared
 `DecentraLabsCom/FMU-Executor` release in `fmu-executor/SOURCE.lock.json`.
 `Lab-Station.zip` includes a standalone runtime with its private Python
 interpreter and dependencies, so stations do not need a separate Python
-installation. FMU model files are provisioned separately. The sidecar is used
-when Lab Gateway is configured with `FMU_BACKEND_MODE=station`.
+installation. The release package also includes six reference FMUs and the
+Smart Warehouse demo for provider setup and validation; other FMU models are
+provisioned separately. The sidecar is used when Lab Gateway is configured
+with `FMU_BACKEND_MODE=station`.
 
 ## Choose the station profile
 

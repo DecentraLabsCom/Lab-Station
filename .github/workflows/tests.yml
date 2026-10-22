@@ -141,7 +141,8 @@ jobs:
         shell: powershell
         run: |
           .\scripts\test-release-package.ps1 `
-            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell')
+            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell') `
+            -ReferenceFmuExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/reference-fmus')
 
       - name: Run LabStation wizard callback tests
         shell: powershell

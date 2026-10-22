@@ -1,5 +1,6 @@
 param(
-    [string]$SmartWarehouseExamplePath = ''
+    [string]$SmartWarehouseExamplePath = '',
+    [string]$ReferenceFmuExamplePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,11 +48,18 @@ try {
     if ([string]::IsNullOrWhiteSpace($SmartWarehouseExamplePath)) {
         $SmartWarehouseExamplePath = Join-Path $PSScriptRoot '..\..\FMU-Executor\examples\smart-warehouse-cell'
     }
+    if ([string]::IsNullOrWhiteSpace($ReferenceFmuExamplePath)) {
+        $ReferenceFmuExamplePath = $env:FMU_EXECUTOR_REFERENCE_FMU_EXAMPLE_PATH
+    }
+    if ([string]::IsNullOrWhiteSpace($ReferenceFmuExamplePath)) {
+        $ReferenceFmuExamplePath = Join-Path $PSScriptRoot '..\..\FMU-Executor\examples\reference-fmus'
+    }
 
     & $packageScript `
         -DistPath $distPath `
         -OutputPath $outputPath `
-        -SmartWarehouseExamplePath $SmartWarehouseExamplePath
+        -SmartWarehouseExamplePath $SmartWarehouseExamplePath `
+        -ReferenceFmuExamplePath $ReferenceFmuExamplePath
     Assert-Condition $? 'Release package script failed.'
     Assert-Condition (Test-Path -LiteralPath $outputPath) 'Release package ZIP was not created.'
 

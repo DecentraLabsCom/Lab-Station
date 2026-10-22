@@ -2,7 +2,8 @@
 param(
     [string]$DistPath = (Join-Path $PSScriptRoot '..\dist'),
     [string]$OutputPath = '',
-    [string]$SmartWarehouseExamplePath = ''
+    [string]$SmartWarehouseExamplePath = '',
+    [string]$ReferenceFmuExamplePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +36,16 @@ if (-not (Test-Path -LiteralPath $SmartWarehouseExamplePath -PathType Container)
     throw "Canonical Smart Warehouse example not found at '$SmartWarehouseExamplePath'. Pass -SmartWarehouseExamplePath from the FMU-Executor checkout."
 }
 $SmartWarehouseExamplePath = (Resolve-Path -LiteralPath $SmartWarehouseExamplePath).Path
+if ([string]::IsNullOrWhiteSpace($ReferenceFmuExamplePath)) {
+    $ReferenceFmuExamplePath = $env:FMU_EXECUTOR_REFERENCE_FMU_EXAMPLE_PATH
+}
+if ([string]::IsNullOrWhiteSpace($ReferenceFmuExamplePath)) {
+    $ReferenceFmuExamplePath = Join-Path $repositoryRoot '..\FMU-Executor\examples\reference-fmus'
+}
+if (-not (Test-Path -LiteralPath $ReferenceFmuExamplePath -PathType Container)) {
+    throw "Canonical reference FMUs not found at '$ReferenceFmuExamplePath'. Pass -ReferenceFmuExamplePath from the FMU-Executor checkout."
+}
+$ReferenceFmuExamplePath = (Resolve-Path -LiteralPath $ReferenceFmuExamplePath).Path
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $distDirectory 'Lab-Station.zip'
 }
@@ -118,6 +129,39 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $demoFmuDirectory = Join-Path $fmuExecutorPackageDirectory 'fmu-data'
     New-Item -ItemType Directory -Path $demoFmuDirectory -Force | Out-Null
+
+    # Include the six established reference FMUs for Windows x64 Stations.
+    $referenceFmuBinaries = [ordered]@{
+        'BinaryClockTest' = 'binaries/x86_64-windows/BinaryClockTest.dll'
+        'BouncingBall' = 'binaries/win64/BouncingBall.dll'
+        'Feedthrough' = 'binaries/win64/Feedthrough.dll'
+        'Stair' = 'binaries/x86_64-windows/Stair.dll'
+        'StateSpace' = 'binaries/x86_64-windows/StateSpace.dll'
+        'VanDerPol' = 'binaries/x86_64-windows/VanDerPol.dll'
+    }
+    foreach ($modelName in $referenceFmuBinaries.Keys) {
+        $referenceFmuSource = Join-Path $ReferenceFmuExamplePath "$modelName.fmu"
+        if (-not (Test-Path -LiteralPath $referenceFmuSource -PathType Leaf)) {
+            throw "Canonical reference FMU not found: $referenceFmuSource"
+        }
+        $referenceArchive = [System.IO.Compression.ZipFile]::OpenRead($referenceFmuSource)
+        try {
+            $referenceEntries = @($referenceArchive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
+            foreach ($requiredEntry in @('modelDescription.xml', $referenceFmuBinaries[$modelName])) {
+                if ($referenceEntries -notcontains $requiredEntry) {
+                    throw "Reference FMU '$modelName' is missing Windows x64 entry '$requiredEntry'."
+                }
+            }
+        } finally {
+            $referenceArchive.Dispose()
+        }
+        Copy-Item -LiteralPath $referenceFmuSource -Destination (Join-Path $demoFmuDirectory "$modelName.fmu") -Force
+    }
+    $referenceFmuLicense = Join-Path $ReferenceFmuExamplePath 'LICENSE.txt'
+    if (-not (Test-Path -LiteralPath $referenceFmuLicense -PathType Leaf)) {
+        throw "Reference FMU license not found: $referenceFmuLicense"
+    }
+    Copy-Item -LiteralPath $referenceFmuLicense -Destination (Join-Path $demoFmuDirectory 'Reference-FMUs.LICENSE.txt') -Force
 
     # Package the Smart Warehouse FMU with its GLB and Three.js app.
     $warehouseFmuSource = Join-Path $SmartWarehouseExamplePath 'SmartWarehouseCell.fmu'
@@ -259,8 +303,12 @@ try {
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.glb',
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.webapp.zip',
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.LICENSE.txt',
+            'Lab Station/fmu-executor/fmu-data/Reference-FMUs.LICENSE.txt',
             'Lab Station/docs/images/labstation-connectors-fmi.png'
         )
+        foreach ($modelName in $referenceFmuBinaries.Keys) {
+            $expectedFmuEntries += "Lab Station/fmu-executor/fmu-data/$modelName.fmu"
+        }
         foreach ($expectedEntry in $expectedFmuEntries) {
             if ($entryNames -notcontains $expectedEntry) {
                 throw "Release package is missing $expectedEntry"
@@ -273,8 +321,8 @@ try {
         $packagedFmuModels = @($entryNames | Where-Object {
             $_ -match '^Lab Station/fmu-executor/fmu-data/.+\.fmu$'
         })
-        if ($packagedFmuModels.Count -ne 1 -or $packagedFmuModels -notcontains 'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu') {
-            throw 'Release package must contain the Smart Warehouse demo FMU.'
+        if ($packagedFmuModels.Count -ne 7 -or $packagedFmuModels -notcontains 'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu') {
+            throw 'Release package must contain the Smart Warehouse demo and all six reference FMUs.'
         }
         $runtimePythonEntries = @($entryNames | Where-Object {
             $_ -match '^Lab Station/fmu-executor/runtime/_internal/python\d{2,3}\.dll$'

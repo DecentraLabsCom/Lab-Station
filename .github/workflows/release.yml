@@ -615,7 +615,8 @@ jobs:
           .\scripts\package-release.ps1 `
             -DistPath (Join-Path $PWD 'dist') `
             -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip') `
-            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell')
+            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell') `
+            -ReferenceFmuExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/reference-fmus')
 
       - name: Extract release notes from the changelog
         shell: powershell
