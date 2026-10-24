@@ -9,8 +9,8 @@ GitBook can render. New station releases emit Station Contract v3; the local
 The current heartbeat schema is maintained in Lab Gateway. The Lab Station
 contract bundle includes a pinned copy for public documentation and validation:
 
-- [V3 heartbeat schema in the pinned Station bundle](https://github.com/DecentraLabsCom/Lab-Station/blob/feature/lab-station-linux/contracts/station/gateway-contracts/v3/heartbeat.schema.json)
-- The pinned contract revision is recorded in `contracts/station/schema-bundle.lock.json`.
+- [V3 heartbeat schema in the pinned Station bundle](../contracts/station/gateway-contracts/v3/heartbeat.schema.json)
+- The pinned contract revision is recorded in [`schema-bundle.lock.json`](../contracts/station/schema-bundle.lock.json).
 
 The v3 envelope requires `schemaVersion: "3.0.0"`, timestamp, host and
 application version, platform, profile, management and remote-access status,
