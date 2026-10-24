@@ -21,6 +21,16 @@
 - Updated the bundled standalone FMU Executor to the shared 0.1.1 source release.
 - Set the LabStation executable's file and product version to 3.6.0.
 
+## [3.5.14] - 2026-10-18
+
+### Fixed
+- Prevent startup errors when AppControl's AutoHotkey window is already hidden.
+
+## [3.5.13] - 2026-10-18
+
+### Fixed
+- Hide AppControl's AutoHotkey main window while it waits for and manages the RemoteApp target.
+
 ## [3.5.12] - 2026-10-09
 
 ### Fixed

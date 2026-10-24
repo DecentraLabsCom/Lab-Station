@@ -39,8 +39,8 @@ a pinned copy for validation and publication:
 
 - [Legacy Windows v2 status schema guide](status-json-schema.md)
 - [Heartbeat schema guide](heartbeat-schema.md)
-- [Current v3 status schema](https://github.com/DecentraLabsCom/Lab-Station/blob/feature/lab-station-linux/contracts/station/gateway-contracts/v3/status.schema.json)
-- [Current v3 heartbeat schema](https://github.com/DecentraLabsCom/Lab-Station/blob/feature/lab-station-linux/contracts/station/gateway-contracts/v3/heartbeat.schema.json)
+- [Current v3 status schema](../contracts/station/gateway-contracts/v3/status.schema.json)
+- [Current v3 heartbeat schema](../contracts/station/gateway-contracts/v3/heartbeat.schema.json)
 - [`WinRM command contract`](winrm-command-contract.md)
 
 Consumers should treat a higher major schema version as incompatible. Unknown
