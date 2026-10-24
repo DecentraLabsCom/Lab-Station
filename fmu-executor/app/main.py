@@ -12,10 +12,14 @@ import hashlib
 import json
 import logging
 import math
+import re
 import secrets
 import threading
 import time
-from typing import Any, Callable, cast
+import zipfile
+import zlib
+from pathlib import PurePosixPath
+from typing import Any, Callable, Protocol, cast
 
 from fastapi import (
     Depends,
@@ -55,8 +59,30 @@ from .reproducibility import (
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="FMU Executor", version="0.3.1", docs_url=None, redoc_url=None)
+app = FastAPI(title="FMU Executor", version="0.3.2", docs_url=None, redoc_url=None)
 MAX_COMPANION_ASSET_BYTES = 50 * 1024 * 1024
+MAX_COMPANION_APP_FILES = 332
+_COMPANION_APP_MEDIA_TYPES = {
+    ".bin": "application/octet-stream",
+    ".css": "text/css",
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+    ".html": "text/html",
+    ".ico": "image/x-icon",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".js": "text/javascript",
+    ".json": "application/json",
+    ".mjs": "text/javascript",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".txt": "text/plain",
+    ".ttf": "font/ttf",
+    ".wasm": "application/wasm",
+    ".webp": "image/webp",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
 _session_cleanup_task: asyncio.Task | None = None
 _simulation_store = SimulationStore()
 _simulation_jobs = SimulationJobManager(_simulation_store)
@@ -226,12 +252,90 @@ async def companion_asset(
 
 # ── Describe ─────────────────────────────────────────────────────
 
+@app.get("/internal/fmu/companion-app/{asset_path:path}", dependencies=[Depends(_check_token)])
+async def companion_app_asset(
+    asset_path: str,
+    access_key: str = Header(..., alias="X-FMU-Access-Key"),
+):
+    """Serve one file from an FMU's sibling web application archive."""
+    access_key = _validated_access_key(access_key)
+    path_parts = asset_path.split("/")
+    if (
+        not asset_path
+        or "\\" in asset_path
+        or len(path_parts) > 8
+        or any(not part or part in {".", ".."} for part in path_parts)
+        or any(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", part) is None for part in path_parts)
+    ):
+        raise HTTPException(status_code=404, detail="COMPANION_APP_ASSET_NOT_FOUND")
+
+    normalized_path = PurePosixPath(asset_path).as_posix()
+    media_type = _COMPANION_APP_MEDIA_TYPES.get(PurePosixPath(normalized_path).suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="COMPANION_APP_ASSET_NOT_FOUND")
+
+    try:
+        root = config.FMU_ROOT.resolve(strict=True)
+        fmu_path = fmu_storage.get_fmu_path(access_key).resolve(strict=True)
+        fmu_path.relative_to(root)
+        archive_path = fmu_path.with_name(fmu_path.stem + ".webapp.zip").resolve(strict=True)
+        archive_path.relative_to(root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="COMPANION_APP_NOT_FOUND") from exc
+
+    try:
+        if not archive_path.is_file():
+            raise HTTPException(status_code=404, detail="COMPANION_APP_NOT_FOUND")
+        if archive_path.stat().st_size > MAX_COMPANION_ASSET_BYTES:
+            raise HTTPException(status_code=413, detail="COMPANION_APP_TOO_LARGE")
+        with zipfile.ZipFile(archive_path) as archive:
+            entries = archive.infolist()
+            if len(entries) > MAX_COMPANION_APP_FILES:
+                raise HTTPException(status_code=413, detail="COMPANION_APP_HAS_TOO_MANY_FILES")
+            matches = [
+                info for info in entries
+                if info.filename.casefold() == normalized_path.casefold()
+            ]
+            if len(matches) != 1 or matches[0].filename != normalized_path or matches[0].is_dir():
+                raise HTTPException(status_code=404, detail="COMPANION_APP_ASSET_NOT_FOUND")
+            info = matches[0]
+            file_mode = (info.external_attr >> 16) & 0o170000
+            if info.flag_bits & 0x1 or file_mode not in (0, 0o100000):
+                raise HTTPException(status_code=404, detail="COMPANION_APP_ASSET_NOT_FOUND")
+            if info.file_size > MAX_COMPANION_ASSET_BYTES:
+                raise HTTPException(status_code=413, detail="COMPANION_APP_ASSET_TOO_LARGE")
+            with archive.open(info) as source:
+                content = source.read(MAX_COMPANION_ASSET_BYTES + 1)
+    except HTTPException:
+        raise
+    except (OSError, zipfile.BadZipFile, RuntimeError, KeyError, EOFError, zlib.error) as exc:
+        raise HTTPException(status_code=400, detail="COMPANION_APP_ARCHIVE_INVALID") from exc
+
+    if len(content) > MAX_COMPANION_ASSET_BYTES:
+        raise HTTPException(status_code=413, detail="COMPANION_APP_ASSET_TOO_LARGE")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @app.get("/internal/fmu/describe", dependencies=[Depends(_check_token)])
-async def describe(access_key: str = Header(..., alias="X-FMU-Access-Key")):
+async def describe(
+    access_key: str = Header(..., alias="X-FMU-Access-Key"),
+    public_only: bool = Query(False, alias="publicOnly"),
+    causality: str | None = Query(
+        None,
+        pattern="^(input|output|parameter|calculatedParameter|structuralParameter|independent|local)$",
+    ),
+):
     access_key = _validated_access_key(access_key)
     if not fmu_storage.fmu_exists(access_key):
         raise HTTPException(404, "FMU_NOT_FOUND")
-    return fmu_storage.describe(access_key)
+    return fmu_storage.describe(access_key, public_only=public_only, causality=causality)
 
 
 # ── Validate / Quarantine ────────────────────────────────────────
@@ -343,6 +447,7 @@ class SimulationBody(BaseModel):
     reservationKey: str | None = None
     parameters: dict = Field(default_factory=dict)
     options: dict = Field(default_factory=dict)
+    inputSchedule: list[dict] = Field(default_factory=list, max_length=128)
 
 
 class BatchScenario(BaseModel):
@@ -460,6 +565,85 @@ def _strict_number(value: Any, name: str) -> float:
     return number
 
 
+def _validate_input_schedule(
+    input_schedule: list[dict[str, Any]],
+    *,
+    options: dict[str, Any],
+    model_metadata: dict[str, Any],
+    fmu_path: Any,
+    access_key: str,
+) -> list[dict[str, Any]]:
+    if not input_schedule:
+        return []
+    if len(input_schedule) > 128:
+        raise HTTPException(status_code=422, detail="INPUT_SCHEDULE_LIMIT_EXCEEDED")
+
+    try:
+        start = float(options.get("startTime", 0.0))
+        stop = float(options.get("stopTime", 1.0))
+        step = float(options.get("stepSize", model_metadata.get("defaultStepSize") or 0.001))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail="INVALID_INPUT_SCHEDULE") from exc
+    if not all(math.isfinite(value) for value in (start, stop, step)) or step <= 0 or stop <= start:
+        raise HTTPException(status_code=422, detail="INVALID_INPUT_SCHEDULE")
+
+    input_names = {
+        item.get("name")
+        for item in model_metadata.get("modelVariables", [])
+        if item.get("causality") == "input"
+    }
+    normalized_schedule: list[dict[str, Any]] = []
+    seen_values: set[tuple[float, str]] = set()
+    previous_time = start
+    for event in input_schedule:
+        if not isinstance(event, dict) or set(event) != {"time", "values"}:
+            raise HTTPException(status_code=422, detail="INVALID_INPUT_SCHEDULE")
+        event_time = event["time"]
+        if isinstance(event_time, bool) or not isinstance(event_time, (int, float)):
+            raise HTTPException(status_code=422, detail="INVALID_INPUT_SCHEDULE")
+        event_time = float(event_time)
+        if not math.isfinite(event_time) or event_time < start or event_time >= stop or event_time < previous_time:
+            raise HTTPException(status_code=422, detail="INVALID_INPUT_SCHEDULE")
+        step_index = round((event_time - start) / step)
+        tolerance = max(1e-9, abs(step) * 1e-7)
+        if abs(start + step_index * step - event_time) > tolerance:
+            raise HTTPException(status_code=422, detail="INPUT_SCHEDULE_TIME_MUST_ALIGN_TO_STEP")
+        values = event["values"]
+        _validate_parameters(values)
+        if not values or any(name not in input_names for name in values):
+            raise HTTPException(status_code=422, detail="INPUT_SCHEDULE_CONTAINS_UNKNOWN_INPUT")
+        for name in values:
+            identity = (event_time, name)
+            if identity in seen_values:
+                raise HTTPException(status_code=422, detail="DUPLICATE_SCHEDULED_INPUT")
+            seen_values.add(identity)
+        normalized_schedule.append({"time": event_time, "values": values})
+        previous_time = event_time
+
+    validator = engine.FmuSession(
+        f"schedule_validation_{secrets.token_hex(6)}",
+        fmu_path,
+        access_key=access_key,
+    )
+    try:
+        validator.load()
+        for event in normalized_schedule:
+            try:
+                event["values"] = validator.validate_runtime_input_values(event["values"])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise HTTPException(status_code=422, detail="INVALID_SCHEDULED_INPUT_VALUE") from exc
+    finally:
+        validator.terminate()
+
+    try:
+        encoded = json.dumps(normalized_schedule, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="INVALID_INPUT_SCHEDULE") from exc
+    if len(encoded.encode("utf-8")) > 16 * 1024:
+        raise HTTPException(status_code=413, detail="INPUT_SCHEDULE_TOO_LARGE")
+    return normalized_schedule
+
+
 def _validate_active_reservation_deadline(context: dict[str, Any]) -> None:
     claims = context.get("claims") or {}
     if not isinstance(claims, dict):
@@ -505,6 +689,13 @@ async def run_simulation(body: SimulationBody):
         raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": report["issues"][:8]})
     model_metadata = fmu_storage.describe_path(fmu_path)
     _validate_options(access_key, body.options, policy, model_metadata=model_metadata)
+    input_schedule = _validate_input_schedule(
+        body.inputSchedule,
+        options=body.options,
+        model_metadata=model_metadata,
+        fmu_path=fmu_path,
+        access_key=access_key,
+    )
     evidence_options = effective_execution_options(
         model_metadata,
         body.options,
@@ -542,6 +733,7 @@ async def run_simulation(body: SimulationBody):
                     authorization_expires_at=auth_expiry,
                     reservation_ends_at=reservation_end,
                     resource_policy=policy,
+                    input_schedule=input_schedule,
                 )
             )
             try:
@@ -559,6 +751,7 @@ async def run_simulation(body: SimulationBody):
                 parameters=body.parameters or {},
                 options=evidence_options,
                 policy=applied_execution_policy(policy, evidence_options),
+                input_schedule=input_schedule,
             )
 
         if slot is None:
@@ -574,7 +767,16 @@ async def run_simulation(body: SimulationBody):
             parameters=body.parameters or None,
             early_return_allowed=body.options.get("earlyReturnAllowed", False),
         )
-        result = slot.run_until(float(stop), step_size=float(step) if step is not None else None)
+        if input_schedule:
+            for _snapshot in slot.run_until_streaming(
+                float(stop),
+                step_size=float(step) if step is not None else None,
+                input_schedule=input_schedule,
+            ):
+                pass
+            result = {"time": slot._time, "finishReason": slot._finished_reason}
+        else:
+            result = slot.run_until(float(stop), step_size=float(step) if step is not None else None)
         outputs = slot.get_outputs()
         selected_outputs = outputs.get("outputs", {})
         if body.options.get("outputVariables") is not None:
@@ -593,6 +795,7 @@ async def run_simulation(body: SimulationBody):
             parameters=body.parameters or {},
             options=evidence_options,
             policy=applied_execution_policy(policy, evidence_options),
+            input_schedule=input_schedule,
         )
     except process_runner.ProcessExecutionError as exc:
         status = {
@@ -615,6 +818,8 @@ async def run_simulation(body: SimulationBody):
 
 @app.post("/internal/fmu/simulations/jobs", status_code=202, dependencies=[Depends(_check_token)])
 async def submit_simulation_job(body: SimulationBody):
+    if body.inputSchedule:
+        raise HTTPException(status_code=422, detail="INPUT_SCHEDULE_NOT_SUPPORTED_FOR_ASYNC_JOBS")
     access_key = _validated_access_key(body.accessKey)
     if not isinstance(body.gatewayContext, dict):
         raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
@@ -716,6 +921,13 @@ async def stream_simulation(body: SimulationBody):
         raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": report["issues"][:8]})
     model_metadata = fmu_storage.describe_path(fmu_path)
     _validate_options(access_key, body.options, policy, model_metadata=model_metadata)
+    input_schedule = _validate_input_schedule(
+        body.inputSchedule,
+        options=body.options,
+        model_metadata=model_metadata,
+        fmu_path=fmu_path,
+        access_key=access_key,
+    )
     evidence_options = effective_execution_options(
         model_metadata,
         body.options,
@@ -776,6 +988,7 @@ async def stream_simulation(body: SimulationBody):
                     authorization_expires_at=auth_expiry,
                     reservation_ends_at=reservation_end,
                     resource_policy=policy,
+                    input_schedule=input_schedule,
                 ):
                     if snapshot.get("type") == "sim.done":
                         policy_evidence = applied_execution_policy(policy, evidence_options)
@@ -787,6 +1000,7 @@ async def stream_simulation(body: SimulationBody):
                             finish_reason=snapshot.get("finishReason") or "completed",
                             policy=policy_evidence,
                             result_sha256=stream_digest.hexdigest(),
+                            input_schedule=input_schedule,
                         )
                         snapshot = {**snapshot, "fmuSha256": model_sha256, "evidence": evidence}
                     line = encode_line(snapshot)
@@ -810,6 +1024,7 @@ async def stream_simulation(body: SimulationBody):
                 for snapshot in slot.run_until_streaming(
                     float(stop),
                     step_size=float(step) if step is not None else None,
+                    input_schedule=input_schedule,
                 ):
                     line = encode_line(snapshot)
                     stream_digest.update(line.encode("utf-8"))
@@ -827,6 +1042,7 @@ async def stream_simulation(body: SimulationBody):
                     finish_reason=slot._finished_reason or "completed",
                     policy=applied_execution_policy(policy, evidence_options),
                     result_sha256=stream_digest.hexdigest(),
+                    input_schedule=input_schedule,
                 )
                 yield encode_line({**final_payload, "fmuSha256": model_sha256, "evidence": final_evidence})
         except process_runner.ProcessExecutionError as exc:
@@ -1156,7 +1372,11 @@ def _sim_outputs_payload(
     return payload
 
 
-def _output_read_rate_limit_exception(exc: process_runner.OutputReadRateLimitError) -> HTTPException:
+class _OutputReadRateLimitErrorLike(Protocol):
+    retry_after_ms: int
+
+
+def _output_read_rate_limit_exception(exc: _OutputReadRateLimitErrorLike) -> HTTPException:
     return HTTPException(
         status_code=429,
         detail={
@@ -1246,6 +1466,8 @@ async def _handle_ws_message(
                 "step": True,
                 "setInputs": True,
                 "streamOutputs": True,
+                "advanceSamples": True,
+                "maxOutputHz": config.MAX_OUTPUT_SUBSCRIPTION_HZ,
                 "timeMode": ["simtime", "realtime", "external"],
             },
             "_session": new_session,
@@ -1313,7 +1535,12 @@ async def _handle_ws_message(
         auth.validate_gateway_context(command_context, access_key)
 
     if msg_type == "model.describe":
-        desc = fmu_storage.describe(session.access_key)
+        include_variables = msg.get("includeVariables", True)
+        if type(include_variables) is not bool:
+            raise HTTPException(400, "INVALID_COMMAND - includeVariables must be boolean")
+        desc = await asyncio.to_thread(session.load)
+        if not include_variables:
+            desc = {key: value for key, value in desc.items() if key != "modelVariables"}
         return {"type": "model.description", "sessionId": session.session_id, **desc}
 
     if msg_type == "sim.initialize":
@@ -1481,6 +1708,24 @@ async def _handle_ws_message(
         except RuntimeError as exc:
             raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
         return _sim_outputs_payload(session, outputs["outputs"], step_result)
+
+    if msg_type == "sim.advance":
+        try:
+            target_time = _strict_number(msg.get("targetTime"), "targetTime")
+            step_size = _strict_number(msg["stepSize"], "stepSize") if msg.get("stepSize") is not None else None
+            max_samples = msg.get("maxSamples", 256)
+            if type(max_samples) is not int or not 1 <= max_samples <= 256:
+                raise ValueError("maxSamples must be an integer between 1 and 256")
+            if session._time_mode == "external":
+                raise ValueError("sim.advance requires simtime or realtime mode")
+            result = await asyncio.to_thread(session.advance, target_time, max_samples=max_samples, step_size=step_size)
+        except process_runner.OutputReadRateLimitError as exc:
+            raise _output_read_rate_limit_exception(exc) from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"INVALID_ADVANCE - {exc}") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
+        return {"type": "sim.samples", "sessionId": session.session_id, **result}
 
     if msg_type == "sim.runUntil":
         target = msg.get("time", msg.get("targetTime"))

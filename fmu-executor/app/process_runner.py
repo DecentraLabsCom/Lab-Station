@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import multiprocessing as mp
@@ -37,6 +38,8 @@ from .windows_appcontainer import WindowsAppContainerProcess, delete_worker_appc
 if TYPE_CHECKING:
     from .engine import OutputSubscription
 
+logger = logging.getLogger(__name__)
+
 
 class ProcessExecutionError(RuntimeError):
     """A child-process execution failed or exceeded its deadline."""
@@ -61,6 +64,7 @@ _REALTIME_METHODS = {
     "validate_initial_values",
     "step",
     "run_until",
+    "advance",
     "validate_inputs",
     "set_inputs",
     "get_outputs",
@@ -141,6 +145,19 @@ def _sanitize_worker_environment() -> None:
         upper_name = name.upper()
         if any(marker in upper_name for marker in _SECRET_ENV_MARKERS):
             os.environ.pop(name, None)
+    # Native math runtimes may size their worker pools from the host's CPU
+    # count rather than the constrained FMU worker allocation. Keep those
+    # pools single-threaded so large FMUs cannot exhaust their memory budget
+    # before simulation starts.
+    for name in (
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "BLIS_NUM_THREADS",
+    ):
+        os.environ[name] = "1"
 
 
 def _stage_windows_fmu(source: Path, worker_directory: Path) -> Path:
@@ -172,18 +189,18 @@ def _stage_windows_fmu(source: Path, worker_directory: Path) -> Path:
         raise
 
 
-def _realtime_snapshot(session: Any) -> dict[str, Any]:
+def _realtime_snapshot(session: Any, *, include_model: bool = True) -> dict[str, Any]:
     model = getattr(session, "_md", None)
     default_experiment = getattr(model, "defaultExperiment", None)
     variables = []
-    for variable in getattr(model, "modelVariables", ()) or ():
+    for variable in (getattr(model, "modelVariables", ()) or ()) if include_model else ():
         variables.append({
             "name": str(getattr(variable, "name", "")),
             "valueReference": int(getattr(variable, "valueReference", 0)),
             "type": str(getattr(variable, "type", "")),
             "causality": str(getattr(variable, "causality", "")),
         })
-    return {
+    snapshot = {
         "state": session.state,
         "time": float(session._time),
         "startTime": float(session._start_time),
@@ -194,11 +211,15 @@ def _realtime_snapshot(session: Any) -> dict[str, Any]:
         "finishedReason": getattr(session, "_finished_reason", None),
         "initialised": bool(session._initialised),
         "terminated": bool(session._terminated),
-        "modelVariables": variables,
-        "defaultExperiment": {
-            "stepSize": getattr(default_experiment, "stepSize", None),
-        } if default_experiment is not None else None,
     }
+    if include_model:
+        snapshot.update({
+            "modelVariables": variables,
+            "defaultExperiment": {
+                "stepSize": getattr(default_experiment, "stepSize", None),
+            } if default_experiment is not None else None,
+        })
+    return snapshot
 
 
 def _realtime_session_worker(
@@ -219,7 +240,7 @@ def _realtime_session_worker(
             bind_worker_to_parent(expected_parent_pid)
         if start_gate is not None:
             start_gate.wait()
-        apply_worker_limits(resource_policy, worker_directory, str(fmu_path))
+        apply_worker_limits(resource_policy, worker_directory, str(fmu_path), access_key)
         _sanitize_worker_environment()
         if worker_directory:
             os.chdir(worker_directory)
@@ -248,7 +269,7 @@ def _realtime_session_worker(
                     "requestId": request_id,
                     "ok": False,
                     "error": "FMU worker request is invalid",
-                    "snapshot": _realtime_snapshot(session),
+                    "snapshot": _realtime_snapshot(session, include_model=method == "load"),
                 })
                 continue
             if method == "terminate":
@@ -257,7 +278,7 @@ def _realtime_session_worker(
                     "requestId": request_id,
                     "ok": True,
                     "result": None,
-                    "snapshot": _realtime_snapshot(session),
+                    "snapshot": _realtime_snapshot(session, include_model=method == "load"),
                 })
                 return
             if method not in _REALTIME_METHODS:
@@ -265,7 +286,7 @@ def _realtime_session_worker(
                     "requestId": request_id,
                     "ok": False,
                     "error": "FMU worker command is not allowlisted",
-                    "snapshot": _realtime_snapshot(session),
+                    "snapshot": _realtime_snapshot(session, include_model=method == "load"),
                 })
                 continue
             try:
@@ -274,14 +295,14 @@ def _realtime_session_worker(
                     "requestId": request_id,
                     "ok": True,
                     "result": result,
-                    "snapshot": _realtime_snapshot(session),
+                    "snapshot": _realtime_snapshot(session, include_model=method == "load"),
                 })
             except Exception as exc:
                 connection.send({
                     "requestId": request_id,
                     "ok": False,
                     "error": str(exc) or "FMU worker command failed",
-                    "snapshot": _realtime_snapshot(session),
+                    "snapshot": _realtime_snapshot(session, include_model=method == "load"),
                 })
     except (EOFError, OSError):
         pass
@@ -437,7 +458,7 @@ class RealtimeSession:
         self._finished_reason = snapshot.get("finishedReason", self._finished_reason)
         self._initialised = bool(snapshot.get("initialised", self._initialised))
         self._terminated = bool(snapshot.get("terminated", self._terminated))
-        variables = snapshot.get("modelVariables", [])
+        variables = snapshot.get("modelVariables")
         default_experiment = snapshot.get("defaultExperiment")
         if isinstance(variables, list):
             self._md = SimpleNamespace(modelVariables=[
@@ -553,7 +574,9 @@ class RealtimeSession:
         return None
 
     def load(self) -> dict[str, Any]:
-        return self._rpc("load")
+        if not hasattr(self, "_description"):
+            self._description = self._rpc("load")
+        return self._description
 
     def initialize(self, **kwargs: Any) -> dict[str, Any]:
         return self._rpc("initialize", **kwargs)
@@ -570,6 +593,13 @@ class RealtimeSession:
         if step_size is None:
             return self._rpc("run_until", target_time)
         return self._rpc("run_until", target_time, step_size=step_size)
+
+    def advance(self, target_time: float, max_samples: int = 256, step_size: float | None = None) -> dict[str, Any]:
+        self._acquire_output_read_or_raise()
+        try:
+            return self._rpc("advance", target_time, max_samples=max_samples, step_size=step_size)
+        finally:
+            self._finish_output_read()
 
     def set_inputs(self, values: dict[str, Any]) -> None:
         self._rpc("set_inputs", values)
@@ -771,6 +801,7 @@ def _execute_worker(
     probe_only: bool = False,
     resource_policy: dict[str, Any] | None = None,
     expected_parent_pid: int | None = None,
+    input_schedule: list[dict[str, Any]] | None = None,
 ) -> None:
     """Worker entry point; imports native FMU code only after OS limits apply."""
     session = None
@@ -779,7 +810,7 @@ def _execute_worker(
             bind_worker_to_parent(expected_parent_pid)
         if start_gate is not None:
             start_gate.wait()
-        apply_worker_limits(resource_policy, worker_directory, fmu_path)
+        apply_worker_limits(resource_policy, worker_directory, fmu_path, access_key)
         _sanitize_worker_environment()
         if worker_directory:
             os.chdir(worker_directory)
@@ -816,6 +847,9 @@ def _execute_worker(
             parameters=parameters or None,
             early_return_allowed=options.get("earlyReturnAllowed", True),
         )
+        scheduled_inputs = list(input_schedule or [])
+        while scheduled_inputs and float(scheduled_inputs[0]["time"]) <= start + 1e-12:
+            session.set_inputs(scheduled_inputs.pop(0)["values"])
         requested_outputs = options.get("outputVariables")
         result_size_limit = config.MAX_STORED_RESULT_BYTES
         if resource_policy is not None:
@@ -834,7 +868,11 @@ def _execute_worker(
             result_bytes = 0
             sample_every = max(1, int(options.get("outputSampleEverySteps", 1)))
             step_index = 0
-            for snapshot in session.run_until_streaming(stop, step_size=step_value):
+            for snapshot in session.run_until_streaming(
+                stop,
+                step_size=step_value,
+                input_schedule=scheduled_inputs,
+            ):
                 step_index += 1
                 is_final = session._finished_reason is not None or snapshot["time"] >= stop
                 if step_index % sample_every != 0 and not is_final:
@@ -868,7 +906,11 @@ def _execute_worker(
             sample_every = max(1, int(options.get("outputSampleEverySteps", 1)))
             step_index = 0
             last_sample_time = initial["time"]
-            for snapshot in session.run_until_streaming(stop, step_size=step_value):
+            for snapshot in session.run_until_streaming(
+                stop,
+                step_size=step_value,
+                input_schedule=scheduled_inputs,
+            ):
                 step_index += 1
                 is_final = session._finished_reason is not None or snapshot["time"] >= stop
                 if step_index % sample_every != 0 and not is_final:
@@ -901,7 +943,19 @@ def _execute_worker(
                 },
             })
         else:
-            result = session.run_until(stop, step_size=step_value)
+            if scheduled_inputs:
+                for _snapshot in session.run_until_streaming(
+                    stop,
+                    step_size=step_value,
+                    input_schedule=scheduled_inputs,
+                ):
+                    pass
+                result = {
+                    "time": session._time,
+                    "finishReason": session._finished_reason,
+                }
+            else:
+                result = session.run_until(stop, step_size=step_value)
             outputs = session.get_outputs()
             selected_outputs = select_outputs(outputs.get("outputs", {}))
             payload = {
@@ -926,7 +980,13 @@ def _execute_worker(
             "message": "FMU worker isolation could not be applied",
             "retryable": False,
         })
-    except Exception:
+    except Exception as exc:
+        logger.exception(
+            "Isolated FMU worker failed (accessKey=%s, probe=%s, errorType=%s)",
+            access_key,
+            probe_only,
+            type(exc).__name__,
+        )
         output_queue.put({
             "kind": "error",
             "code": "FMU_EXECUTION_FAILED",
@@ -948,7 +1008,8 @@ def _new_process(
     capture_series: bool = False,
     probe_only: bool = False,
     resource_policy: dict[str, Any] | None = None,
-) -> tuple[Any, Any, WindowsWorkerJob | None, Path]:
+    input_schedule: list[dict[str, Any]] | None = None,
+) -> tuple[Any, Any, WindowsWorkerJob | None, Path, Any]:
     context = mp.get_context("spawn")
     config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
     worker_directory = Path(tempfile.mkdtemp(prefix="worker_", dir=str(config.TEMP_DIR)))
@@ -963,7 +1024,7 @@ def _new_process(
     worker_args = (
         str(worker_fmu_path), access_key, parameters, options, output_queue,
         streaming, capture_series, start_gate, str(worker_directory),
-        probe_only, resource_policy, os.getpid(),
+        probe_only, resource_policy, os.getpid(), input_schedule,
     )
     process = _worker_process(
         context,
@@ -980,7 +1041,12 @@ def _new_process(
         job = attach_worker_limits(process, resource_policy)
         _mark_worker_directory(worker_directory, worker_pid)
         start_gate.set()
-        return process, context, job, worker_directory
+        # Keep the event alive until the caller has received a worker result.
+        # Process.start() drops its copy of _args immediately, while a spawned
+        # child may still be unpickling the semaphore-backed event. Returning a
+        # strong reference prevents its parent-side finalizer from unlinking
+        # the semaphore before the child can rebuild it.
+        return process, context, job, worker_directory, start_gate
     except Exception as exc:
         start_gate.set()
         terminate_worker(process)
@@ -1005,14 +1071,15 @@ def run(
     reservation_ends_at: float | None = None,
     probe_only: bool = False,
     resource_policy: dict[str, Any] | None = None,
+    input_schedule: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run a one-shot simulation in a spawned process."""
     context = mp.get_context("spawn")
     output_queue = context.Queue(maxsize=1)
     try:
-        process, _, job, worker_directory = _new_process(
+        process, _, job, worker_directory, _start_gate = _new_process(
             fmu_path, access_key, parameters, options, output_queue,
-            False, capture_series, probe_only, resource_policy,
+            False, capture_series, probe_only, resource_policy, input_schedule,
         )
     except Exception:
         output_queue.close()
@@ -1092,14 +1159,16 @@ def stream(
     authorization_expires_at: float | None = None,
     reservation_ends_at: float | None = None,
     resource_policy: dict[str, Any] | None = None,
+    input_schedule: list[dict[str, Any]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield NDJSON payloads from an isolated streaming worker."""
     context = mp.get_context("spawn")
     output_queue = context.Queue(maxsize=64)
     try:
-        process, _, job, worker_directory = _new_process(
+        process, _, job, worker_directory, _start_gate = _new_process(
             fmu_path, access_key, parameters, options, output_queue, True,
             resource_policy=resource_policy,
+            input_schedule=input_schedule,
         )
     except Exception:
         output_queue.close()

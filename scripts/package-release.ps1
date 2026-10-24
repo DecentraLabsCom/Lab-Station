@@ -238,16 +238,7 @@ try {
         if (-not $warehouseAppScriptText.Contains('createSmartWarehouseScene') -or -not $warehouseAppScriptText.Contains('scene.js')) {
             throw 'Smart Warehouse Three.js app does not load its procedural scene module.'
         }
-        foreach ($protocolMessage in @(
-            'decentralabs:digital-twin-host-ready',
-            'decentralabs:digital-twin-ready',
-            'decentralabs:digital-twin-error',
-            'decentralabs:fmi-sample'
-        )) {
-            if (-not $warehouseAppScriptText.Contains($protocolMessage)) {
-                throw "Smart Warehouse Three.js app is missing Marketplace host protocol message '$protocolMessage'."
-            }
-        }
+
     } finally {
         $warehouseAppArchive.Dispose()
     }

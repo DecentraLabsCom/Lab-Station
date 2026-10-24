@@ -7,6 +7,7 @@ import binascii
 import copy
 import logging
 import math
+import json
 from functools import reduce
 from operator import mul
 import shutil
@@ -306,8 +307,36 @@ class FmuSession:
         target_time: float,
         step_size: float | None = None,
         output_refs: list[int] | None = None,
+        input_schedule: list[dict[str, Any]] | None = None,
+        _sequence_offset: int = 0,
     ) -> Generator[dict[str, Any], None, None]:
         """Step until *target_time*, yielding output snapshots at each step."""
+        if input_schedule:
+            sequence_offset = _sequence_offset
+            for event in input_schedule:
+                event_time = float(event["time"])
+                if event_time < self._time - 1e-12:
+                    raise ValueError("Scheduled input time must not be earlier than current simulation time")
+                if event_time > self._time + 1e-12:
+                    for snapshot in self.run_until_streaming(
+                        event_time,
+                        step_size=step_size,
+                        output_refs=output_refs,
+                        _sequence_offset=sequence_offset,
+                    ):
+                        sequence_offset = int(snapshot["seq"]) + 1
+                        yield snapshot
+                if self._state == "stopped":
+                    return
+                self.set_inputs(event["values"])
+            yield from self.run_until_streaming(
+                target_time,
+                step_size=step_size,
+                output_refs=output_refs,
+                _sequence_offset=sequence_offset,
+            )
+            return
+
         slave = self._require_slave()
         if not math.isfinite(target_time):
             raise ValueError("targetTime must be finite")
@@ -324,7 +353,7 @@ class FmuSession:
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
         self._ensure_step_budget(math.ceil(expected_steps))
         self._state = "running"
-        seq = 0
+        seq = _sequence_offset
         consecutive_no_progress_events = 0
         while self._time < target_time - 1e-12:
             remaining = target_time - self._time
@@ -371,6 +400,38 @@ class FmuSession:
         if self._step_count + additional_steps > self._max_simulation_steps:
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
 
+    def advance(self, target_time: float, max_samples: int = 256, step_size: float | None = None) -> dict[str, Any]:
+        """Advance a bounded batch without dropping intermediate output samples.
+
+        One request is one flow-control window. Reserve space for the worst-case
+        scalar values, timestamps and response envelope before doing any steps.
+        The existing streaming iterator owns FMI stepping and termination rules.
+        """
+        if type(max_samples) is not int or not 1 <= max_samples <= 256:
+            raise ValueError("maxSamples must be an integer between 1 and 256")
+        outputs = self.get_outputs()["outputs"]
+        if any(not isinstance(value, (bool, int, float)) for value in outputs.values()):
+            raise ValueError("Batched samples require scalar FMI outputs")
+        sample_bound = 128 + sum(len(json.dumps(name)) + 64 for name in outputs)
+        safe_count = min(max_samples, 900_000 // sample_bound)
+        if safe_count < 1:
+            raise ValueError("One output sample exceeds the WebSocket frame budget")
+        samples = []
+        snapshots = self.run_until_streaming(target_time, step_size=step_size)
+        try:
+            for snapshot in snapshots:
+                samples.append({"time": snapshot["time"], "outputs": snapshot["outputs"]})
+                if len(samples) >= safe_count:
+                    break
+        finally:
+            snapshots.close()
+        return {
+            "samples": samples,
+            "simTime": self._time,
+            "finished": self._state == "stopped",
+            "finishReason": self._finished_reason,
+        }
+
     def set_inputs(self, values: dict[str, Any]) -> None:
         self._ensure_live()
         if self._state in {"stopped", "error"}:
@@ -391,6 +452,14 @@ class FmuSession:
         self._ensure_live()
         if self._state in {"stopped", "error"}:
             raise RuntimeError(f"Session cannot accept inputs from state {self._state}")
+        return self._validate_values(values, phase="runtime")
+
+    def validate_runtime_input_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Validate input values against the loaded model before initialization."""
+        if self._terminated:
+            raise RuntimeError("Session already terminated")
+        if self._md is None:
+            raise RuntimeError("FMU not loaded – call load() first")
         return self._validate_values(values, phase="runtime")
 
     def get_outputs(self, refs: list[int] | None = None) -> dict[str, Any]:
@@ -685,8 +754,10 @@ class FmuSession:
 
     def _describe(self) -> dict[str, Any]:
         from . import fmu_storage
-        # Re-use the same normalised describe logic
-        return fmu_storage.describe(self.access_key)
+        # The isolated worker may only access the staged FMU path, not the
+        # catalog root used to resolve access keys. Reuse its parsed model
+        # description and avoid opening a large modelDescription.xml twice.
+        return fmu_storage.describe_model_description(self._md)
 
     def _validate_values(self, params: dict[str, Any], *, phase: str) -> dict[str, Any]:
         if not isinstance(params, dict):
