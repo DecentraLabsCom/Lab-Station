@@ -358,7 +358,7 @@ if (!registryFallbackNic["wolReady"]) {
     errors.Push("energy: standardized registry values must be accepted as a NIC fallback")
 }
 
-sampleStatus := Map(
+statusFixture := Map(
     "stationProfile", "hybrid",
     "identity", Map("labUserExists", true),
     "remoteAppEnabled", true,
@@ -373,13 +373,13 @@ sampleStatus := Map(
     "wake", Map("armedCount", 1, "nicNonCompliant", []),
     "power", Map("sleepCompliant", true, "hibernateCompliant", true)
 )
-sampleSummary := LS_Status.BuildSummary(sampleStatus)
+sampleSummary := LS_Status.BuildSummary(statusFixture)
 if (sampleSummary["state"] != "ready" || sampleSummary["issues"].Length != 0) {
     errors.Push("status: another logged-on user must not create a needs-action issue")
 }
 
-sampleStatus["fmuExecutor"] := Map("available", true, "tokenConfigured", false, "running", false)
-sampleReadiness := LS_Status.BuildCapabilityReadiness(sampleStatus)
+statusFixture["fmuExecutor"] := Map("available", true, "tokenConfigured", false, "running", false)
+sampleReadiness := LS_Status.BuildCapabilityReadiness(statusFixture)
 if (!sampleReadiness["physicalLab"]["ready"]) {
     errors.Push("status: FMU issues must not block physical-lab readiness")
 }
