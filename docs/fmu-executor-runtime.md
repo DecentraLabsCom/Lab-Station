@@ -54,6 +54,17 @@ Linux per-file limit). Archive checks are bounded by `FMU_MAX_ARCHIVE_BYTES`
 `?probe=true` option performs an isolated load and initialization before
 publication.
 
+The Station supervisor is configured for ceilings of up to 600,000
+communication steps, 10,000 realtime input updates per ten-second window,
+1,000 output subscriptions per second, and scheduled-input payloads of up to
+120,000 events/16 MiB. These settings take effect only with a shared FMU
+Executor release that supports those environment controls. The currently
+pinned `0.3.2` source still hard-caps runs at 100,000 steps and scheduled input
+at 128 events/16 KiB, so Station source pins must be advanced before production
+stations can use the raised limits. Lower per-lab execution policies continue
+to apply. The Gateway request limit and OpenResty request-body limit are set to
+accept the matching scheduled-input payload size.
+
 The release includes the six reference FMUs and the Smart Warehouse Cell demo
 under `fmu-executor/fmu-data/`. Each reference FMU has a Windows x64 binary and
 is distributed with `Reference-FMUs.LICENSE.txt`. Smart Warehouse includes its

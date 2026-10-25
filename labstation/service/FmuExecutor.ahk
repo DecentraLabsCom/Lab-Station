@@ -53,6 +53,20 @@ class LS_FmuExecutor {
         return Trim(EnvGet("FMU_INTERNAL_TOKEN")) != ""
     }
 
+    static ConfigureRuntimeLimits() {
+        defaults := Map(
+            "FMU_MAX_SIMULATION_STEPS", "600000",
+            "FMU_MAX_INPUT_UPDATES_PER_WINDOW", "10000",
+            "FMU_MAX_OUTPUT_SUBSCRIPTION_HZ", "1000",
+            "FMU_MAX_INPUT_SCHEDULE_EVENTS", "120000",
+            "FMU_MAX_INPUT_SCHEDULE_BYTES", "16777216",
+        )
+        for name, value in defaults {
+            if (Trim(EnvGet(name)) = "")
+                EnvSet(name, value)
+        }
+    }
+
     static SetBuildCommit() {
         lockPath := LAB_STATION_FMU_EXECUTOR_DIR "\SOURCE.lock.json"
         if (!FileExist(lockPath))
@@ -85,6 +99,7 @@ class LS_FmuExecutor {
             LS_LogError("FMU executor: FMU_INTERNAL_TOKEN is not configured in the service environment")
             return false
         }
+        this.ConfigureRuntimeLimits()
         this.SetBuildCommit()
         if (!this.EnsureStateDirectory()) {
             LS_LogError("FMU executor: unable to secure persistent simulation history storage")
