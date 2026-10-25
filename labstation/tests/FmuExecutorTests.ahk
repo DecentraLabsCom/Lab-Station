@@ -169,6 +169,7 @@ RunFmuExecutorTests() {
     try {
         TestAvailabilityUsesExecutorLayout()
         TestConfiguredPortUsesEnvironmentAndSafeFallback()
+        TestRuntimeLimitsIncludeSimulationParameterCeiling()
         TestStartRequiresAvailabilityAndToken()
         TestStartPrefersBundledRuntime()
         TestStartRunsTheConfiguredPythonExecutor()
@@ -218,6 +219,17 @@ TestConfiguredPortUsesEnvironmentAndSafeFallback() {
     LS_TestAssert(LS_ResolveFmuExecutorPort() = 8091, "FMU supervisor falls back when the port is not numeric")
 
     EnvSet("FMU_EXECUTOR_PORT", original)
+}
+
+TestRuntimeLimitsIncludeSimulationParameterCeiling() {
+    original := EnvGet("FMU_MAX_SIMULATION_PARAMETERS")
+    EnvSet("FMU_MAX_SIMULATION_PARAMETERS", "")
+    LS_FmuExecutor.ConfigureRuntimeLimits()
+    LS_TestAssert(
+        EnvGet("FMU_MAX_SIMULATION_PARAMETERS") = "128",
+        "Station configures the shared maximum simulation parameter count"
+    )
+    EnvSet("FMU_MAX_SIMULATION_PARAMETERS", original)
 }
 
 TestAvailabilityUsesExecutorLayout() {
