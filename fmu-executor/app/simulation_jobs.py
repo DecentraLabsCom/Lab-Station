@@ -24,6 +24,7 @@ from .reproducibility import (
     effective_execution_options,
 )
 from .simulation_store import QuotaExceededError, SimulationStore, reservation_scope
+from .simulation_defaults import resolve_simulation_time_options
 
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -43,7 +44,14 @@ def model_execution_policy(context: dict[str, Any] | None) -> dict[str, int]:
     raw = claims.get("fmuExecutionPolicy", {}) if isinstance(claims, dict) else {}
     if not isinstance(raw, dict):
         raise HTTPException(status_code=403, detail="INVALID_FMU_EXECUTION_POLICY")
-    allowed = {"maxDailyScenarios", "maxSteps", "maxCpuSeconds", "maxMemoryMiB", "maxResultBytes"}
+    allowed = {
+        "maxDailyScenarios",
+        "maxSteps",
+        "maxCpuSeconds",
+        "maxMemoryMiB",
+        "maxResultBytes",
+        "maxInputUpdatesPerWindow",
+    }
     if set(raw) - allowed:
         raise HTTPException(status_code=403, detail="INVALID_FMU_EXECUTION_POLICY")
     maxima = {
@@ -52,6 +60,7 @@ def model_execution_policy(context: dict[str, Any] | None) -> dict[str, int]:
         "maxCpuSeconds": config.WORKER_CPU_SECONDS,
         "maxMemoryMiB": config.WORKER_MEMORY_BYTES // (1024 * 1024),
         "maxResultBytes": config.MAX_STORED_RESULT_BYTES,
+        "maxInputUpdatesPerWindow": config.MAX_INPUT_UPDATES_PER_WINDOW,
     }
     defaults = {
         "maxDailyScenarios": config.MAX_SCENARIOS_PER_RESERVATION_PER_DAY,
@@ -59,6 +68,7 @@ def model_execution_policy(context: dict[str, Any] | None) -> dict[str, int]:
         "maxCpuSeconds": config.WORKER_CPU_SECONDS,
         "maxMemoryMiB": config.WORKER_MEMORY_BYTES // (1024 * 1024),
         "maxResultBytes": config.MAX_STORED_RESULT_BYTES,
+        "maxInputUpdatesPerWindow": config.MAX_INPUT_UPDATES_PER_WINDOW,
     }
     policy = {}
     for key, default in defaults.items():
@@ -122,11 +132,7 @@ def _validate_options(
         metadata = model_metadata or fmu_storage.describe(access_key)
         if not metadata.get("supportsCoSimulation"):
             raise HTTPException(status_code=422, detail="FMU_COSIMULATION_REQUIRED")
-        numeric_options = {
-            "startTime": options.get("startTime", 0.0),
-            "stopTime": options.get("stopTime", 1.0),
-            "stepSize": options.get("stepSize", metadata.get("defaultStepSize") or 0.001),
-        }
+        numeric_options = resolve_simulation_time_options(metadata, options)
         if any(type(value) not in (int, float) for value in numeric_options.values()):
             raise HTTPException(status_code=422, detail="INVALID_SIMULATION_OPTIONS")
         start, stop, step = (float(value) for value in numeric_options.values())

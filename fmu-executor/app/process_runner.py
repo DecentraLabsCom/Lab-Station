@@ -23,7 +23,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Iterator
 from uuid import uuid4
 
-from . import config
+from . import config, engine
 from .isolation import (
     WindowsWorkerJob,
     WorkerIsolationError,
@@ -34,6 +34,7 @@ from .isolation import (
     worker_process_is_alive,
 )
 from .windows_appcontainer import WindowsAppContainerProcess, delete_worker_appcontainer_profile
+from .simulation_defaults import DEFAULT_STEP_SIZE, resolve_simulation_time_options
 
 if TYPE_CHECKING:
     from .engine import OutputSubscription
@@ -66,6 +67,7 @@ _REALTIME_METHODS = {
     "run_until",
     "advance",
     "validate_inputs",
+    "validate_input_schedule",
     "set_inputs",
     "get_outputs",
     "pause",
@@ -298,12 +300,17 @@ def _realtime_session_worker(
                     "snapshot": _realtime_snapshot(session, include_model=method == "load"),
                 })
             except Exception as exc:
-                connection.send({
+                failure = {
                     "requestId": request_id,
                     "ok": False,
                     "error": str(exc) or "FMU worker command failed",
+                    "errorType": type(exc).__name__,
                     "snapshot": _realtime_snapshot(session, include_model=method == "load"),
-                })
+                }
+                applied_events = getattr(exc, "input_events_applied", None)
+                if type(applied_events) is int and applied_events >= 0:
+                    failure["inputEventsApplied"] = applied_events
+                connection.send(failure)
     except (EOFError, OSError):
         pass
     except WorkerIsolationError:
@@ -348,7 +355,7 @@ class RealtimeSession:
         self._time = 0.0
         self._start_time = 0.0
         self._stop_time = 1.0
-        self._step_size = 0.001
+        self._step_size = DEFAULT_STEP_SIZE
         self._time_mode = "simtime"
         self._playback_speed = 1.0
         self._finished_reason = None
@@ -538,7 +545,18 @@ class RealtimeSession:
                     raise ProcessExecutionError("FMU realtime worker returned an invalid response", retryable=True)
                 self._apply_snapshot(response.get("snapshot"))
                 if not response.get("ok"):
-                    raise RuntimeError(str(response.get("error") or "FMU realtime command failed"))
+                    error = str(response.get("error") or "FMU realtime command failed")
+                    if method == "advance" and response.get("errorType") in {
+                        "AdvancePreExecutionError",
+                        "AdvanceExecutionError",
+                    }:
+                        applied_events = response.get("inputEventsApplied", 0)
+                        if type(applied_events) is int and applied_events >= 0:
+                            error_type = response.get("errorType")
+                            if error_type == "AdvancePreExecutionError":
+                                raise engine.AdvancePreExecutionError(error, applied_events)
+                            raise engine.AdvanceExecutionError(error, applied_events)
+                    raise RuntimeError(error)
                 return response.get("result")
             except (EOFError, OSError) as exc:
                 self._stop_process()
@@ -594,10 +612,28 @@ class RealtimeSession:
             return self._rpc("run_until", target_time)
         return self._rpc("run_until", target_time, step_size=step_size)
 
-    def advance(self, target_time: float, max_samples: int = 256, step_size: float | None = None) -> dict[str, Any]:
+    def advance(
+        self,
+        target_time: float,
+        max_samples: int = 256,
+        step_size: float | None = None,
+        input_schedule: list[dict[str, Any]] | None = None,
+        output_sample_every_steps: int = 1,
+        output_refs: list[int] | None = None,
+        max_compute_ms: float | None = None,
+    ) -> dict[str, Any]:
         self._acquire_output_read_or_raise()
         try:
-            return self._rpc("advance", target_time, max_samples=max_samples, step_size=step_size)
+            return self._rpc(
+                "advance",
+                target_time,
+                max_samples=max_samples,
+                step_size=step_size,
+                input_schedule=input_schedule,
+                output_sample_every_steps=output_sample_every_steps,
+                output_refs=output_refs,
+                max_compute_ms=max_compute_ms,
+            )
         finally:
             self._finish_output_read()
 
@@ -607,6 +643,10 @@ class RealtimeSession:
     def validate_inputs(self, values: dict[str, Any]) -> dict[str, Any]:
         result = self._rpc("validate_inputs", values)
         return result if isinstance(result, dict) else {}
+
+    def validate_input_schedule(self, input_schedule: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = self._rpc("validate_input_schedule", input_schedule)
+        return result if isinstance(result, list) else []
 
     def get_outputs(self, refs: list[int] | None = None) -> dict[str, Any]:
         return self._rpc("get_outputs", refs)
@@ -831,11 +871,11 @@ def _execute_worker(
                 config.MAX_SIMULATION_STEPS,
                 int(resource_policy.get("maxSteps", config.MAX_SIMULATION_STEPS)),
             )
-        session.load()
-        start = float(options.get("startTime", 0.0))
-        stop = float(options.get("stopTime", 1.0))
-        step = options.get("stepSize")
-        step_value = float(step) if step is not None else None
+        model_metadata = session.load()
+        time_options = resolve_simulation_time_options(model_metadata, options)
+        start = float(time_options["startTime"])
+        stop = float(time_options["stopTime"])
+        step_value = float(time_options["stepSize"])
         if probe_only:
             session.initialize(start_time=start, stop_time=stop, step_size=step_value)
             output_queue.put({"kind": "result", "payload": {"type": "fmu.probe", "success": True}})

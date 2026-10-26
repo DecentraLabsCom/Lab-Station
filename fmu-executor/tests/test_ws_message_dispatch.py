@@ -24,6 +24,7 @@ class Session:
     state = "initialized"
     _time = 0.0
     _stop_time = 1.0
+    _start_time = 0.0
     _step_size = 0.1
     _time_mode = "simtime"
     _playback_speed = 1.0
@@ -105,13 +106,95 @@ def test_advance_batches_use_the_same_authorized_session_and_validate_before_exe
     session.advance = Mock(return_value={"samples": [{"time": 0.1, "outputs": {"x": 1}}], "simTime": 0.1, "finished": False})
     result = call({"type": "sim.advance", "targetTime": 2, "maxSamples": 256, "stepSize": 0.1})
     assert result["type"] == "sim.samples" and result["sessionId"] == session.session_id
-    session.advance.assert_called_once_with(2.0, max_samples=256, step_size=0.1)
+    session.advance.assert_called_once_with(
+        2.0,
+        max_samples=256,
+        step_size=0.1,
+        input_schedule=[],
+        output_sample_every_steps=1,
+        output_refs=None,
+        max_compute_ms=None,
+    )
     with pytest.raises(HTTPException):
         call({"type": "sim.advance", "targetTime": 2, "maxSamples": 257})
     assert session.advance.call_count == 1
     assert call({"type": "ping"})["type"] == "session.pong"
     assert call({"type": "session.terminate"})["reason"] == "client_terminated"
     assert session._terminated
+
+
+def test_advance_reserves_scheduled_input_quota_and_settles_only_applied_events(dispatch, monkeypatch):
+    session, call = dispatch
+    schedule = [
+        {"time": 0.1, "values": {"input": 1}},
+        {"time": 0.2, "values": {"input": 2}},
+    ]
+    session.validate_input_schedule = Mock(side_effect=lambda events: events)
+    session.advance = Mock(return_value={
+        "samples": [{"time": 0.2, "outputs": {"x": 1}}],
+        "simTime": 0.2,
+        "finished": False,
+        "inputEventsApplied": 1,
+    })
+    reserve = Mock(return_value={"reservationId": "scheduled-input-reservation"})
+    settle = Mock()
+    monkeypatch.setattr(main, "_reserve_input_updates", reserve)
+    monkeypatch.setattr(main, "_settle_input_updates", settle)
+
+    result = call({
+        "type": "sim.advance",
+        "targetTime": 0.2,
+        "maxSamples": 2,
+        "stepSize": 0.1,
+        "inputSchedule": schedule,
+    })
+
+    assert result["type"] == "sim.samples"
+    reserve.assert_called_once_with(session.gateway_context, "demo.fmu", schedule)
+    session.advance.assert_called_once_with(
+        0.2,
+        max_samples=2,
+        step_size=0.1,
+        input_schedule=schedule,
+        output_sample_every_steps=1,
+        output_refs=None,
+        max_compute_ms=None,
+    )
+    settle.assert_called_once_with(
+        session.gateway_context,
+        "demo.fmu",
+        "scheduled-input-reservation",
+        1,
+    )
+
+
+def test_advance_releases_scheduled_quota_when_output_rate_limit_prevents_execution(dispatch, monkeypatch):
+    session, call = dispatch
+    schedule = [{"time": 0.1, "values": {"input": 1}}]
+    session.validate_input_schedule = Mock(side_effect=lambda events: events)
+    session.advance = Mock(side_effect=process_runner.OutputReadRateLimitError(100))
+    reserve = Mock(return_value={"reservationId": "scheduled-input-reservation"})
+    settle = Mock()
+    monkeypatch.setattr(main, "_reserve_input_updates", reserve)
+    monkeypatch.setattr(main, "_settle_input_updates", settle)
+
+    with pytest.raises(HTTPException) as error:
+        call({
+            "type": "sim.advance",
+            "targetTime": 0.2,
+            "maxSamples": 2,
+            "stepSize": 0.1,
+            "inputSchedule": schedule,
+        })
+
+    assert error.value.status_code == 429
+    session.advance.assert_called_once()
+    settle.assert_called_once_with(
+        session.gateway_context,
+        "demo.fmu",
+        "scheduled-input-reservation",
+        0,
+    )
 
 
 def test_live_session_commands_reject_invalid_shapes_and_states(dispatch):
@@ -157,6 +240,8 @@ def test_session_creation_and_capacity_failure(dispatch, monkeypatch, tmp_path):
     created = call({"type": "session.create"}, {"accessKey": "demo.fmu", "claims": {"exp": time.time() + 3600}}, selected_session=None)
     assert created["type"] == "session.created" and created["_session"] is new_session
     assert new_session.loaded
+    assert created["capabilities"]["inputUpdateQuota"]["maxUpdatesPerWindow"] == main.config.MAX_INPUT_UPDATES_PER_WINDOW
+    assert created["capabilities"]["inputUpdateQuota"]["windowMs"] == main.config.INPUT_UPDATE_WINDOW_SECONDS * 1000
 
     monkeypatch.setattr(engine, "create_session", lambda *_args, **_kwargs: (_ for _ in ()).throw(engine.CapacityExceededError("full")))
     with pytest.raises(HTTPException) as exc:
@@ -238,6 +323,7 @@ def test_attach_requires_a_live_context_and_matching_session(dispatch, monkeypat
         selected_session=None,
     )
     assert attached["type"] == "session.attached"
+    assert attached["capabilities"]["inputUpdateQuota"]["maxScheduledEventsPerAdvance"] <= main.config.MAX_INPUT_UPDATES_PER_WINDOW
     with pytest.raises(HTTPException) as exc:
         call({"type": "session.attach", "sessionId": "other"}, {"accessKey": "demo.fmu"})
     assert exc.value.status_code == 403

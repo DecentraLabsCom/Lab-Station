@@ -8,6 +8,7 @@ import copy
 import logging
 import math
 import json
+import re
 from functools import reduce
 from operator import mul
 import shutil
@@ -28,8 +29,50 @@ from fmpy.fmi1 import FMICallException
 from fmpy.fmi2 import fmi2Discard, fmi2LastSuccessfulTime, fmi2Pending, fmi2Terminated
 
 from . import config
+from .simulation_defaults import DEFAULT_STEP_SIZE, resolve_simulation_time_options
 
 logger = logging.getLogger(__name__)
+
+
+class AdvancePreExecutionError(ValueError):
+    """An advance failed before stepping the FMU; report any applied input prefix."""
+
+    def __init__(self, message: str, input_events_applied: int = 0):
+        super().__init__(message)
+        self.input_events_applied = input_events_applied
+
+
+class AdvanceExecutionError(RuntimeError):
+    """An advance failed after stepping began and reports its applied input prefix."""
+
+    def __init__(self, message: str, input_events_applied: int):
+        super().__init__(message)
+        self.input_events_applied = input_events_applied
+
+
+def _ceil_step_count(expected_steps: float, current_time: float, target_time: float, step_size: float) -> int:
+    """Round away floating-point noise at an exact model-step boundary."""
+    nearest_step = round(expected_steps)
+    time_tolerance = max(1e-12, abs(current_time) * 1e-12, abs(target_time) * 1e-12)
+    if abs(expected_steps - nearest_step) * step_size <= time_tolerance:
+        return int(nearest_step)
+    return math.ceil(expected_steps)
+
+
+def estimate_advance_samples(
+    current_time: float,
+    target_time: float,
+    stop_time: float,
+    step_size: float,
+    output_sample_every_steps: int,
+) -> int:
+    """Estimate output samples with the same time-boundary tolerance as the engine."""
+    effective_target = min(target_time, stop_time)
+    expected_steps = max(0.0, effective_target - current_time) / step_size
+    if not math.isfinite(expected_steps):
+        raise ValueError("targetTime and stepSize produce an invalid step count")
+    step_count = _ceil_step_count(expected_steps, current_time, effective_target, step_size)
+    return math.ceil(step_count / output_sample_every_steps)
 
 
 # ── subscription model ───────────────────────────────────────────
@@ -134,11 +177,11 @@ class FmuSession:
         if self._md.coSimulation is None:
             raise RuntimeError("FMU does not support Co-Simulation")
 
-        self._step_size = step_size if step_size is not None else (
-            float(self._md.defaultExperiment.stepSize)
-            if self._md.defaultExperiment and self._md.defaultExperiment.stepSize
-            else 0.001
-        )
+        default_experiment = self._md.defaultExperiment
+        default_step_size = getattr(default_experiment, "stepSize", None)
+        self._step_size = step_size if step_size is not None else resolve_simulation_time_options(
+            {"defaultStepSize": default_step_size},
+        )["stepSize"]
         self._start_time = float(start_time)
         self._stop_time = float(stop_time)
         if not all(math.isfinite(value) for value in (self._start_time, self._stop_time, self._step_size)):
@@ -187,6 +230,10 @@ class FmuSession:
             self._apply_validated_values(validated_parameters)
 
         slave.exitInitializationMode()
+        if self._fmi_major() == "3" and self._fmi3_event_mode_used:
+            # FMI 3 Co-Simulation enters Event Mode when Event Mode is enabled.
+            # Transition into Step Mode before the first fmi3DoStep call.
+            slave.enterStepMode()
         self._initialised = True
         self._terminated = False
         self._state = "initialized"
@@ -235,7 +282,9 @@ class FmuSession:
             self._finished_reason = "stop_time_reached"
         else:
             self._state = "running"
-        return self._step_result(previous_time, reached_time, **result)
+        step_result = self._step_result(previous_time, reached_time, **result)
+        step_result["sequence"] = self._step_count
+        return step_result
 
     def run_until(self, target_time: float, step_size: float | None = None) -> dict[str, Any]:
         slave = self._require_slave()
@@ -251,9 +300,12 @@ class FmuSession:
         if not math.isfinite(h) or h <= 0:
             raise ValueError("stepSize must be positive")
         expected_steps = max(0.0, target_time - self._time) / h
-        if not math.isfinite(expected_steps) or expected_steps > self._max_simulation_steps:
+        if not math.isfinite(expected_steps):
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
-        self._ensure_step_budget(math.ceil(expected_steps))
+        estimated_steps = _ceil_step_count(expected_steps, self._time, target_time, h)
+        if estimated_steps > self._max_simulation_steps:
+            raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
+        self._ensure_step_budget(estimated_steps)
         self._state = "running"
         initial_time = self._time
         steps = 0
@@ -309,8 +361,17 @@ class FmuSession:
         output_refs: list[int] | None = None,
         input_schedule: list[dict[str, Any]] | None = None,
         _sequence_offset: int = 0,
+        _sample_every_steps: int = 1,
+        _include_unsampled: bool = False,
+        _sample_step_offset: int | None = None,
+        _input_events_applied: list[int] | None = None,
+        _execution_started: list[bool] | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         """Step until *target_time*, yielding output snapshots at each step."""
+        if type(_sample_every_steps) is not int or _sample_every_steps < 1:
+            raise ValueError("sampleEverySteps must be a positive integer")
+        if _sample_step_offset is None:
+            _sample_step_offset = self._step_count
         if input_schedule:
             sequence_offset = _sequence_offset
             for event in input_schedule:
@@ -323,17 +384,29 @@ class FmuSession:
                         step_size=step_size,
                         output_refs=output_refs,
                         _sequence_offset=sequence_offset,
+                        _sample_every_steps=_sample_every_steps,
+                        _include_unsampled=_include_unsampled,
+                        _sample_step_offset=_sample_step_offset,
+                        _input_events_applied=_input_events_applied,
+                        _execution_started=_execution_started,
                     ):
                         sequence_offset = int(snapshot["seq"]) + 1
                         yield snapshot
                 if self._state == "stopped":
                     return
+                if _input_events_applied is not None:
+                    _input_events_applied[0] += 1
                 self.set_inputs(event["values"])
             yield from self.run_until_streaming(
                 target_time,
                 step_size=step_size,
                 output_refs=output_refs,
                 _sequence_offset=sequence_offset,
+                _sample_every_steps=_sample_every_steps,
+                _include_unsampled=_include_unsampled,
+                _sample_step_offset=_sample_step_offset,
+                _input_events_applied=_input_events_applied,
+                _execution_started=_execution_started,
             )
             return
 
@@ -349,9 +422,12 @@ class FmuSession:
         if not math.isfinite(h) or h <= 0:
             raise ValueError("stepSize must be positive")
         expected_steps = max(0.0, target_time - self._time) / h
-        if not math.isfinite(expected_steps) or expected_steps > self._max_simulation_steps:
+        if not math.isfinite(expected_steps):
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
-        self._ensure_step_budget(math.ceil(expected_steps))
+        estimated_steps = _ceil_step_count(expected_steps, self._time, target_time, h)
+        if estimated_steps > self._max_simulation_steps:
+            raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
+        self._ensure_step_budget(estimated_steps)
         self._state = "running"
         seq = _sequence_offset
         consecutive_no_progress_events = 0
@@ -361,6 +437,8 @@ class FmuSession:
             self._ensure_step_budget(1)
             self._step_count += 1
             previous_time = self._time
+            if _execution_started is not None:
+                _execution_started[0] = True
             self._time, step_result = self._do_step(slave, actual_h)
             if self._time <= previous_time + 1e-15 and not step_result["terminateSimulation"]:
                 consecutive_no_progress_events += 1
@@ -375,10 +453,24 @@ class FmuSession:
             elif finished:
                 self._state = "stopped"
                 self._finished_reason = "stop_time_reached"
-            outputs = self._read_outputs(output_refs)
+            at_requested_target = self._time >= target_time - 1e-12
+            has_event = bool(
+                step_result.get("eventOccurred")
+                or step_result.get("eventHandlingNeeded")
+                or step_result.get("earlyReturn")
+                or step_result.get("terminateSimulation")
+            )
+            should_sample = (
+                (self._step_count - _sample_step_offset) % _sample_every_steps == 0
+                or at_requested_target
+                or finished
+                or has_event
+            )
+            outputs = self._read_outputs(output_refs) if should_sample or not _include_unsampled else None
             yield {
                 "type": "sim.step",
                 "seq": seq,
+                "sequence": self._step_count,
                 "time": self._time,
                 "outputs": outputs,
                 **step_result,
@@ -400,37 +492,147 @@ class FmuSession:
         if self._step_count + additional_steps > self._max_simulation_steps:
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
 
-    def advance(self, target_time: float, max_samples: int = 256, step_size: float | None = None) -> dict[str, Any]:
-        """Advance a bounded batch without dropping intermediate output samples.
-
-        One request is one flow-control window. Reserve space for the worst-case
-        scalar values, timestamps and response envelope before doing any steps.
-        The existing streaming iterator owns FMI stepping and termination rules.
-        """
+    def advance(
+        self,
+        target_time: float,
+        max_samples: int = 256,
+        step_size: float | None = None,
+        input_schedule: list[dict[str, Any]] | None = None,
+        output_sample_every_steps: int = 1,
+        output_refs: list[int] | None = None,
+        max_compute_ms: float | None = None,
+    ) -> dict[str, Any]:
+        """Advance one bounded request, optionally applying timed inputs and sampling sparsely."""
+        started_at = _time.perf_counter()
         if type(max_samples) is not int or not 1 <= max_samples <= 256:
-            raise ValueError("maxSamples must be an integer between 1 and 256")
-        outputs = self.get_outputs()["outputs"]
-        if any(not isinstance(value, (bool, int, float)) for value in outputs.values()):
-            raise ValueError("Batched samples require scalar FMI outputs")
-        sample_bound = 128 + sum(len(json.dumps(name)) + 64 for name in outputs)
-        safe_count = min(max_samples, 900_000 // sample_bound)
-        if safe_count < 1:
-            raise ValueError("One output sample exceeds the WebSocket frame budget")
+            raise AdvancePreExecutionError("maxSamples must be an integer between 1 and 256")
+        if type(output_sample_every_steps) is not int or output_sample_every_steps < 1:
+            raise AdvancePreExecutionError("outputSampleEverySteps must be a positive integer")
+        if max_compute_ms is not None and (
+            isinstance(max_compute_ms, bool)
+            or not isinstance(max_compute_ms, (int, float))
+            or not math.isfinite(max_compute_ms)
+            or not 1 <= max_compute_ms <= 1000
+        ):
+            raise AdvancePreExecutionError("maxComputeMs must be between 1 and 1000 milliseconds")
+        h = self._step_size if step_size is None else step_size
+        if not math.isfinite(target_time) or not math.isfinite(h) or h <= 0:
+            raise AdvancePreExecutionError("targetTime must be finite and stepSize must be positive")
+        if target_time <= self._time + 1e-15:
+            raise AdvancePreExecutionError("targetTime must be later than the current simulation time")
+        input_events_applied = [0]
+        try:
+            expected_samples = estimate_advance_samples(
+                self._time,
+                target_time,
+                self._stop_time,
+                h,
+                output_sample_every_steps,
+            )
+            if expected_samples < 1:
+                raise AdvancePreExecutionError("targetTime must advance at least one model sample")
+            if input_schedule and expected_samples > max_samples:
+                raise AdvancePreExecutionError("ADVANCE_SAMPLE_LIMIT_EXCEEDED")
+
+            outputs = self.get_outputs(output_refs)["outputs"]
+            encoded_outputs = json.dumps(outputs, separators=(",", ":"), allow_nan=False)
+            sample_bound = 256 + len(encoded_outputs.encode("utf-8"))
+            safe_count = min(max_samples, 900_000 // sample_bound)
+            if safe_count < 1:
+                raise AdvancePreExecutionError("One output sample exceeds the WebSocket frame budget")
+            if input_schedule and expected_samples > safe_count:
+                raise AdvancePreExecutionError("ADVANCE_SAMPLE_LIMIT_EXCEEDED")
+        except AdvancePreExecutionError:
+            raise
+        except Exception as exc:
+            raise AdvancePreExecutionError(str(exc), input_events_applied[0]) from exc
+
         samples = []
-        snapshots = self.run_until_streaming(target_time, step_size=step_size)
+        steps_executed = 0
+        stop_reason = "target_reached"
+        compute_budget_overrun_ms = 0.0
+        execution_started = [False]
+        snapshots = self.run_until_streaming(
+            target_time,
+            step_size=step_size,
+            output_refs=output_refs,
+            input_schedule=input_schedule,
+            _sample_every_steps=output_sample_every_steps,
+            _include_unsampled=True,
+            _input_events_applied=input_events_applied,
+            _execution_started=execution_started,
+        )
         try:
             for snapshot in snapshots:
-                samples.append({"time": snapshot["time"], "outputs": snapshot["outputs"]})
-                if len(samples) >= safe_count:
+                steps_executed += 1
+                elapsed_ms = (_time.perf_counter() - started_at) * 1000
+                compute_budget_reached = max_compute_ms is not None and elapsed_ms >= max_compute_ms
+                if snapshot["outputs"] is not None or compute_budget_reached:
+                    sample_outputs = snapshot["outputs"]
+                    if sample_outputs is None:
+                        sample_outputs = self._read_outputs(output_refs)
+                    samples.append({
+                        "time": snapshot["time"],
+                        "outputs": sample_outputs,
+                        "sequence": snapshot["sequence"],
+                        "eventOccurred": bool(snapshot.get("eventOccurred", False)),
+                        "eventHandlingNeeded": bool(snapshot.get("eventHandlingNeeded", False)),
+                        "earlyReturn": bool(snapshot.get("earlyReturn", False)),
+                        "terminateSimulation": bool(snapshot.get("terminateSimulation", False)),
+                        "finished": bool(snapshot.get("finished", False)),
+                    })
+
+                if max_compute_ms is not None:
+                    compute_budget_overrun_ms = max(0.0, elapsed_ms - max_compute_ms)
+                if snapshot.get("finished") or snapshot.get("terminateSimulation"):
+                    stop_reason = "simulation_finished"
                     break
+                if snapshot.get("earlyReturn"):
+                    stop_reason = "early_return"
+                    break
+                if snapshot["time"] >= target_time - 1e-12:
+                    stop_reason = "target_reached"
+                    break
+                if len(samples) >= safe_count:
+                    stop_reason = "max_samples"
+                    break
+                if compute_budget_reached:
+                    stop_reason = "compute_budget"
+                    break
+        except Exception as exc:
+            if not execution_started[0]:
+                raise AdvancePreExecutionError(str(exc), input_events_applied[0]) from exc
+            raise AdvanceExecutionError(str(exc), input_events_applied[0]) from exc
         finally:
             snapshots.close()
-        return {
+            if self._state == "running":
+                self._state = "initialized"
+
+        execution_ms = (_time.perf_counter() - started_at) * 1000
+        if not samples:
+            if not execution_started[0]:
+                raise AdvancePreExecutionError("FMU advance returned no samples", input_events_applied[0])
+            raise AdvanceExecutionError("FMU advance returned no samples", input_events_applied[0])
+        try:
+            sample_bytes = len(json.dumps(samples, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        except (TypeError, ValueError) as exc:
+            raise AdvanceExecutionError("Batched samples are not JSON-compatible", input_events_applied[0]) from exc
+        result = {
             "samples": samples,
             "simTime": self._time,
             "finished": self._state == "stopped",
             "finishReason": self._finished_reason,
+            "stopReason": stop_reason,
+            "stepsExecuted": steps_executed,
+            "inputEventsApplied": input_events_applied[0],
+            "samplesReturned": len(samples),
+            "sampleBytes": sample_bytes,
+            "computeMs": execution_ms,
+            "computeBudgetOverrunMs": compute_budget_overrun_ms,
         }
+        if max_compute_ms is not None:
+            result["maxComputeMs"] = float(max_compute_ms)
+        return result
 
     def set_inputs(self, values: dict[str, Any]) -> None:
         self._ensure_live()
@@ -448,11 +650,21 @@ class FmuSession:
         return self._validate_values(values, phase="initialization")
 
     def validate_inputs(self, values: dict[str, Any]) -> dict[str, Any]:
-        """Validate and normalize runtime inputs without changing FMU state."""
+        """Validate and normalize runtime variable writes without changing FMU state."""
         self._ensure_live()
         if self._state in {"stopped", "error"}:
             raise RuntimeError(f"Session cannot accept inputs from state {self._state}")
         return self._validate_values(values, phase="runtime")
+
+    def validate_input_schedule(self, input_schedule: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Validate timed runtime writes in one call without changing FMU state."""
+        self._ensure_live()
+        if self._state in {"stopped", "error"}:
+            raise RuntimeError(f"Session cannot accept inputs from state {self._state}")
+        return [
+            {"time": event["time"], "values": self._validate_values(event["values"], phase="runtime")}
+            for event in input_schedule
+        ]
 
     def validate_runtime_input_values(self, values: dict[str, Any]) -> dict[str, Any]:
         """Validate input values against the loaded model before initialization."""
@@ -775,8 +987,7 @@ class FmuSession:
             normalized[name] = values if self._is_array(var) else values[0]
         return normalized
 
-    @staticmethod
-    def _validate_write_access(var: Any, *, phase: str) -> None:
+    def _validate_write_access(self, var: Any, *, phase: str) -> None:
         causality = str(getattr(var, "causality", ""))
         variability = str(getattr(var, "variability", ""))
         if phase == "initialization":
@@ -785,7 +996,9 @@ class FmuSession:
                 or (causality == "parameter" and variability != "constant")
             )
         elif phase == "runtime":
-            allowed = causality == "input"
+            allowed = causality == "input" or (
+                causality == "parameter" and variability == "tunable"
+            )
         else:
             raise ValueError(f"Unknown variable write phase '{phase}'")
         if not allowed:
@@ -925,6 +1138,10 @@ class FmuSession:
             }
             minimum, maximum = limits[vtype]
             for item in raw_values:
+                if isinstance(item, str):
+                    if len(item) > 20 or re.fullmatch(r"-?(?:0|[1-9][0-9]*)", item) is None or item == "-0":
+                        raise ValueError(f"Input '{var.name}' requires an integer value")
+                    item = int(item)
                 if isinstance(item, bool) or not isinstance(item, int):
                     raise ValueError(f"Input '{var.name}' requires an integer value")
                 self._validate_numeric_range(var, item)
