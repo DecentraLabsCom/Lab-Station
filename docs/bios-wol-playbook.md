@@ -9,7 +9,7 @@ The goal is to guarantee that every Lab Station host can power on via Wake-on-LA
 3. Force the onboard NIC as the primary wake device; disable wake on Wi-Fi.
 4. Disable all automatic sleep/hibernate timers while the host is in lab mode.
 5. In Windows, run `LabStation.exe wol` after BIOS changes to refresh OS-level power settings.
-6. Validate with `LabStation.exe energy audit --json="C:\LabStation\labstation\data\energy-<host>.json"` and keep the JSON report in the compliance folder.
+6. Validate with `LabStation.exe energy audit --json="C:\LabStation\Lab Station\labstation\data\energy-<host>.json"` and keep the JSON report in the compliance folder.
 
 ## 2. Windows 10/11 desktop NIC configuration
 
@@ -29,10 +29,10 @@ Get-NetAdapter -Physical | Format-Table Name,Status,InterfaceDescription,MacAddr
 ```
 
 Use the adapter whose `Status` is `Up` and whose cable is connected to the
-station network. Lab Station evaluates every physical adapter that is active;
-an additional active wired adapter must also be configured. Disconnected
-physical adapters remain visible in diagnostics and affect `readiness.wake`,
-but do not fail `readiness.physicalLab` by themselves.
+station network. Lab Station evaluates every active physical adapter, so an
+additional active wired adapter must also be configured. Disconnected physical
+adapters remain visible in diagnostics but are excluded from Wake-on-LAN
+readiness checks.
 
 ### 2.2 Configure the adapter in Device Manager
 
@@ -92,7 +92,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 .\LabStation.exe energy audit
-.\LabStation.exe status-json "C:\LabStation\labstation\data\status.json"
+.\LabStation.exe status-json "C:\LabStation\Lab Station\labstation\data\status.json"
 ```
 
 `wol` may not open a dialog or print a success message; use `$LASTEXITCODE`
@@ -141,73 +141,84 @@ does not expose the standard Windows power-management capability required by
 the station. Escalate that hardware/driver combination instead of suppressing
 the diagnostic.
 
-## 3. Dell OptiPlex / Precision (7000, 5000 series)
+## 3. Vendor firmware examples
+
+Firmware menu names and behavior vary by model and BIOS revision. Treat these
+as example checks, then follow the manual for the exact station model. In
+particular, options for sleep, PXE boot, USB wake, and Intel AMT are separate
+from enabling a wired NIC to wake on a magic packet.
+
+For model-specific examples of these settings, see the [Dell OptiPlex 7020
+system setup options](https://www.dell.com/support/manuals/en-us/optiplex-sff-plus-7020/optiplex-sff-plus-7020-owners-manual/system-setup-options?guid=guid-c237c6b6-fb12-4e06-b8e5-432790092af9&lang=en-us),
+[HP S4/S5 Wake-on-LAN guidance](https://support.hp.com/gb-en/document/ish_9423277-9423348-16),
+and the [Lenovo ThinkStation P910 user guide](https://download.lenovo.com/pccbbs/thinkcentre_pdf/p910_ug_en.pdf).
+They describe specific hardware generations and are references for menu
+semantics, not universal settings for every station.
+
+### Dell OptiPlex / Precision
 
 | BIOS Menu | Setting | Target Value |
 | --- | --- | --- |
-| *Power Management → Wake on LAN/WLAN* | **LAN Only** | Ensures only the wired NIC can wake the system. |
-| *Power Management → Wake on LAN/WLAN → Block Sleep* | **Enabled** | Prevents Modern Standby from blocking WoL packets. |
-| *Power Management → Deep Sleep Control* | **Disabled** | Keeps NIC powered while the system is off. |
-| *Advanced → Integrated NIC* | **Enabled w/ PXE** | Required so the NIC stays initialized for WoL. |
-| *Power Management → USB Wake Support* | **Disabled** | Avoids accidental wake events from keyboards. |
+| *Power Management → Wake on LAN/WLAN* | **LAN Only** (or equivalent) | Enables wired LAN wake where this option is available. |
+| *Power Management → Deep Sleep Control* | Check the exact model manual | Deep-sleep settings can change NIC power in S4/S5; test the required state. |
+| *Advanced → Integrated NIC* | **Enabled** | PXE is not required for magic-packet wake. |
+| *Power Management → Block Sleep* | Follow the site sleep policy | This controls S3 sleep availability; it is not a WoL switch. |
 
 **Validation**
 - Reboot, then from Windows run:
   ```powershell
   .\LabStation.exe wol
-  .\LabStation.exe energy audit --json="C:\LabStation\labstation\data\energy-dell-<host>.json"
-  Get-Content -Raw "C:\LabStation\labstation\data\energy-dell-<host>.json" | ConvertFrom-Json
+  .\LabStation.exe energy audit --json="C:\LabStation\Lab Station\labstation\data\energy-dell-<host>.json"
+  Get-Content -Raw "C:\LabStation\Lab Station\labstation\data\energy-dell-<host>.json" | ConvertFrom-Json
   ```
-- Confirm `Wake-capable devices` includes `Intel(R) Ethernet Connection I219-LM` and that the audit report flags no sleep/hibernate timers.
+- Confirm the active wired NIC appears in `wake_armed` and that the audit report shows it as `[ready]` with no sleep/hibernate timer issues.
 
-## 4. HP Z2/Z4 Workstations & EliteDesk 800
+### HP Z Workstations and EliteDesk
 
 | BIOS Menu | Setting | Target Value |
 | --- | --- | --- |
-| *Advanced → Power-On Options → Wake on LAN* | **Boot to Hard Drive** | Allows WoL from S4/S5 straight into Windows. |
-| *Advanced → Power-On Options → PCI Express Slot Power* | **Always On** | Keeps NIC powered. |
-| *Advanced → Network (AMT) Options → AMT Power Control* | **On in S0, ME Wake in S3/4/5** | Lets AMT deliver WoL even when off. |
-| *Power → Hardware Power Management → S4/S5 Maximum Power Savings* | **Disable** | Prevents NIC power loss. |
-| *Security → Network Boot* | **Enabled** | Required on some revisions to keep NIC initialised. |
+| *Power-On Options → Wake on LAN* or *S4/S5 Wake on LAN* | **Enabled** | Enables LAN wake from the states supported by that model. |
+| *Wake-on-LAN boot target* | **Boot to Hard Drive** when offered | Starts the installed OS; PXE/network boot is not required for WoL. |
+| *PCI Express slot power / maximum power savings* | Check the exact model manual | Change only if the OEM documents that the setting removes NIC standby power. |
+| *Intel AMT / MEBx* | Configure only when the lab uses AMT | AMT is a separate management path and is not required for standard WoL. |
 
 **Validation**
 - Boot to Windows, open PowerShell as admin:
   ```powershell
-  Get-NetAdapterPowerManagement -Name "Intel*" | Format-List
+  Get-NetAdapter -Physical | Format-Table Name,Status,InterfaceDescription -Auto
   .\LabStation.exe energy audit
   ```
-- Review audit recommendations; all HP adapters should show `WakeOnMagicPacket = Enabled` and `AllowComputerToTurnOffDevice = Enabled`.
+- Review the active adapter's audit result; the NIC driver's exposed power-management settings determine the exact values shown.
 
-## 5. Lenovo ThinkStation/ThinkCentre (P340, M920)
+### Lenovo ThinkStation / ThinkCentre
 
 | BIOS Menu | Setting | Target Value |
 | --- | --- | --- |
-| *Config → Network → Wake On LAN* | **Enabled** | Global WoL switch. |
-| *Config → Power → After Power Loss* | **Power On** | Ensures deterministic recovery after outages. |
-| *Security → I/O Port Access → Ethernet LAN* | **Enabled** | Keeps NIC exposed to OS. |
-| *Power → Enhanced Power Saving* | **Disabled** | Prevents deep power savings that drop WoL. |
-| *Advanced → APM Configuration → Power On with PCI-E devices* | **Enabled** | Allows NIC wake. |
+| *Config → Network → Wake On LAN* or equivalent | **Enabled** | Enables LAN wake where this option is available. |
+| *Enhanced Power Saving / ErP* | **Disabled** if the model manual says it disables WoL | Some Lenovo firmware documents these power-saving modes as incompatible with WoL. |
+| *Ethernet LAN* | **Enabled** | The wired adapter must remain enabled. |
+| *After Power Loss* | Follow the site recovery policy | This controls AC restoration behavior, not Wake-on-LAN. |
 
 **Validation**
 - Run `powercfg /devicequery wake_programmable` and ensure the Intel or Realtek NIC shows up.
 - Execute `LabStation.exe energy audit` and check that `Wake Programmable` count ≥ 1 and no sleep timers are reported.
 
-## 6. Post-change verification workflow
+## 4. Post-change verification workflow
 
 1. **Firmware photos**: Capture screenshots/photos of each BIOS page you changed and attach them to the hardware’s Confluence page.
 2. **Windows verification**:
    - `LabStation.exe wol`
-   - `LabStation.exe energy audit --json="C:\LabStation\labstation\data\energy-<host>.json"`
-   - `LabStation.exe status-json "C:\LabStation\labstation\data\status.json"` (verify `wake.nicPower` and `power.sleep`/`power.hibernate` to ensure WoL and timeouts remain compliant)
+   - `LabStation.exe energy audit --json="C:\LabStation\Lab Station\labstation\data\energy-<host>.json"`
+   - `LabStation.exe status-json "C:\LabStation\Lab Station\labstation\data\status.json"` (verify `wake.nicPower` and `power.sleep`/`power.hibernate` to ensure WoL and timeouts remain compliant)
 3. **Remote test**: From Lab Gateway, send a WoL packet, wait for WinRM to respond, then run `prepare-session`.
 4. **Sign-off**: Attach the audit output and WoL test log to the ticket before closing the maintenance task.
 
-## 7. Troubleshooting tips
+## 5. Troubleshooting tips
 
 | Symptom | Fix |
 | --- | --- |
 | Device wakes immediately after WoL | Disable USB wake and "Wake on Pattern" in NIC advanced properties. |
-| WoL works from sleep but not from shutdown | Ensure "Deep Sleep Control" (Dell) / "S4/S5 Maximum Power Savings" (HP) is disabled. |
+| WoL works from sleep but not from shutdown | Check the exact model's deep-sleep and S4/S5 wake settings; confirm that its firmware leaves the wired NIC powered in the target state. |
 | WoL unreliable after Windows Update | Re-run `.\LabStation.exe wol` and verify NIC driver version; some updates reset power features. |
 | Machine wakes but powers down again | Set `powercfg -change standby-timeout-ac 0` and confirm no vendor power utility is overriding the plan. |
 

@@ -94,11 +94,18 @@ try {
     $fmuExecutorPackageDirectory = Join-Path $packageDirectory 'fmu-executor'
     New-Item -ItemType Directory -Path $fmuExecutorPackageDirectory -Force | Out-Null
 
-    $fmuExecutorGuide = Join-Path $repositoryRoot 'docs\fmu-executor-runtime.md'
+    $fmuExecutorGuide = Join-Path $repositoryRoot 'docs\fmu-executor.md'
     if (-not (Test-Path -LiteralPath $fmuExecutorGuide -PathType Leaf)) {
-        throw "FMU Executor runtime guide not found: $fmuExecutorGuide"
+        throw "FMU Executor on Windows guide not found: $fmuExecutorGuide"
     }
-    Copy-Item -LiteralPath $fmuExecutorGuide -Destination (Join-Path $fmuExecutorPackageDirectory 'README.md') -Force
+    $packagedGuidePath = Join-Path $fmuExecutorPackageDirectory 'README.md'
+    $packagedGuide = Get-Content -LiteralPath $fmuExecutorGuide -Raw
+    $packagedGuide = $packagedGuide.Replace('../fmu-executor/SOURCE.lock.json', 'SOURCE.lock.json')
+    [System.IO.File]::WriteAllText(
+        $packagedGuidePath,
+        $packagedGuide,
+        [System.Text.UTF8Encoding]::new($false)
+    )
 
     # Preserve source provenance when the checkout provides it.
     foreach ($name in @('VERSION', 'SOURCE.lock.json')) {

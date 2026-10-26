@@ -1,231 +1,102 @@
 ---
-description: Windows Lab Station assistant for RemoteApp, Wake-on-LAN, diagnostics, session cleanup, and FMU execution.
+description: Windows implementation of DecentraLabs Lab Station, paired with the Linux station agent.
 ---
 
-# Lab Station
+# Lab Station (Windows)
 
 [![Tests](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/tests.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/tests.yml)
-[![Security Scan](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/codeql.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/codeql.yml)
+[![Security](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/codeql.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/codeql.yml)
 [![Release](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/release.yml/badge.svg)](https://github.com/DecentraLabsCom/Lab-Station/actions/workflows/release.yml)
 
-Lab Station is the Windows-side control application for DecentraLabs. It
-prepares a workstation for RemoteApp access, keeps Wake-on-LAN and power
-settings compliant, exposes diagnostics and telemetry, and coordinates the
-session lifecycle used by Lab Gateway.
+This is the Windows implementation of DecentraLabs **Lab Station**. It is the
+Windows counterpart to [Lab Station (Linux)](https://github.com/DecentraLabsCom/Lab-Station-Linux).
+Both implementations integrate with Lab Gateway and emit Station Contract v3;
+the management transport and host-specific controls differ by platform.
 
-The repository contains two runtime components:
+The Windows application is built around the AutoHotkey-based station agent and
+the separate [AppControl RemoteApp launcher](remote-app/README.md).
 
-- **Lab Station** (`labstation/`): setup wizard, CLI, desktop/tray UI, WinRM,
-  session cleanup, diagnostics, telemetry, power control, and the background
-  task.
-- **AppControl** (`remote-app/`): the RemoteApp launcher that starts one or
-  two lab applications and closes them on RDP/session events.
+## Product and platform support
 
-The optional **FMU Executor** (`fmu-executor/`) runs as a sidecar alongside the
-Windows executables. Its source snapshot is pinned to the shared
-`DecentraLabsCom/FMU-Executor` release in `fmu-executor/SOURCE.lock.json`.
-`Lab-Station.zip` includes a standalone runtime with its private Python
-interpreter and dependencies, so stations do not need a separate Python
-installation. The release package also includes six reference FMUs and the
-Smart Warehouse demo for provider setup and validation; other FMU models are
-provisioned separately. The sidecar is used when Lab Gateway is configured
-with `FMU_BACKEND_MODE=station`.
+Lab Station prepares and operates a Windows workstation for remote laboratory
+sessions. It provides setup and profile management, station status, power and
+Wake-on-LAN controls, session preparation and recovery. Lab Gateway remains the
+authority for remote reservations and the per-host trust decision.
 
-## Choose the station profile
+## Deployment profiles
 
-| Profile | Intended use | Important behavior |
-| --- | --- | --- |
-| `server` | Dedicated remote laboratory workstation | The wizard can configure LABUSER autologon and the locked-down station flow. |
-| `hybrid` | Workstation shared by an instructor and remote users | Does not configure LABUSER autologon; local sessions are detected and can be evicted before a reservation. |
+| Profile | Intended use |
+|---|---|
+| `server` | Dedicated remote laboratory workstation. The setup wizard can configure LABUSER autologon and the locked-down station flow. |
+| `hybrid` | Workstation shared with an instructor. It does not configure LABUSER autologon and can protect local sessions during remote reservations. |
 
-The `local-mode.flag` file is a policy signal for local-only use. Lab Station
-reports it in status and heartbeat documents; Lab Gateway is responsible for
-blocking or confirming remote reservations while the flag exists.
+The optional FMU Executor can accompany either profile. See
+[FMU execution](#optional-fmu-execution).
 
-## Quick start
+## Install and operate
 
-### From a release package
-
-The recommended release is `Lab-Station.zip`. Extract it as one unit; the
-archive contains `LabStation.exe`, `LabStationPanel.exe`, `WindowSpy.exe`, the
-branding image, `remote-app/AppControl.exe`, and the optional
-`fmu-executor/` standalone runtime with Python and its application
-dependencies.
-
-From an elevated PowerShell session:
+The recommended installation is `Lab-Station.zip` from the
+[Windows releases](https://github.com/DecentraLabsCom/Lab-Station/releases).
+Extract it as one unit and run the setup wizard from an elevated PowerShell
+session:
 
 ```powershell
 Expand-Archive .\Lab-Station.zip -DestinationPath C:\LabStation -Force
 Set-Location 'C:\LabStation\Lab Station'
-
 .\LabStation.exe setup
-.\LabStation.exe status-json 'C:\LabStation\status.json'
-.\LabStation.exe winrm status
-.\LabStation.exe service install
-.\LabStation.exe service start
 ```
 
-The setup wizard applies the selected profile, RemoteApp policy, Wake-on-LAN
-settings, WinRM HTTPS configuration, and diagnostics export. It can also offer
-to install the background task. Review the [WinRM command contract](docs/winrm-command-contract.md)
-before handing the generated account and public certificate to Lab Gateway.
+The wizard guides profile selection and station configuration. For a source
+checkout or compiled development build, use
+[Development, build and verification](docs/development.md).
 
-### From source
-
-Install AutoHotkey v2 and run the scripts from the repository root:
+Useful status checks from the installed directory:
 
 ```powershell
-& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' .\labstation\LabStation.ahk setup
-& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' .\labstation\LabStation.ahk status
+.\LabStation.exe status-json
+.\LabStation.exe winrm status
+.\LabStation.exe service status
 ```
-
-For a compiled local build, see [Development, build and verification](docs/development.md).
-
-### Optional FMU Executor
-
-The release package already contains the optional standalone sidecar under
-`fmu-executor/`; no Python installation or `pip install` step is needed. When
-Lab Gateway uses `FMU_BACKEND_MODE=station`, set a machine-level
-`FMU_INTERNAL_TOKEN` and start the sidecar through
-`LabStation.exe fmu-executor start` or the background task. FMU model files
-still need to be provisioned on the station. See the packaged
-[FMU Executor runtime guide](docs/fmu-executor-runtime.md) for runtime, token,
-firewall, and provisioning details.
-
-## CLI reference
-
-Run `LabStation.exe` with one of the commands below. Commands that change
-registry, firewall, account, power, WinRM, or scheduled-task state require an
-elevated administrator session.
-
-| Command | Purpose |
-| --- | --- |
-| `setup` | Runs the profile-aware setup wizard. |
-| `remoteapp` | Enables the Windows policy required for unlisted RemoteApp programs. |
-| `wol` | Applies the station's Wake-on-LAN and power settings. |
-| `winrm configure\|status` | Creates/inspects the WinRM HTTPS listener on port 5986 and exports its public certificate. |
-| `status` | Shows a human-readable summary; it does not emit JSON. |
-| `status-json [path]` | Collects diagnostics and writes JSON to stdout when `path` is omitted, or to `path` when supplied. |
-| `diagnostics [path]` | Exports diagnostics to `labstation/data/status.json` by default, or to `path`. |
-| `account create\|autologon\|lockdown\|setup ...` | Manages the lab account, autologon, and local-user lockdown. |
-| `session guard ...` | Warns and logs off active users other than the selected lab user. |
-| `prepare-session ...` | Runs session guard by default, closes AppControl cooperatively, cleans the selected lab profile, and resets controller logs. |
-| `release-session ...` | Closes AppControl, logs off the lab user, and optionally schedules a reboot. |
-| `recovery reboot-if-needed ...` | Reboots only when station health heuristics require recovery, unless `--force` is used. |
-| `power shutdown\|hibernate ...` | Validates WoL and schedules a controlled power action. |
-| `energy audit [--json=path]` | Reports power-plan, NIC, and WoL compliance. |
-| `fmu-executor start\|stop\|restart\|status` | Controls or inspects the optional FMU sidecar. |
-| `tray` / `gui` | Starts the tray icon or desktop control panel. |
-| `service install\|start\|stop\|status\|uninstall` | Manages the `LabStation\BackgroundService` scheduled task. |
-
-Useful reservation options include:
-
-```text
-prepare-session --user=LABUSER --guard-grace=90 --guard-message="Remote reservation confirmed"
-release-session --user=LABUSER --reboot --reboot-timeout=15
-session guard --grace=120 --user=LABUSER --silent
-power shutdown --delay=60 --reason="Reservation completed" --require-wake
-```
-
-`session guard` uses `--grace`, `--message`, and `--silent`; the corresponding
-`prepare-session` options are `--guard-grace`, `--guard-message`, and
-`--guard-silent`/`--guard-notify=no`. This distinction matters when commands
-are proxied by Lab Gateway.
-
-## Files produced on the station
-
-| Path | Purpose |
-| --- | --- |
-| `labstation/labstation.log` | Main Lab Station log. |
-| `labstation/data/status.json` | Latest persisted status document. |
-| `labstation/data/telemetry/heartbeat.json` | Status snapshot plus host/version and operation summary, refreshed by the background task. |
-| `labstation/data/telemetry/session-guard-events.jsonl` | Append-only audit events for forced logoffs. |
-| `labstation/data/service-state.ini` | Latest results for prepare, release, recovery, forced-logoff, and power operations. |
-| `labstation/data/local-mode.flag` | Local-only policy signal. Presence means local mode is enabled. |
-| `labstation/data/commands/inbox/` | Trusted asynchronous command input. |
-| `labstation/data/commands/results/` | JSON results for queued commands. |
-| `labstation/data/commands/processed/` | Archived queue input files. |
-
-The `status-json` and `diagnostics` commands use the same status shape. The
-new Windows releases emit Station Contract v3; see the [status and heartbeat
-contract](docs/status-and-heartbeat.md), [legacy v2 schema guide](docs/status-json-schema.md),
-and the canonical v3 schema in Lab Gateway at `contracts/station/v3/`. The background
-queue has a separate [queue contract](docs/command-queue.md). The AHK and Go test
-suites share the portable scenario vectors in `contracts/station/v3/test-parity.json`;
-the canonical copy is `Lab Gateway/docs/station-test-parity.json`.
 
 ## Lab Gateway integration
 
-### WinRM
+Gateway manages Windows stations over authenticated WinRM HTTPS. Lab Station
+configures the listener and exports its public certificate; Gateway stores and
+checks trust separately for each host. Remote lab applications are launched
+through AppControl. The station exposes the shared Contract v3 status and
+operation model.
 
-Lab Station owns the station-side HTTPS listener and exports the public
-certificate. Lab Gateway owns the per-host trust decision. The supported flow
-is:
+See [WinRM command contract](docs/winrm-command-contract.md),
+[Status and heartbeat](docs/status-and-heartbeat.md), and the
+[AppControl guide](remote-app/README.md) for the detailed contracts and setup.
 
-1. Run `LabStation.exe winrm configure` as administrator.
-2. Give Lab Gateway the generated account and
-   `C:\ProgramData\DecentraLabs\Lab Station\winrm-server.cer`.
-3. Store the certificate through the host's `WinRM TLS trust` control and
-   verify the connection.
-4. Use direct WinRM for synchronous commands or the background queue when the
-   caller can poll a result.
+## Optional FMU execution
 
-Only WinRM HTTPS on port 5986 is part of the current contract. Do not copy a
-private key, disable certificate validation, or use `TrustedHosts` as a
-replacement for per-host trust. See the [full WinRM contract](docs/winrm-command-contract.md).
+The Windows release package includes the optional shared FMU Executor. Lab
+Station manages its lifecycle when Gateway is configured for the Station FMU
+backend. See [FMU Executor on Windows Lab Station](docs/fmu-executor.md) for
+the package contents and station-specific integration; the shared Executor
+repository owns runtime configuration and execution behavior.
 
-### RemoteApp and AppControl
+## Development and releases
 
-Configure Guacamole to launch `remote-app\AppControl.exe`, passing the target
-window class and application command. Use `@dual` for a two-application tabbed
-container. The dedicated [AppControl guide](remote-app/README.md) covers
-quoting, custom close actions, browser kiosk flags, and troubleshooting; its
-[module reference](remote-app/lib/README.md) is for contributors.
+The station application is developed with AutoHotkey v2. Release builds package
+the desktop application, AppControl, and optional FMU Executor runtime. Build,
+test, and release instructions are in
+[Development, build and verification](docs/development.md).
 
-### Status and heartbeat
+## Documentation
 
-The service refreshes the heartbeat approximately once per minute. The
-heartbeat exposes both a top-level `summary`, `wake`, `readiness`, and
-`operations` view for dashboards and a complete `status` document for detailed
-diagnostics. Consumers should branch on capability-specific readiness rather
-than treating an optional FMU or WoL failure as proof that every station
-capability is unavailable.
+| Topic | Guide |
+|---|---|
+| Shared station navigation | [Documentation contents](SUMMARY.md) |
+| WinRM, Gateway trust, and commands | [WinRM command contract](docs/winrm-command-contract.md) |
+| Status, heartbeat, and schemas | [Status and heartbeat contract](docs/status-and-heartbeat.md), [status JSON schema](docs/status-json-schema.md), [heartbeat schema](docs/heartbeat-schema.md) |
+| Shared instructor workstations | [Hybrid operations](docs/hybrid-operations.md) |
+| RemoteApp launch behavior | [AppControl](remote-app/README.md) and [Windows configuration](remote-app/windows-configuration.md) |
+| FMU Executor on Windows | [Station integration and package contents](docs/fmu-executor.md) |
+| Build and verification | [Development guide](docs/development.md) |
 
-## UI screenshots
-
-The desktop panel is useful during setup and local troubleshooting. Values in
-these screenshots are workstation-specific and should not be treated as
-configuration defaults.
-
-![Lab Station main control panel](docs/images/labstation-main-panel.png)
-
-![FMI/FMU connector panel](docs/images/labstation-connectors-fmi.png)
-
-![Setup profile selector](docs/images/labstation-setup-profile.png)
-
-## Operations and development docs
-
-- [BIOS and Wake-on-LAN playbook](docs/bios-wol-playbook.md) - firmware,
-  Windows NIC, power-state, and validation checklist.
-- [Hybrid operations](docs/hybrid-operations.md) - local/instructor use and
-  reservation hand-off rules.
-- [Status and heartbeat contract](docs/status-and-heartbeat.md) - file
-  locations, refresh behavior, and compatibility rules.
-- [WinRM command contract](docs/winrm-command-contract.md) - transport,
-  trust, credentials, commands, and reservation sequencing.
-- [Background command queue](docs/command-queue.md) - asynchronous INI input
-  and JSON results.
-- [Development, build and verification](docs/development.md) - toolchain,
-  build, tests, and release layout.
-
-## Security notes
-
-- Do not pass passwords, WinRM credentials, or FMU tokens in public URLs,
-  source files, queue files, or shell history.
-- The `account` command accepts a password argument for automation, but process
-  listings and shell history may expose it. Prefer the wizard or a protected
-  secret mechanism.
-- Restrict the command-queue inbox and FMU port to the intended Gateway/private
-  network.
-- Treat telemetry and session-guard audit files as operational records; they
-  may contain host names, user names, session IDs, and operator messages.
+For topics not covered by these guides, the
+[Lab Station Linux README](https://github.com/DecentraLabsCom/Lab-Station-Linux/blob/main/README.md)
+is the companion platform overview.

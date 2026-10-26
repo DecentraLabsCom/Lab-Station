@@ -1,29 +1,41 @@
-# FMU Executor
+# FMU Executor on Windows Lab Station
 
-The shared FMU Executor source now lives in the
-[DecentraLabsCom/FMU-Executor repository](https://github.com/DecentraLabsCom/FMU-Executor).
-Lab Station keeps a version-pinned release snapshot in `fmu-executor/`; Station
-packages do not fetch executable code from that repository at runtime.
+This page covers the Windows Lab Station package and its connection to Lab
+Gateway. FMU execution behavior, FMI support, worker isolation, API contracts,
+and runtime configuration are owned by the shared
+[FMU Executor repository](https://github.com/DecentraLabsCom/FMU-Executor).
 
-The Windows `Lab-Station.zip` package includes the optional sidecar, its private
-Python runtime, its dependencies, six reference FMUs and the public Smart
-Warehouse Cell demo under `fmu-executor/fmu-data/`. No system Python
-installation or `pip install` step is required. Provider-owned FMU models are
-still provisioned separately. The reference FMUs include their BSD license.
-Smart Warehouse includes its prepared GLB, license and
-`SmartWarehouseCell.webapp.zip` Three.js application. Release packaging copies
-these assets from the canonical `FMU-Executor/examples` sources. During AAS
-synchronization, the provider chooses the GLB or app in Lab Manager. Gateway
-retrieves the selected asset from Station through the protected internal FMU
-endpoint; Marketplace uses the AAS File MIME type to choose the matching
-viewer. Station does not publish visual assets directly.
+## What the Windows package includes
 
-To use the sidecar, configure `FMU_BACKEND_MODE=station` in Lab Gateway, set a
-machine-level `FMU_INTERNAL_TOKEN` on the station and the matching
-`FMU_STATION_INTERNAL_TOKEN` in the Gateway, then start the sidecar with
-`LabStation.exe fmu-executor start` or the background task.
+The `Lab-Station.zip` release contains the pinned FMU Executor snapshot in
+`fmu-executor/`, including its private Python runtime and dependencies. The
+station does not need a system Python installation and does not download
+executable source at runtime. The snapshot revision is recorded in
+[`fmu-executor/SOURCE.lock.json`](../fmu-executor/SOURCE.lock.json).
 
-See the [Lab Station runtime guide](fmu-executor-runtime.md) for Windows
-installation, service, firewall, and model-provisioning details. See the
-[shared repository README](https://github.com/DecentraLabsCom/FMU-Executor)
-for source development, API documentation, and container packaging.
+The package keeps the runtime and model data separate. It includes six
+reference FMUs and the Smart Warehouse Cell example under
+`fmu-executor/fmu-data/`; the example includes the Windows x64 FMU, GLB, and
+self-contained Three.js app. Provider-specific FMUs are provisioned separately.
+Release packaging takes these assets from the canonical FMU Executor examples.
+
+When a provider links a companion visualization during AAS synchronization,
+Lab Gateway imports the same-stem asset from the Station through the protected
+Executor connection. The Gateway documentation owns the asset publication and
+Marketplace viewer flow; see the [AAS support guide in Lab Gateway](https://github.com/DecentraLabsCom/Lab-Gateway/blob/main/docs/aas-support.md).
+
+## Enable and start the sidecar
+
+When Lab Gateway uses `FMU_BACKEND_MODE=station`, start or inspect the sidecar
+with:
+
+```powershell
+.\LabStation.exe fmu-executor start
+.\LabStation.exe fmu-executor status
+```
+
+The Lab Station background task can also start the sidecar. Its default
+service lifecycle and packaged location are managed by Lab Station. The shared
+FMU Executor guides own internal tokens, endpoint configuration, firewall
+requirements, worker limits, and runtime behavior; use the
+[FMU Executor documentation index](https://github.com/DecentraLabsCom/FMU-Executor).
