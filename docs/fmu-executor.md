@@ -20,9 +20,14 @@ self-contained Three.js app. Provider-specific FMUs are provisioned separately.
 Release packaging takes these assets from the canonical FMU Executor examples.
 
 When a provider links a companion visualization during AAS synchronization,
-Lab Gateway imports the same-stem asset from the Station through the protected
-Executor connection. The Gateway documentation owns the asset publication and
-Marketplace viewer flow; see the [AAS support guide in Lab Gateway](https://github.com/DecentraLabsCom/Lab-Gateway/blob/main/docs/aas-support.md).
+Lab Gateway imports the asset from the Station through the protected Executor
+connection. REF-aware Executor releases prefer a local webapp ZIP declared by
+FMI-LS-REF or available as a same-stem `.webapp.zip`, then a declared GLB, then
+a same-stem `.glb`. Older pinned Station snapshots do not understand automatic
+REF discovery, so Gateway retains the same-stem webapp-then-GLB lookup for them
+until a REF-aware Executor release is pinned and packaged. The Gateway
+documentation owns asset publication and the Marketplace viewer flow; see the
+[AAS visual asset guide in Lab Gateway](https://github.com/DecentraLabsCom/Lab-Gateway/blob/main/docs/aas-fmu-visual-assets.md).
 
 ## Enable and start the sidecar
 
