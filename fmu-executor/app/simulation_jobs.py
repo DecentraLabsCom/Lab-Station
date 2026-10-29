@@ -9,6 +9,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -125,7 +126,7 @@ def execution_deadlines(context: dict[str, Any] | None) -> tuple[float, float | 
 def _validate_options(
     access_key: str,
     options: dict[str, Any],
-    policy: dict[str, int] | None = None,
+    policy: Mapping[str, int | None] | None = None,
     *,
     model_metadata: dict[str, Any] | None = None,
 ) -> int:
@@ -159,7 +160,12 @@ def _validate_options(
         steps = math.ceil(duration / step)
     except (OverflowError, ValueError) as exc:
         raise HTTPException(status_code=413, detail="SIMULATION_STEP_LIMIT_EXCEEDED") from exc
-    maximum_steps = (policy or {}).get("maxSteps", config.MAX_SIMULATION_STEPS)
+    configured_maximum_steps = (policy or {}).get("maxSteps")
+    maximum_steps = (
+        configured_maximum_steps
+        if type(configured_maximum_steps) is int
+        else config.MAX_SIMULATION_STEPS
+    )
     if steps > maximum_steps:
         raise HTTPException(status_code=413, detail="SIMULATION_STEP_LIMIT_EXCEEDED")
     sample_every = options.get("outputSampleEverySteps", 1)
@@ -303,7 +309,7 @@ class SimulationJobManager:
         scenarios: list[dict[str, Any]],
         stored_parameters: dict[str, Any],
         stored_options: dict[str, Any],
-        policy: dict[str, int],
+        policy: dict[str, int | None],
     ) -> dict[str, Any]:
         if config.execution_mode() != "process":
             raise HTTPException(status_code=409, detail="ASYNC_EXECUTION_REQUIRES_PROCESS_ISOLATION")
@@ -354,6 +360,9 @@ class SimulationJobManager:
                     {"label": scenario.get("label"), "options": scenario["effectiveOptions"]}
                     for scenario in scenarios
                 ]
+                maximum_scenarios = policy["maxDailyScenarios"]
+                if type(maximum_scenarios) is not int:
+                    raise HTTPException(status_code=403, detail="INVALID_FMU_EXECUTION_POLICY")
                 self.store.create_job(
                     job_id=job_id,
                     scope_key=scope_key,
@@ -366,7 +375,7 @@ class SimulationJobManager:
                     metadata=metadata,
                     authorization_expires_at=authorization_expires_at,
                     reservation_ends_at=reservation_ends_at,
-                    maximum_scenarios=policy["maxDailyScenarios"],
+                    maximum_scenarios=maximum_scenarios,
                 )
             except QuotaExceededError as exc:
                 engine.release_capacity(capacity_token)
@@ -418,7 +427,7 @@ class SimulationJobManager:
         authorization_expires_at: float,
         reservation_ends_at: float | None,
         capacity_token: str,
-        policy: dict[str, int],
+        policy: dict[str, int | None],
         policy_evidence: dict[str, Any],
     ) -> None:
         results: list[dict[str, Any]] = []
