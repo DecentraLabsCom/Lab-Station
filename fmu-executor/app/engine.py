@@ -9,13 +9,12 @@ import logging
 import math
 import json
 import re
+import platform
 from functools import reduce
 from operator import mul
 import shutil
 import tempfile
-import threading
 import time as _time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generator, Optional
@@ -29,6 +28,7 @@ from fmpy.fmi1 import FMICallException
 from fmpy.fmi2 import fmi2Discard, fmi2LastSuccessfulTime, fmi2Pending, fmi2Terminated
 
 from . import config
+from .fmu_metadata import describe_model_description
 from .simulation_defaults import DEFAULT_STEP_SIZE, resolve_simulation_time_options
 
 logger = logging.getLogger(__name__)
@@ -113,12 +113,14 @@ class FmuSession:
         access_key: str | None = None,
         expires_at: float | int | str | None = None,
         gateway_context: dict[str, Any] | None = None,
+        fmu_sha256: str | None = None,
     ):
         self.session_id = session_id
         self.fmu_path = fmu_path
         self.access_key = access_key or fmu_path.name
         self.expires_at = expires_at
         self.gateway_context = dict(gateway_context or {})
+        self.fmu_sha256 = fmu_sha256
         self._extract_dir: Path | None = None
         self._slave: Any | None = None
         self._md = None
@@ -131,6 +133,7 @@ class FmuSession:
         self._playback_speed = 1.0
         self._early_return_allowed = False
         self._fmi3_event_mode_used = False
+        self._pending_event_outputs: dict[str, Any] | None = None
         self._finished_reason: str | None = None
         self._state: str = "new"
         self._initialised: bool = False
@@ -214,7 +217,29 @@ class FmuSession:
         if slave is None:
             raise RuntimeError("FMU instantiation returned no slave")
         self._slave = slave
+        structural_variables = [
+            variable for variable in self._md.modelVariables
+            if self._fmi_major() == "3"
+            and getattr(variable, "causality", None) == "structuralParameter"
+        ]
+        structural_parameters = {
+            name: value
+            for name, value in validated_parameters.items()
+            if any(variable.name == name for variable in structural_variables)
+        }
+        dimension_values = {
+            int(variable.valueReference): int(structural_parameters[variable.name])
+            for variable in structural_variables
+            if variable.name in structural_parameters
+        }
+        self._pending_event_outputs = None
         if self._fmi_major() == "3":
+            if structural_variables:
+                slave.enterConfigurationMode()
+                if structural_parameters:
+                    self._apply_validated_values(structural_parameters)
+                self._apply_structural_array_shapes(dimension_values)
+                slave.exitConfigurationMode()
             slave.enterInitializationMode(
                 startTime=self._start_time,
                 stopTime=self._stop_time,
@@ -226,14 +251,29 @@ class FmuSession:
             )
             slave.enterInitializationMode()
 
-        if validated_parameters:
-            self._apply_validated_values(validated_parameters)
+        remaining_parameters = {
+            name: value for name, value in validated_parameters.items()
+            if name not in structural_parameters
+        }
+        if remaining_parameters:
+            self._apply_validated_values(remaining_parameters)
 
         slave.exitInitializationMode()
         if self._fmi_major() == "3" and self._fmi3_event_mode_used:
             # FMI 3 Co-Simulation enters Event Mode when Event Mode is enabled.
-            # Transition into Step Mode before the first fmi3DoStep call.
-            slave.enterStepMode()
+            # Perform the initial discrete-state iteration before Step Mode.
+            if self._resolve_fmi3_event(slave, enter_event_mode=False):
+                self._finished_reason = "fmu_terminated"
+                self._state = "stopped"
+                self._initialised = True
+                self._terminated = False
+                return {
+                    "sessionId": self.session_id,
+                    "time": self._time,
+                    "state": self._state,
+                    "timeMode": self._time_mode,
+                    "playbackSpeed": self._playback_speed,
+                }
         self._initialised = True
         self._terminated = False
         self._state = "initialized"
@@ -641,6 +681,119 @@ class FmuSession:
         validated = self._validate_values(values, phase="runtime")
         self._apply_validated_values(validated)
 
+    def capture_fmu_state(self) -> dict[str, Any]:
+        """Capture a serialized checkpoint when the source FMU supports it."""
+        slave = self._require_slave()
+        if not self._supports_serialized_fmu_state():
+            raise RuntimeError("FMU state capture is not supported by this model")
+        state = None
+        try:
+            state = slave.getFMUState()
+            serialized = slave.serializeFMUState(state)
+        except Exception as exc:
+            raise RuntimeError("The FMU could not serialize its current state") from exc
+        finally:
+            if state is not None:
+                try:
+                    slave.freeFMUState(state)
+                except Exception:
+                    logger.debug("Could not free captured FMU state for session %s", self.session_id, exc_info=True)
+        if not isinstance(serialized, (bytes, bytearray)) or not serialized:
+            raise RuntimeError("The FMU returned an invalid serialized state")
+        from .fmu_state import MAX_FMU_STATE_BYTES
+        if len(serialized) > MAX_FMU_STATE_BYTES:
+            raise ValueError("FMU state checkpoint exceeds the size limit")
+        return {
+            "fmuSha256": self.fmu_sha256,
+            "fmiVersion": str(getattr(self._md, "fmiVersion", "")),
+            "platform": f"{platform.system().lower()}/{platform.machine().lower()}",
+            "serializedState": base64.b64encode(bytes(serialized)).decode("ascii"),
+            "simulation": {
+                "time": self._time,
+                "startTime": self._start_time,
+                "stopTime": self._stop_time,
+                "stepSize": self._step_size,
+                "stepCount": self._step_count,
+                "timeMode": self._time_mode,
+                "playbackSpeed": self._playback_speed,
+                "earlyReturnAllowed": self._early_return_allowed,
+                "initialParameters": copy.deepcopy(self._initial_parameters),
+            },
+        }
+
+    def restore_fmu_state(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Restore a signed checkpoint into an initialized FMU instance."""
+        slave = self._require_slave()
+        initialized_for_run = self._state == "initialized"
+        if not self._supports_serialized_fmu_state():
+            raise RuntimeError("FMU state restore is not supported by this model")
+        if not isinstance(snapshot, dict):
+            raise ValueError("FMU state checkpoint is invalid or incompatible")
+        if snapshot.get("fmuSha256") != self.fmu_sha256:
+            raise ValueError("FMU state checkpoint belongs to a different model")
+        if str(snapshot.get("fmiVersion") or "") != str(getattr(self._md, "fmiVersion", "")):
+            raise ValueError("FMU state checkpoint belongs to a different FMI version")
+        expected_platform = f"{platform.system().lower()}/{platform.machine().lower()}"
+        if snapshot.get("platform") != expected_platform:
+            raise ValueError("FMU state checkpoint belongs to a different execution platform")
+        simulation = snapshot.get("simulation")
+        encoded_state = snapshot.get("serializedState")
+        if not isinstance(simulation, dict) or not isinstance(encoded_state, str) or not encoded_state:
+            raise ValueError("FMU state checkpoint is invalid or incompatible")
+        from .fmu_state import MAX_FMU_STATE_CHECKPOINT_JSON_BYTES
+        if len(encoded_state) > MAX_FMU_STATE_CHECKPOINT_JSON_BYTES:
+            raise ValueError("FMU state checkpoint exceeds the size limit")
+        try:
+            serialized = base64.b64decode(encoded_state, validate=True)
+            raw_time = simulation["time"]
+            raw_step_count = simulation["stepCount"]
+            if isinstance(raw_time, bool) or not isinstance(raw_time, (int, float)):
+                raise ValueError("invalid time")
+            if type(raw_step_count) is not int:
+                raise ValueError("invalid step count")
+            time_value = float(raw_time)
+            step_count = raw_step_count
+            initial_parameters = simulation["initialParameters"]
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("FMU state checkpoint is invalid or incompatible") from exc
+        if not math.isfinite(time_value) or time_value < self._start_time or time_value >= self._stop_time:
+            raise ValueError("FMU state checkpoint time must fall within the new simulation interval")
+        if step_count < 0 or step_count > self._max_simulation_steps:
+            raise ValueError("FMU state checkpoint exceeds the simulation step budget")
+        if not isinstance(initial_parameters, dict):
+            raise ValueError("FMU state checkpoint is invalid or incompatible")
+        state = None
+        try:
+            state = slave.deserializeFMUState(serialized)
+            slave.setFMUState(state)
+        except Exception as exc:
+            raise ValueError("The FMU could not restore the checkpoint") from exc
+        finally:
+            if state is not None:
+                try:
+                    slave.freeFMUState(state)
+                except Exception:
+                    logger.debug("Could not free restored FMU state for session %s", self.session_id, exc_info=True)
+        self._time = time_value
+        self._step_count = step_count
+        self._initial_parameters = copy.deepcopy(initial_parameters)
+        self._finished_reason = None
+        self._terminated = False
+        # A checkpoint supplied to sim.initialize is restored before the first
+        # explicit sim.advance. Keep that newly initialized session runnable;
+        # restoring into an existing paused session should remain paused.
+        self._state = "initialized" if initialized_for_run else "paused"
+        return {"state": self._state, "simTime": self._time}
+
+    def _supports_serialized_fmu_state(self) -> bool:
+        interface = getattr(self._md, "coSimulation", None)
+        if interface is None:
+            return False
+        return bool(
+            getattr(interface, "canGetAndSetFMUstate", getattr(interface, "canGetAndSetFMUState", False))
+            and getattr(interface, "canSerializeFMUstate", getattr(interface, "canSerializeFMUState", False))
+        )
+
     def validate_initial_values(self, values: dict[str, Any]) -> dict[str, Any]:
         """Validate initialization parameters before a scenario is charged."""
         if self._terminated:
@@ -927,14 +1080,20 @@ class FmuSession:
             "terminateSimulation": bool(terminate_simulation),
         }
 
-    @staticmethod
-    def _handle_fmi3_event(slave: Any) -> bool:
-        slave.enterEventMode()
+    def _handle_fmi3_event(self, slave: Any) -> bool:
+        return self._resolve_fmi3_event(slave, enter_event_mode=True)
+
+    def _resolve_fmi3_event(self, slave: Any, *, enter_event_mode: bool) -> bool:
+        if enter_event_mode:
+            slave.enterEventMode()
         for _ in range(1000):
             needs_update, terminate, *_ = slave.updateDiscreteStates()
             if terminate:
                 return True
             if not needs_update:
+                # Triggered output Clocks are only observable in Event Mode.
+                # Preserve this snapshot before entering Step Mode.
+                self._pending_event_outputs = self._read_outputs()
                 slave.enterStepMode()
                 return False
         raise RuntimeError("FMI_EVENT_ITERATION_LIMIT_EXCEEDED")
@@ -965,11 +1124,10 @@ class FmuSession:
         }
 
     def _describe(self) -> dict[str, Any]:
-        from . import fmu_storage
         # The isolated worker may only access the staged FMU path, not the
         # catalog root used to resolve access keys. Reuse its parsed model
         # description and avoid opening a large modelDescription.xml twice.
-        return fmu_storage.describe_model_description(self._md)
+        return describe_model_description(self._md)
 
     def _validate_values(self, params: dict[str, Any], *, phase: str) -> dict[str, Any]:
         if not isinstance(params, dict):
@@ -978,12 +1136,24 @@ class FmuSession:
             raise RuntimeError("FMU model description is not loaded")
         var_map = {v.name: v for v in self._md.modelVariables}
         normalized: dict[str, Any] = {}
+        dimension_values: dict[int, int] = {}
+        if phase == "initialization" and self._fmi_major() == "3":
+            for name, value in params.items():
+                var = var_map.get(name)
+                if var is None or getattr(var, "causality", None) != "structuralParameter":
+                    continue
+                self._validate_write_access(var, phase=phase)
+                values = self._coerce_values(var, value)
+                normalized[name] = values if self._is_array(var) else values[0]
+                dimension_values[int(var.valueReference)] = int(values[0])
         for name, value in params.items():
+            if name in normalized:
+                continue
             var = var_map.get(name)
             if var is None:
                 raise ValueError(f"Unknown FMU variable '{name}'")
             self._validate_write_access(var, phase=phase)
-            values = self._coerce_values(var, value)
+            values = self._coerce_values(var, value, dimension_values=dimension_values)
             normalized[name] = values if self._is_array(var) else values[0]
         return normalized
 
@@ -994,6 +1164,12 @@ class FmuSession:
             allowed = (
                 causality == "input"
                 or (causality == "parameter" and variability != "constant")
+                or (
+                    self._fmi_major() == "3"
+                    and causality == "structuralParameter"
+                    and variability == "fixed"
+                    and str(getattr(var, "type", "")) == "UInt64"
+                )
             )
         elif phase == "runtime":
             allowed = causality == "input" or (
@@ -1032,10 +1208,19 @@ class FmuSession:
             unknown_refs = set(int(ref) for ref in refs) - output_refs
             if unknown_refs:
                 raise ValueError("Requested value reference is unknown or is not an output")
+        pending_event_outputs = self._pending_event_outputs
+        remaining_event_outputs = (
+            dict(pending_event_outputs) if pending_event_outputs is not None else None
+        )
         for var in self._md.modelVariables:
             if var.causality != "output":
                 continue
             if refs is not None and var.valueReference not in refs:
+                continue
+            if pending_event_outputs is not None and var.name in pending_event_outputs:
+                outputs[var.name] = pending_event_outputs[var.name]
+                if remaining_event_outputs is not None:
+                    remaining_event_outputs.pop(var.name, None)
                 continue
             vr = [int(var.valueReference)]
             vtype = self._variable_type(var)
@@ -1050,6 +1235,7 @@ class FmuSession:
                 raise RuntimeError(f"Could not read FMU output '{var.name}'") from exc
             normalised = [self._normalise_output(vtype, value) for value in list(values)]
             outputs[var.name] = normalised if self._is_array(var) else normalised[0]
+        self._pending_event_outputs = remaining_event_outputs or None
         return outputs
 
     @staticmethod
@@ -1063,8 +1249,53 @@ class FmuSession:
             return "Int64"
         return self._normalise_type(var)
 
-    @staticmethod
-    def _variable_size(var: Any) -> int:
+    def _variable_size(self, var: Any, dimension_values: dict[int, int] | None = None) -> int:
+        shape = getattr(var, "shape", None)
+        if dimension_values is None and isinstance(shape, (list, tuple)) and shape:
+            extents = []
+            for extent in shape:
+                try:
+                    normalised_extent = int(extent)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an unresolved dimension") from exc
+                if normalised_extent <= 0 or normalised_extent != extent:
+                    raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an invalid dimension")
+                extents.append(normalised_extent)
+            return int(reduce(mul, extents, 1))
+
+        dimensions = getattr(var, "dimensions", None)
+        if isinstance(dimensions, (list, tuple)) and dimensions:
+            extents: list[int] = []
+            for dimension in dimensions:
+                value_reference = getattr(dimension, "valueReference", None)
+                extent: Any = None
+                if value_reference is not None:
+                    if dimension_values is not None:
+                        extent = dimension_values.get(int(value_reference))
+                    if extent is None and self._md is not None:
+                        referenced_variable = next(
+                            (
+                                item for item in self._md.modelVariables
+                                if int(item.valueReference) == int(value_reference)
+                            ),
+                            None,
+                        )
+                        extent = getattr(referenced_variable, "start", None)
+                if extent is None:
+                    extent = getattr(dimension, "start", None)
+                if extent is None:
+                    referenced_variable = getattr(dimension, "variable", None)
+                    extent = getattr(referenced_variable, "start", None)
+                try:
+                    normalised_extent = int(extent)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(
+                        f"FMU array '{getattr(var, 'name', '')}' has an unresolved dimension"
+                    ) from exc
+                if normalised_extent <= 0:
+                    raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an invalid dimension")
+                extents.append(normalised_extent)
+            return int(reduce(mul, extents, 1))
         shape = getattr(var, "shape", None)
         if isinstance(shape, (list, tuple)) and shape:
             extents = []
@@ -1077,18 +1308,39 @@ class FmuSession:
                     raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an invalid dimension")
                 extents.append(normalised_extent)
             return int(reduce(mul, extents, 1))
-        dimensions = getattr(var, "dimensions", None)
-        if isinstance(dimensions, (list, tuple)) and dimensions:
-            extents: list[int] = []
-            for dimension in dimensions:
-                start = getattr(dimension, "start", None)
-                if start is None:
-                    raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an unresolved dimension")
-                if int(start) <= 0:
-                    raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an invalid dimension")
-                extents.append(int(start))
-            return int(reduce(mul, extents, 1))
         return 1
+
+    def _apply_structural_array_shapes(self, dimension_values: dict[int, int]) -> None:
+        if self._md is None:
+            return
+        for variable in self._md.modelVariables:
+            dimensions = getattr(variable, "dimensions", None)
+            if not isinstance(dimensions, (list, tuple)) or not dimensions:
+                continue
+            if not any(getattr(dimension, "valueReference", None) is not None for dimension in dimensions):
+                continue
+            self._variable_size(variable, dimension_values=dimension_values)
+            resolved_shape: list[int] = []
+            for dimension in dimensions:
+                value_reference = getattr(dimension, "valueReference", None)
+                if value_reference is not None and int(value_reference) in dimension_values:
+                    extent = dimension_values[int(value_reference)]
+                elif value_reference is not None:
+                    referenced_variable = next(
+                        (
+                            item for item in self._md.modelVariables
+                            if int(item.valueReference) == int(value_reference)
+                        ),
+                        None,
+                    )
+                    extent = int(getattr(referenced_variable, "start"))
+                elif getattr(dimension, "start", None) is not None:
+                    extent = int(dimension.start)
+                else:
+                    referenced_variable = getattr(dimension, "variable", None)
+                    extent = int(getattr(referenced_variable, "start"))
+                resolved_shape.append(extent)
+            variable.shape = tuple(resolved_shape)
 
     @staticmethod
     def _is_array(var: Any) -> bool:
@@ -1098,9 +1350,15 @@ class FmuSession:
         dimensions = getattr(var, "dimensions", None)
         return isinstance(dimensions, (list, tuple)) and bool(dimensions)
 
-    def _coerce_values(self, var: Any, value: Any) -> list[Any]:
+    def _coerce_values(
+        self,
+        var: Any,
+        value: Any,
+        *,
+        dimension_values: dict[int, int] | None = None,
+    ) -> list[Any]:
         vtype = self._variable_type(var)
-        size = self._variable_size(var)
+        size = self._variable_size(var, dimension_values=dimension_values)
         is_array = self._is_array(var)
         if is_array and (not isinstance(value, (list, tuple)) or len(value) != size):
             raise ValueError(f"Array input '{var.name}' expects exactly {size} values")
@@ -1234,130 +1492,3 @@ class FmuSession:
 
     def __del__(self) -> None:
         self.terminate()
-
-
-# ── session registry ─────────────────────────────────────────────
-
-_sessions: dict[str, Any] = {}
-_sessions_lock = threading.RLock()
-_capacity_reservations: set[str] = set()
-
-
-class CapacityExceededError(RuntimeError):
-    """Raised when the Station execution authority has no free slot."""
-
-
-def create_session(
-    fmu_path: Path,
-    *,
-    access_key: str | None = None,
-    expires_at: float | int | str | None = None,
-    gateway_context: dict[str, Any] | None = None,
-    session_factory: Any = None,
-    resource_policy: dict[str, Any] | None = None,
-) -> Any:
-    cleanup_expired_sessions()
-    with _sessions_lock:
-        if len(_sessions) + len(_capacity_reservations) >= config.MAX_CONCURRENT_SESSIONS:
-            raise CapacityExceededError(
-                f"Max concurrent sessions ({config.MAX_CONCURRENT_SESSIONS}) reached"
-            )
-        session_id = f"sess_{uuid.uuid4().hex[:12]}"
-        factory = session_factory or FmuSession
-        session_arguments = (session_id, fmu_path)
-        session_options = {
-            "access_key": access_key,
-            "expires_at": expires_at,
-            "gateway_context": gateway_context,
-        }
-        if resource_policy is not None:
-            session_options["resource_policy"] = resource_policy
-        session = factory(*session_arguments, **session_options)
-        # A newly created WebSocket session is actively being established.
-        # Do not let periodic cleanup reap it while its initial worker load RPC
-        # is still in flight; the owning connection is attached immediately
-        # after the create response is assembled.
-        session.mark_attached()
-        _sessions[session_id] = session
-        return session
-
-
-def reserve_capacity() -> str:
-    """Reserve one shared execution slot before charging a simulation job."""
-    cleanup_expired_sessions()
-    with _sessions_lock:
-        if len(_sessions) + len(_capacity_reservations) >= config.MAX_CONCURRENT_SESSIONS:
-            raise CapacityExceededError(
-                f"Max concurrent executions ({config.MAX_CONCURRENT_SESSIONS}) reached"
-            )
-        token = uuid.uuid4().hex
-        _capacity_reservations.add(token)
-        return token
-
-
-def release_capacity(token: str | None) -> None:
-    if not token:
-        return
-    with _sessions_lock:
-        _capacity_reservations.discard(token)
-
-
-def get_session(session_id: str) -> Any | None:
-    with _sessions_lock:
-        return _sessions.get(session_id)
-
-
-def get_attachable_session(session_id: str) -> Any | None:
-    with _sessions_lock:
-        session = _sessions.get(session_id)
-    if session is None or not session.can_attach():
-        if session is not None and not session.can_attach():
-            remove_session(session_id)
-        return None
-    return session
-
-
-def detach_session(
-    session_id: str,
-    grace_seconds: float,
-    *,
-    attachment_owner: object | None = None,
-) -> None:
-    with _sessions_lock:
-        session = _sessions.get(session_id)
-    if session is not None:
-        session.mark_detached(grace_seconds, attachment_owner)
-
-
-def cleanup_expired_sessions(now: float | None = None) -> None:
-    now = _time.time() if now is None else now
-    with _sessions_lock:
-        expired = [
-            session_id
-            for session_id, session in list(_sessions.items())
-            if session._terminated or (not session._attached and not session.can_attach(now))
-        ]
-    for session_id in expired:
-        remove_session(session_id)
-
-
-def remove_session(session_id: str) -> None:
-    with _sessions_lock:
-        session = _sessions.pop(session_id, None)
-    if session:
-        session.terminate()
-
-
-def active_session_count() -> int:
-    cleanup_expired_sessions()
-    with _sessions_lock:
-        return len(_sessions) + len(_capacity_reservations)
-
-
-def terminate_all() -> None:
-    with _sessions_lock:
-        session_ids = list(_sessions)
-    for sid in session_ids:
-        remove_session(sid)
-    with _sessions_lock:
-        _capacity_reservations.clear()

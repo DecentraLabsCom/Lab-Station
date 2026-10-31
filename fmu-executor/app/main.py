@@ -30,10 +30,19 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool, field_validator
 from starlette.background import BackgroundTask
 
-from . import auth, backends, config, engine, fmu_storage, process_runner
+from . import (
+    auth,
+    backends,
+    config,
+    engine,
+    fmu_storage,
+    fmu_state,
+    process_runner,
+    session_registry,
+)
 from .isolation import worker_isolation_capabilities
 from .simulation_jobs import (
     SimulationJobManager,
@@ -60,11 +69,18 @@ from .session_protocol import (
     handle_ws_message as _dispatch_session_command,
 )
 from .simulation_defaults import resolve_simulation_time_options
+from .fmi_ls_experiments import read_fmi_ls_ref_experiments
+from .fmi_ls_ref_resources import (
+    MAX_COMPANION_ASSET_BYTES,
+    parse_experiment_parameter_set as _parse_experiment_parameter_set,
+    read_parameter_sets as _read_fmi_ls_ref_parameter_sets,
+    read_related_resources as _read_fmi_ls_ref_related_resources,
+    read_visual_asset as _read_fmi_ls_ref_visual_asset,
+)
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FMU Executor", version="0.3.2", docs_url=None, redoc_url=None)
-MAX_COMPANION_ASSET_BYTES = 50 * 1024 * 1024
 MAX_COMPANION_APP_FILES = 332
 _COMPANION_APP_MEDIA_TYPES = {
     ".bin": "application/octet-stream",
@@ -95,7 +111,7 @@ _simulation_jobs = SimulationJobManager(_simulation_store)
 async def _cleanup_sessions_loop() -> None:
     try:
         while True:
-            await asyncio.to_thread(engine.cleanup_expired_sessions)
+            await asyncio.to_thread(session_registry.cleanup_expired_sessions)
             await asyncio.sleep(1)
     except asyncio.CancelledError:
         return
@@ -115,7 +131,7 @@ async def _startup() -> None:
     # Reap abandoned sessions before startup returns. The background loop is
     # deliberately periodic; relying on its first scheduled iteration races
     # with immediate TestClient/server shutdown on short-lived processes.
-    await asyncio.to_thread(engine.cleanup_expired_sessions)
+    await asyncio.to_thread(session_registry.cleanup_expired_sessions)
     logger.info(
         "FMU Executor starting – root=%s, port=%s, max_sessions=%s",
         config.FMU_ROOT, config.bind_port(), config.MAX_CONCURRENT_SESSIONS,
@@ -136,7 +152,7 @@ async def _shutdown() -> None:
         _session_cleanup_task = None
     logger.info("Shutting down – terminating all sessions")
     await _simulation_jobs.shutdown()
-    await asyncio.to_thread(engine.terminate_all)
+    await asyncio.to_thread(session_registry.terminate_all)
 
 
 # ── Dependency ───────────────────────────────────────────────────
@@ -150,7 +166,7 @@ async def _check_token(request: Request) -> None:
 @app.get("/internal/health")
 async def health():
     fmu_count = len(fmu_storage.list_fmus())
-    active = engine.active_session_count()
+    active = session_registry.active_session_count()
     return {
         "status": "UP",
         "fmuCount": fmu_count,
@@ -170,7 +186,7 @@ async def health():
 @app.get("/internal/fmu/capacity", dependencies=[Depends(_check_token)])
 async def capacity():
     """Expose the Station execution authority to the provider backend."""
-    active = engine.active_session_count()
+    active = session_registry.active_session_count()
     capacity = config.MAX_CONCURRENT_SESSIONS
     return {
         "capacity": capacity,
@@ -218,40 +234,346 @@ async def companion_asset(
     access_key: str = Header(..., alias="X-FMU-Access-Key"),
     asset_type: str = Query("glb", alias="assetType"),
 ):
-    """Return a same-stem GLB or static application ZIP to the Gateway."""
+    """Return a declared or same-stem digital-twin asset to the Gateway."""
     access_key = _validated_access_key(access_key)
     asset_type = asset_type.strip().lower()
-    if asset_type not in {"glb", "threejs-app"}:
+    if asset_type not in {"auto", "glb", "threejs-app"}:
         raise HTTPException(status_code=400, detail="INVALID_COMPANION_ASSET_TYPE")
-    suffix = ".glb" if asset_type == "glb" else ".webapp.zip"
-    media_type = "model/gltf-binary" if asset_type == "glb" else "application/zip"
     try:
         root = config.FMU_ROOT.resolve(strict=True)
         fmu_path = fmu_storage.get_fmu_path(access_key).resolve(strict=True)
         fmu_path.relative_to(root)
-        asset_path = fmu_path.with_name(fmu_path.stem + suffix).resolve(strict=True)
-        asset_path.relative_to(root)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="COMPANION_ASSET_NOT_FOUND") from exc
 
-    try:
-        if not asset_path.is_file():
-            raise HTTPException(status_code=404, detail="COMPANION_ASSET_NOT_FOUND")
-        with asset_path.open("rb") as asset_file:
-            content = asset_file.read(MAX_COMPANION_ASSET_BYTES + 1)
-    except HTTPException:
-        raise
-    except OSError as exc:
-        raise HTTPException(status_code=503, detail="COMPANION_ASSET_UNAVAILABLE") from exc
+    content = None
+    source = "legacy-sibling"
+    selected_type = asset_type
+    if asset_type == "auto":
+        declared_asset = _read_fmi_ls_ref_visual_asset(fmu_path)
+        if declared_asset is not None and declared_asset[1] == "threejs-app":
+            content, selected_type = declared_asset
+            source = "fmi-ls-ref"
+        else:
+            app_path = _legacy_companion_path(fmu_path, "threejs-app", root)
+            if app_path is not None:
+                content = _read_companion_file(app_path)
+                selected_type = "threejs-app"
+            elif declared_asset is not None:
+                content, selected_type = declared_asset
+                source = "fmi-ls-ref"
+            else:
+                glb_path = _legacy_companion_path(fmu_path, "glb", root)
+                if glb_path is not None:
+                    content = _read_companion_file(glb_path)
+                    selected_type = "glb"
+    else:
+        asset_path = _legacy_companion_path(fmu_path, asset_type, root)
+        if asset_path is not None:
+            content = _read_companion_file(asset_path)
 
-    if len(content) > MAX_COMPANION_ASSET_BYTES:
-        raise HTTPException(status_code=413, detail="COMPANION_ASSET_TOO_LARGE")
+    if content is None:
+        raise HTTPException(status_code=404, detail="COMPANION_ASSET_NOT_FOUND")
 
+    media_type = "model/gltf-binary" if selected_type == "glb" else "application/zip"
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Cache-Control": "private, no-store"},
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Digital-Twin-Asset-Type": selected_type,
+            "X-Digital-Twin-Asset-Source": source,
+        },
     )
+
+
+@app.get("/internal/fmu/parameter-sets", dependencies=[Depends(_check_token)])
+async def parameter_sets(access_key: str = Header(..., alias="X-FMU-Access-Key")):
+    """Return FMI-LS-REF parameter presets embedded in an FMU."""
+    access_key = _validated_access_key(access_key)
+    if not fmu_storage.fmu_exists(access_key):
+        raise HTTPException(404, "FMU_NOT_FOUND")
+    try:
+        root = config.FMU_ROOT.resolve(strict=True)
+        fmu_path = fmu_storage.get_fmu_path(access_key).resolve(strict=True)
+        fmu_path.relative_to(root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "FMU_NOT_FOUND") from exc
+    return {"fmiLsParameterPresets": _read_fmi_ls_ref_parameter_sets(fmu_path)}
+
+
+@app.get("/internal/fmu/experiments", dependencies=[Depends(_check_token)])
+async def experiments(access_key: str = Header(..., alias="X-FMU-Access-Key")):
+    """Return provider-declared, locally interpretable FMI-LS-REF experiments."""
+    access_key = _validated_access_key(access_key)
+    if not fmu_storage.fmu_exists(access_key):
+        raise HTTPException(404, "FMU_NOT_FOUND")
+    try:
+        root = config.FMU_ROOT.resolve(strict=True)
+        fmu_path = fmu_storage.get_fmu_path(access_key).resolve(strict=True)
+        fmu_path.relative_to(root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "FMU_NOT_FOUND") from exc
+    return read_fmi_ls_ref_experiments(
+        fmu_path,
+        parse_parameter_set=_parse_experiment_parameter_set,
+    )
+
+
+@app.get("/internal/fmu/related-resources", dependencies=[Depends(_check_token)])
+async def related_resources(access_key: str = Header(..., alias="X-FMU-Access-Key")):
+    """Return bounded FMI-LS-REF descriptors for resources embedded in an FMU."""
+    access_key = _validated_access_key(access_key)
+    if not fmu_storage.fmu_exists(access_key):
+        raise HTTPException(404, "FMU_NOT_FOUND")
+    try:
+        root = config.FMU_ROOT.resolve(strict=True)
+        fmu_path = fmu_storage.get_fmu_path(access_key).resolve(strict=True)
+        fmu_path.relative_to(root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "FMU_NOT_FOUND") from exc
+    return _read_fmi_ls_ref_related_resources(fmu_path)
+
+
+async def _run_fmi_ls_ref_smoke_experiments(
+    fmu_path,
+    *,
+    access_key: str,
+    model_metadata: dict[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    """Run supported, provider-declared smoke experiments in isolated workers."""
+    discovery = read_fmi_ls_ref_experiments(
+        fmu_path,
+        parse_parameter_set=_parse_experiment_parameter_set,
+    )
+    declared_sets = discovery.get("resourceSets", [])
+    discovery_truncated = discovery.get("truncated") is True
+    execution_policy = model_execution_policy(None)
+    max_steps = execution_policy["maxSteps"]
+    if max_steps is None:
+        max_steps = config.MAX_SIMULATION_STEPS
+    model_variables = {
+        variable.get("name"): variable
+        for variable in model_metadata.get("modelVariables", [])
+        if isinstance(variable, dict) and isinstance(variable.get("name"), str)
+    }
+    max_runs = 8
+    remaining_steps = 100_000
+    run_count = 0
+    passed_count = 0
+    failed_count = 0
+    skipped_count = 0
+    failure_code = None
+    resource_sets: list[dict[str, Any]] = []
+
+    for declared_set in declared_sets:
+        set_failed_before = failed_count
+        output_set = {
+            key: declared_set.get(key)
+            for key in ("source", "role", "type", "name", "description")
+        }
+        output_set["status"] = declared_set.get("status", "unsupported")
+        output_set["reason"] = declared_set.get("reason", "unsupported_experiment_resource")
+        output_set["truncated"] = declared_set.get("truncated") is True
+        output_set["experiments"] = []
+        if output_set["truncated"]:
+            skipped_count += 1
+        raw_cases = declared_set.get("experiments")
+        if not isinstance(raw_cases, list) or not raw_cases:
+            if output_set["status"] == "invalid":
+                failed_count += 1
+                failure_code = failure_code or "INVALID_FMI_LS_EXPERIMENT"
+            else:
+                skipped_count += 1
+            resource_sets.append(output_set)
+            continue
+
+        for case in raw_cases:
+            output_case = {
+                key: case.get(key)
+                for key in ("name", "description", "eligibleForSmokeProbe")
+            }
+            status = case.get("status")
+            reason = str(case.get("reason") or "")
+            if status == "invalid":
+                output_case.update(status="failed", reason=reason or "invalid_experiment")
+                failed_count += 1
+                failure_code = failure_code or "INVALID_FMI_LS_EXPERIMENT"
+                output_set["experiments"].append(output_case)
+                continue
+            if status != "ready":
+                output_case.update(status="skipped", reason=reason or "experiment_not_supported")
+                skipped_count += 1
+                output_set["experiments"].append(output_case)
+                continue
+            if case.get("eligibleForSmokeProbe") is not True:
+                output_case.update(status="skipped", reason="experiment_role_is_not_smoke_test")
+                skipped_count += 1
+                output_set["experiments"].append(output_case)
+                continue
+            if run_count >= max_runs:
+                output_case.update(status="skipped", reason="smoke_probe_run_limit_exceeded")
+                skipped_count += 1
+                output_set["experiments"].append(output_case)
+                continue
+
+            parameters = case.get("parameters")
+            parameter_units = case.get("parameterUnits")
+            if not isinstance(parameters, dict) or not isinstance(parameter_units, dict):
+                output_case.update(status="failed", reason="invalid_ssp_parameter_set")
+                failed_count += 1
+                failure_code = failure_code or "INVALID_FMI_LS_EXPERIMENT"
+                output_set["experiments"].append(output_case)
+                continue
+            mismatched_units = any(
+                parameter_units.get(name) is not None
+                and parameter_units.get(name) != model_variables.get(name, {}).get("unit")
+                for name in parameters
+            )
+            if mismatched_units:
+                output_case.update(status="skipped", reason="parameter_unit_conversion_not_supported")
+                skipped_count += 1
+                output_set["experiments"].append(output_case)
+                continue
+
+            try:
+                _validate_parameters(parameters)
+                options = resolve_simulation_time_options(model_metadata, case.get("options"))
+                options["earlyReturnAllowed"] = False
+                options["outputVariables"] = []
+                case_policy = {
+                    **execution_policy,
+                    "maxSteps": min(max_steps, remaining_steps),
+                }
+                step_count = _validate_options(
+                    access_key,
+                    options,
+                    case_policy,
+                    model_metadata=model_metadata,
+                )
+                input_schedule = _validate_input_schedule(
+                    case.get("inputSchedule", []),
+                    options=options,
+                    model_metadata=model_metadata,
+                    fmu_path=fmu_path,
+                    access_key=access_key,
+                )
+            except HTTPException as exc:
+                reason_code = str(exc.detail)
+                if reason_code in {"SIMULATION_STEP_LIMIT_EXCEEDED", "FMU_COSIMULATION_REQUIRED"}:
+                    output_case.update(status="skipped", reason="executor_limit_or_capability")
+                    skipped_count += 1
+                else:
+                    output_case.update(status="failed", reason="invalid_experiment_options_or_parameters")
+                    failed_count += 1
+                    failure_code = failure_code or "INVALID_FMI_LS_EXPERIMENT"
+                output_set["experiments"].append(output_case)
+                continue
+            except (TypeError, ValueError, OverflowError):
+                output_case.update(status="failed", reason="invalid_experiment_options_or_parameters")
+                failed_count += 1
+                failure_code = failure_code or "INVALID_FMI_LS_EXPERIMENT"
+                output_set["experiments"].append(output_case)
+                continue
+
+            run_count += 1
+            remaining_steps -= step_count
+            try:
+                await asyncio.to_thread(
+                    process_runner.run,
+                    fmu_path,
+                    access_key=access_key,
+                    parameters=parameters,
+                    options=options,
+                    resource_policy=case_policy,
+                    input_schedule=input_schedule,
+                )
+                output_case.update(status="passed", reason="")
+                passed_count += 1
+            except process_runner.ProcessExecutionError as exc:
+                if exc.code in {"FMU_WORKER_ISOLATION_UNAVAILABLE", "FMU_WORKER_START_FAILED"}:
+                    output_case.update(status="unavailable", reason="executor_worker_unavailable")
+                    failure_code = failure_code or exc.code
+                    skipped_count += 1
+                else:
+                    output_case.update(status="failed", reason="experiment_execution_failed")
+                    failed_count += 1
+                    failure_code = failure_code or exc.code
+            except Exception as exc:
+                logger.warning("FMI-LS-REF smoke experiment failed: %s", type(exc).__name__)
+                output_case.update(status="failed", reason="experiment_execution_failed")
+                failed_count += 1
+                failure_code = failure_code or "FMU_EXPERIMENT_EXECUTION_FAILED"
+            output_set["experiments"].append(output_case)
+
+        if failed_count > set_failed_before:
+            output_set["status"] = "failed"
+            output_set["reason"] = "one_or_more_experiments_failed"
+        elif any(case.get("status") == "passed" for case in output_set["experiments"]):
+            output_set["status"] = (
+                "partial"
+                if output_set["truncated"] or any(
+                    case.get("status") != "passed" for case in output_set["experiments"]
+                )
+                else "passed"
+            )
+            output_set["reason"] = ""
+        elif any(case.get("status") == "unavailable" for case in output_set["experiments"]):
+            output_set["status"] = "unavailable"
+            output_set["reason"] = "executor_worker_unavailable"
+        else:
+            output_set["status"] = "unsupported"
+            output_set["reason"] = "no_supported_smoke_experiments"
+        resource_sets.append(output_set)
+
+    if not declared_sets and not discovery_truncated:
+        status = "not_declared"
+    elif failed_count:
+        status = "failed"
+    elif passed_count and (skipped_count or discovery_truncated):
+        status = "partial"
+    elif passed_count:
+        status = "passed"
+    elif discovery_truncated:
+        status = "partial"
+    elif any(item.get("status") == "unavailable" for item in resource_sets):
+        status = "unavailable"
+    else:
+        status = "unsupported"
+
+    return ({
+        "status": status,
+        "declaredExperimentSets": len(declared_sets),
+        "additionalExperimentSetsOmitted": discovery_truncated,
+        "executed": run_count,
+        "passed": passed_count,
+        "failed": failed_count,
+        "skipped": skipped_count,
+        "resourceSets": resource_sets,
+    }, failure_code)
+
+
+def _legacy_companion_path(fmu_path, asset_type: str, root):
+    suffix = ".glb" if asset_type == "glb" else ".webapp.zip"
+    try:
+        asset_path = fmu_path.with_name(fmu_path.stem + suffix).resolve(strict=True)
+        asset_path.relative_to(root)
+    except (FileNotFoundError, ValueError):
+        return None
+    if not asset_path.is_file():
+        return None
+    return asset_path
+
+
+def _read_companion_file(asset_path) -> bytes:
+    try:
+        with asset_path.open("rb") as asset_file:
+            content = asset_file.read(MAX_COMPANION_ASSET_BYTES + 1)
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="COMPANION_ASSET_UNAVAILABLE") from exc
+    if len(content) > MAX_COMPANION_ASSET_BYTES:
+        raise HTTPException(status_code=413, detail="COMPANION_ASSET_TOO_LARGE")
+    return content
 
 
 # ── Describe ─────────────────────────────────────────────────────
@@ -360,8 +682,8 @@ async def validate_fmu(
     }
     if probe and report["archiveValid"] and report["stationCompatible"]:
         try:
-            token = engine.reserve_capacity()
-        except engine.CapacityExceededError:
+            token = session_registry.reserve_capacity()
+        except session_registry.CapacityExceededError:
             raise HTTPException(status_code=429, detail="STATION_CAPACITY_EXHAUSTED")
         try:
             path, digest = fmu_storage.snapshot_fmu(fmu_storage.get_fmu_path(access_key))
@@ -385,6 +707,19 @@ async def validate_fmu(
                 report["dependenciesChecked"] = True
                 report["probeResult"] = "passed"
                 report["sha256"] = digest
+                experiment_report, experiment_failure_code = await _run_fmi_ls_ref_smoke_experiments(
+                    path,
+                    access_key=access_key,
+                    model_metadata=description,
+                )
+                report["fmiLsExperiments"] = experiment_report
+                if experiment_report["status"] == "failed":
+                    report["probeResult"] = "failed"
+                    probe_failure_code = experiment_failure_code or "FMU_EXPERIMENT_FAILED"
+                    report["issues"].append("One or more declared FMI-LS-REF smoke experiments failed")
+                elif experiment_report["status"] == "unavailable":
+                    probe_failure_code = experiment_failure_code
+                    report["issues"].append("Declared FMI-LS-REF smoke experiments could not run because the worker was unavailable")
             else:
                 report["probeResult"] = "failed"
         except process_runner.ProcessExecutionError as exc:
@@ -398,7 +733,7 @@ async def validate_fmu(
             report["probeResult"] = "failed"
             report["issues"].append(f"Isolated instantiation probe failed ({exc.code})")
         finally:
-            engine.release_capacity(token)
+            session_registry.release_capacity(token)
     valid = report["archiveValid"] and report["modelDescriptionValid"] and report["stationCompatible"]
     if probe:
         valid = valid and report.get("probeResult") == "passed"
@@ -446,10 +781,27 @@ class SimulationBody(BaseModel):
     reservationKey: str | None = None
     parameters: dict = Field(default_factory=dict)
     options: dict = Field(default_factory=dict)
+    checkpoint: dict | None = None
+    captureFmuState: StrictBool = False
     inputSchedule: list[dict] = Field(
         default_factory=list,
         max_length=config.MAX_INPUT_SCHEDULE_EVENTS,
     )
+
+    @field_validator("checkpoint")
+    @classmethod
+    def _bounded_fmu_state_checkpoint(cls, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("FMU state checkpoint must be an object")
+        try:
+            encoded = json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("FMU state checkpoint is invalid") from exc
+        if len(encoded) > 4096:
+            raise ValueError("FMU state checkpoint exceeds 4 KiB")
+        return value
 
 
 class BatchScenario(BaseModel):
@@ -788,12 +1140,12 @@ async def run_simulation(body: SimulationBody):
     slot: engine.FmuSession | None = None
     capacity_token = None
     try:
-        capacity_token = engine.reserve_capacity()
+        capacity_token = session_registry.reserve_capacity()
         if config.execution_mode() != "process":
             slot = engine.FmuSession(
                 f"run_{secrets.token_hex(6)}", fmu_path, access_key=access_key,
             )
-    except engine.CapacityExceededError as exc:
+    except session_registry.CapacityExceededError as exc:
         raise HTTPException(429, "STATION_CAPACITY_EXHAUSTED") from exc
     try:
         if body.gatewayContext is not None:
@@ -897,7 +1249,7 @@ async def run_simulation(body: SimulationBody):
     finally:
         if slot is not None:
             slot.terminate()
-        engine.release_capacity(capacity_token)
+        session_registry.release_capacity(capacity_token)
 
 
 @app.post("/internal/fmu/simulations/jobs", status_code=202, dependencies=[Depends(_check_token)])
@@ -1005,6 +1357,34 @@ async def stream_simulation(body: SimulationBody):
         raise HTTPException(status_code=422, detail={"code": "FMU_NOT_COMPATIBLE", "issues": report["issues"][:8]})
     model_metadata = fmu_storage.describe_path(fmu_path)
     _validate_options(access_key, body.options, policy, model_metadata=model_metadata)
+    model_capabilities = model_metadata.get("capabilities", {})
+    model_capabilities = model_capabilities if isinstance(model_capabilities, dict) else {}
+    supports_serialized_state = bool(
+        model_metadata.get("simulationType") == "CoSimulation"
+        and model_capabilities.get("canGetAndSetFMUstate", model_capabilities.get("canGetAndSetFMUState", False))
+        and model_capabilities.get("canSerializeFMUstate", model_capabilities.get("canSerializeFMUState", False))
+        and config.internal_token()
+    )
+    if type(body.captureFmuState) is not bool:
+        raise HTTPException(status_code=400, detail="INVALID_FMU_STATE_OPTIONS")
+    if (body.captureFmuState or body.checkpoint is not None) and not supports_serialized_state:
+        raise HTTPException(status_code=409, detail="FMU_STATE_NOT_SUPPORTED")
+    checkpoint_snapshot = None
+    if body.checkpoint is not None:
+        if not isinstance(body.gatewayContext, dict):
+            raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
+        try:
+            checkpoint_snapshot = fmu_state.open_fmu_state_checkpoint(
+                body.checkpoint,
+                gateway_context=body.gatewayContext,
+                signing_secret=config.internal_token(),
+                expected_fmu_sha256=model_sha256,
+                state_dir=config.STATE_DIR,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="INVALID_FMU_STATE_CHECKPOINT") from exc
+    if (body.captureFmuState or checkpoint_snapshot is not None) and not isinstance(body.gatewayContext, dict):
+        raise HTTPException(status_code=403, detail="RESERVATION_SCOPE_REQUIRED")
     input_schedule = _validate_input_schedule(
         body.inputSchedule,
         options=body.options,
@@ -1020,10 +1400,15 @@ async def stream_simulation(body: SimulationBody):
     slot: engine.FmuSession | None = None
     capacity_token = None
     try:
-        capacity_token = engine.reserve_capacity()
+        capacity_token = session_registry.reserve_capacity()
         if config.execution_mode() != "process":
-            slot = engine.FmuSession(f"stream_{secrets.token_hex(6)}", fmu_path, access_key=access_key)
-    except engine.CapacityExceededError as exc:
+            slot = engine.FmuSession(
+                f"stream_{secrets.token_hex(6)}",
+                fmu_path,
+                access_key=access_key,
+                fmu_sha256=model_sha256,
+            )
+    except session_registry.CapacityExceededError as exc:
         raise HTTPException(status_code=429, detail="STATION_CAPACITY_EXHAUSTED") from exc
 
     try:
@@ -1038,7 +1423,7 @@ async def stream_simulation(body: SimulationBody):
     except Exception:
         if slot is not None:
             slot.terminate()
-        engine.release_capacity(capacity_token)
+        session_registry.release_capacity(capacity_token)
         raise
 
     capacity_release_lock = threading.Lock()
@@ -1054,7 +1439,7 @@ async def stream_simulation(body: SimulationBody):
             if slot is not None:
                 slot.terminate()
         finally:
-            engine.release_capacity(capacity_token)
+            session_registry.release_capacity(capacity_token)
 
     def _generate():
         stream_digest = hashlib.sha256()
@@ -1073,6 +1458,10 @@ async def stream_simulation(body: SimulationBody):
                     reservation_ends_at=reservation_end,
                     resource_policy=policy,
                     input_schedule=input_schedule,
+                    fmu_sha256=model_sha256,
+                    gateway_context=body.gatewayContext,
+                    checkpoint_snapshot=checkpoint_snapshot,
+                    capture_fmu_state=body.captureFmuState,
                 ):
                     if snapshot.get("type") == "sim.done":
                         policy_evidence = applied_execution_policy(policy, evidence_options)
@@ -1105,6 +1494,8 @@ async def stream_simulation(body: SimulationBody):
                     parameters=body.parameters or None,
                     early_return_allowed=body.options.get("earlyReturnAllowed", False),
                 )
+                if checkpoint_snapshot is not None:
+                    slot.restore_fmu_state(checkpoint_snapshot)
                 for snapshot in slot.run_until_streaming(
                     stop,
                     step_size=step,
@@ -1118,6 +1509,13 @@ async def stream_simulation(body: SimulationBody):
                     "time": float(slot._time),
                     "finishReason": slot._finished_reason,
                 }
+                if body.captureFmuState:
+                    final_payload["checkpoint"] = fmu_state.seal_fmu_state_checkpoint(
+                        slot.capture_fmu_state(),
+                        gateway_context=body.gatewayContext,
+                        signing_secret=config.internal_token(),
+                        state_dir=config.STATE_DIR,
+                    )
                 final_evidence = build_execution_evidence(
                     model_sha256=model_sha256,
                     parameters=body.parameters or {},
