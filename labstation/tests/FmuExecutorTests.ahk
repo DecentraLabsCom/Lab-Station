@@ -226,7 +226,7 @@ TestRuntimeLimitsIncludeSimulationParameterCeiling() {
     EnvSet("FMU_MAX_SIMULATION_PARAMETERS", "")
     LS_FmuExecutor.ConfigureRuntimeLimits()
     LS_TestAssert(
-        EnvGet("FMU_MAX_SIMULATION_PARAMETERS") = "128",
+        EnvGet("FMU_MAX_SIMULATION_PARAMETERS") = "256",
         "Station configures the shared maximum simulation parameter count"
     )
     EnvSet("FMU_MAX_SIMULATION_PARAMETERS", original)

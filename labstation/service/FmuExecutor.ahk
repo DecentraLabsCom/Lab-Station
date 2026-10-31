@@ -56,7 +56,7 @@ class LS_FmuExecutor {
     static ConfigureRuntimeLimits() {
         defaults := Map(
             "FMU_MAX_SIMULATION_STEPS", "600000",
-            "FMU_MAX_SIMULATION_PARAMETERS", "128",
+            "FMU_MAX_SIMULATION_PARAMETERS", "256",
             "FMU_MAX_OUTPUT_SUBSCRIPTION_HZ", "1000",
             "FMU_MAX_INPUT_SCHEDULE_EVENTS", "120000",
             "FMU_MAX_INPUT_SCHEDULE_BYTES", "16777216",
