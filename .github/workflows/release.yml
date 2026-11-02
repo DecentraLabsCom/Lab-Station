@@ -166,24 +166,31 @@ jobs:
           $versionFile = Join-Path $PWD 'build/fmu-executor/version-info.txt'
           New-Item -ItemType Directory -Path (Split-Path -Parent $versionFile) -Force | Out-Null
           [System.IO.File]::WriteAllText($versionFile, $versionResource, [System.Text.UTF8Encoding]::new($false))
-          python -m PyInstaller `
-            --noconfirm `
-            --clean `
-            --onedir `
-            --console `
-            --name FMUExecutor `
-            --paths fmu-executor `
-            --distpath dist/fmu-executor-runtime `
-            --workpath build/fmu-executor `
-            --specpath build/fmu-executor `
-            --version-file $versionFile `
-            --hidden-import app.main `
-            --collect-all fastapi `
-            --collect-all pydantic `
-            --collect-all uvicorn `
-            --collect-all websockets `
-            --collect-all fmpy `
-            fmu-executor/launcher.py
+          $pyinstallerArgs = @(
+            '--noconfirm',
+            '--clean',
+            '--onedir',
+            '--console',
+            '--name', 'FMUExecutor',
+            '--paths', 'fmu-executor',
+            '--distpath', 'dist/fmu-executor-runtime',
+            '--workpath', 'build/fmu-executor',
+            '--specpath', 'build/fmu-executor',
+            '--version-file', $versionFile,
+            '--hidden-import', 'app.main',
+            '--collect-all', 'fastapi',
+            '--collect-all', 'pydantic',
+            '--collect-all', 'uvicorn',
+            '--collect-all', 'websockets',
+            '--collect-all', 'fmpy'
+          )
+          $sundialsInstalled = python -c "import importlib.util; print(importlib.util.find_spec('sundials4py') is not None)"
+          if ($sundialsInstalled -eq 'True') {
+            $pyinstallerArgs += @('--collect-all', 'sundials4py')
+          }
+          $pyinstallerArgs += 'fmu-executor/launcher.py'
+          python -m PyInstaller @pyinstallerArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Smoke test the standalone FMU Executor runtime
         shell: powershell
