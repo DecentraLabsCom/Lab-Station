@@ -28,3 +28,5 @@ labstation/data
 
 # Local release tools; the release workflow downloads pinned portable tools.
 /.release-tools/
+/.fmu-executor-source/
+/.fmu-executor-demo-source/

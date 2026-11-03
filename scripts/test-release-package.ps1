@@ -76,6 +76,8 @@ try {
         Assert-Condition ($entryNames -contains 'Lab Station/img/DecentraLabs.png') 'Missing packaged logo.'
         Assert-Condition ($entryNames -contains 'Lab Station/fmu-executor/runtime/FMUExecutor.exe') 'Missing packaged standalone FMU Executor.'
         Assert-Condition ($entryNames -contains 'Lab Station/fmu-executor/runtime/_internal/python312.dll') 'Missing bundled Python runtime payload.'
+        Assert-Condition ($entryNames -contains 'Lab Station/fmu-executor/SOURCE.lock.json') 'Missing FMU Executor source pin.'
+        Assert-Condition ($entryNames -contains 'Lab Station/fmu-executor/VERSION') 'Missing FMU Executor version.'
         Assert-Condition (-not ($entryNames -contains 'Lab Station/fmu-executor/requirements.txt')) 'Release still requires a separate Python dependency installation.'
         Assert-Condition (-not ($entryNames -match '^Lab Station/fmu-executor/app/')) 'Python source was copied instead of the frozen runtime.'
     } finally {

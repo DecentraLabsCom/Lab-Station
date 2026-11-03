@@ -46,7 +46,7 @@ class LS_FmuExecutor {
     static IsAvailable() {
         if (!DirExist(LAB_STATION_FMU_EXECUTOR_DIR))
             return false
-        return (this._BundledExecutable() != "" || FileExist(LAB_STATION_FMU_EXECUTOR_DIR "\app\main.py")) ? true : false
+        return (this._BundledExecutable() != "" || this._SourceDirectory() != "") ? true : false
     }
 
     static TokenConfigured() {
@@ -92,7 +92,7 @@ class LS_FmuExecutor {
 
     static Start() {
         if (!this.IsAvailable()) {
-            LS_LogWarning("FMU executor: not available (directory missing)")
+            LS_LogWarning("FMU executor: not available (bundled runtime or local source checkout missing)")
             return false
         }
         if (!this.TokenConfigured()) {
@@ -115,12 +115,14 @@ class LS_FmuExecutor {
         }
 
         bundledExe := this._BundledExecutable()
+        workingDir := LAB_STATION_FMU_EXECUTOR_DIR
         if (bundledExe != "") {
             command := Format('"{1}"', bundledExe)
         } else {
+            workingDir := this._SourceDirectory()
             pythonExe := this._FindPython()
-            if (pythonExe = "") {
-                LS_LogError("FMU executor: bundled runtime missing and Python not found on PATH")
+            if (workingDir = "" || pythonExe = "") {
+                LS_LogError("FMU executor: bundled runtime or configured source checkout with Python is missing")
                 return false
             }
             command := Format('"{1}" -m app', pythonExe)
@@ -129,7 +131,7 @@ class LS_FmuExecutor {
         LS_LogInfo("FMU executor: starting sidecar on port " . LAB_STATION_FMU_EXECUTOR_PORT)
 
         try {
-            pid := this.LaunchProcess(command, LAB_STATION_FMU_EXECUTOR_DIR, "Hide")
+            pid := this.LaunchProcess(command, workingDir, "Hide")
             this._pid := pid
             this._consecutiveFailures := 0
             this._lastHealthCheck := 0
@@ -294,7 +296,13 @@ try {
     }
 
     static CleanTempState() {
-        tempDir := LAB_STATION_FMU_EXECUTOR_DIR "\fmu-data\.tmp"
+        runtimeRoot := LAB_STATION_FMU_EXECUTOR_DIR
+        if (this._BundledExecutable() = "") {
+            sourceRoot := this._SourceDirectory()
+            if (sourceRoot != "")
+                runtimeRoot := sourceRoot
+        }
+        tempDir := runtimeRoot "\fmu-data\.tmp"
         if (!DirExist(tempDir))
             return true
         script := Format("
@@ -324,6 +332,22 @@ if (Test-Path `$Path) {{
     static _BundledExecutable() {
         executable := LAB_STATION_FMU_EXECUTOR_DIR "\runtime\FMUExecutor.exe"
         return FileExist(executable) ? executable : ""
+    }
+
+    static _SourceDirectory() {
+        configured := Trim(EnvGet("FMU_EXECUTOR_SOURCE_DIR"))
+        candidates := []
+        if (configured != "") {
+            candidates.Push(configured)
+        } else {
+            candidates.Push(LAB_STATION_PROJECT_ROOT "\.fmu-executor-source")
+            candidates.Push(LAB_STATION_PROJECT_ROOT "\..\FMU-Executor")
+        }
+        for candidate in candidates {
+            if (DirExist(candidate) && FileExist(candidate "\app\main.py"))
+                return RTrim(candidate, "\/")
+        }
+        return ""
     }
 
     static _ProcessExists(pid) {

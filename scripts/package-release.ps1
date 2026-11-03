@@ -85,12 +85,8 @@ try {
         Copy-Item -LiteralPath $logoSource -Destination (Join-Path $logoDirectory 'DecentraLabs.png') -Force
     }
 
-    # Ship the frozen, self-contained sidecar runtime produced by the release workflow.
-    $fmuExecutorSourceDirectory = Join-Path $repositoryRoot 'fmu-executor'
-    if (-not (Test-Path -LiteralPath $fmuExecutorSourceDirectory -PathType Container)) {
-        throw "FMU Executor source directory not found: $fmuExecutorSourceDirectory"
-    }
-
+    # Ship the frozen runtime and its pin metadata. The upstream source checkout
+    # is a build input, not a tracked copy in this repository.
     $fmuExecutorPackageDirectory = Join-Path $packageDirectory 'fmu-executor'
     New-Item -ItemType Directory -Path $fmuExecutorPackageDirectory -Force | Out-Null
 
@@ -107,13 +103,22 @@ try {
         [System.Text.UTF8Encoding]::new($false)
     )
 
-    # Preserve source provenance when the checkout provides it.
-    foreach ($name in @('VERSION', 'SOURCE.lock.json')) {
-        $source = Join-Path $fmuExecutorSourceDirectory $name
-        if (Test-Path -LiteralPath $source -PathType Leaf) {
-            Copy-Item -LiteralPath $source -Destination (Join-Path $fmuExecutorPackageDirectory $name) -Force
-        }
+    $executorLockPath = Join-Path $repositoryRoot 'fmu-executor\SOURCE.lock.json'
+    if (-not (Test-Path -LiteralPath $executorLockPath -PathType Leaf)) {
+        throw "FMU Executor source lock not found: $executorLockPath"
     }
+    $executorLock = Get-Content -LiteralPath $executorLockPath -Raw | ConvertFrom-Json
+    if ($executorLock.repository -ne 'DecentraLabsCom/FMU-Executor' -or
+        $executorLock.version -notmatch '^\d+\.\d+\.\d+$' -or
+        $executorLock.commit -notmatch '^[0-9a-fA-F]{40}$' -or
+        $executorLock.sourceTree.format -ne 'git-ls-tree-manifest-v1' -or
+        $executorLock.sourceTree.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        $executorLock.runtimePayload.format -ne 'sha256-path-manifest-v1' -or
+        $executorLock.runtimePayload.sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'FMU Executor source lock is missing valid repository, version, commit, or digest metadata.'
+    }
+    Copy-Item -LiteralPath $executorLockPath -Destination (Join-Path $fmuExecutorPackageDirectory 'SOURCE.lock.json') -Force
+    Set-Content -LiteralPath (Join-Path $fmuExecutorPackageDirectory 'VERSION') -Value $executorLock.version -NoNewline -Encoding Ascii
 
     $fmuExecutorBuildDirectory = Join-Path $distDirectory 'fmu-executor-runtime\FMUExecutor'
     $fmuExecutorExecutable = Join-Path $fmuExecutorBuildDirectory 'FMUExecutor.exe'
@@ -296,6 +301,8 @@ try {
 
         $expectedFmuEntries = @(
             'Lab Station/fmu-executor/README.md',
+            'Lab Station/fmu-executor/VERSION',
+            'Lab Station/fmu-executor/SOURCE.lock.json',
             'Lab Station/fmu-executor/runtime/FMUExecutor.exe',
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.fmu',
             'Lab Station/fmu-executor/fmu-data/SmartWarehouseCell.glb',

@@ -28,13 +28,22 @@ directly.
 
 ## Run tests
 
-FMU Executor tests run on any supported Python environment:
+FMU Executor is maintained in its canonical sibling checkout, not duplicated
+under Lab Station. For local development, point `FMU_EXECUTOR_SOURCE` to that
+checkout (or use the adjacent `..\FMU-Executor` directory):
 
 ```powershell
-python -m pip install -r fmu-executor\requirements.txt
+if (-not $env:FMU_EXECUTOR_SOURCE) { $env:FMU_EXECUTOR_SOURCE = (Resolve-Path '..\FMU-Executor').Path }
+python -m pip install -r "$env:FMU_EXECUTOR_SOURCE\requirements.txt"
 python -m pip install pytest httpx
-python -m pytest fmu-executor\tests -q
+python -m pytest "$env:FMU_EXECUTOR_SOURCE\tests" -q
 ```
+
+CI and release builds check out the exact commit recorded in
+`fmu-executor/SOURCE.lock.json`; use `scripts/verify-shared-fmu-executor.ps1`
+to verify that pin locally. To approve a new reviewed pin, run the same script
+with `-UpdatePin` against a clean canonical checkout. Local Station runs can
+launch source mode by setting `FMU_EXECUTOR_SOURCE_DIR` to the checkout path.
 
 Run the AHK tests with an AutoHotkey v2 executable. The list matches the CI
 smoke-test matrix:

@@ -30,6 +30,7 @@ class RecordingFmuExecutor extends LS_FmuExecutor {
     static firewallResult := true
     static shellResult := 0
     static pythonExecutable := ""
+    static sourceDirectory := ""
     static launchResult := true
     static launchPid := 4242
     static stopResult := 0
@@ -43,12 +44,14 @@ class RecordingFmuExecutor extends LS_FmuExecutor {
     static captureResult := Map("exitCode", 0, "stdout", "", "stderr", "")
 
     static Reset() {
+        global TEST_ROOT
         this.available := false
         this.tokenReady := false
         this.processRunning := false
         this.firewallResult := true
         this.shellResult := 0
         this.pythonExecutable := ""
+        this.sourceDirectory := TEST_ROOT "\source"
         this.launchResult := true
         this.launchPid := 4242
         this.stopResult := 0
@@ -88,6 +91,10 @@ class RecordingFmuExecutor extends LS_FmuExecutor {
 
     static _FindPython() {
         return this.pythonExecutable
+    }
+
+    static _SourceDirectory() {
+        return this.sourceDirectory
     }
 
     static LaunchProcess(command, workingDir, options) {
@@ -234,20 +241,24 @@ TestRuntimeLimitsIncludeSimulationParameterCeiling() {
 
 TestAvailabilityUsesExecutorLayout() {
     global LAB_STATION_FMU_EXECUTOR_DIR, TEST_ROOT
+    originalSourceDirectory := EnvGet("FMU_EXECUTOR_SOURCE_DIR")
 
     try FileDelete(TEST_ROOT "\runtime\FMUExecutor.exe")
     try DirDelete(TEST_ROOT "\runtime", true)
-    try FileDelete(TEST_ROOT "\app\main.py")
-    try DirDelete(TEST_ROOT "\app", true)
+    try FileDelete(TEST_ROOT "\source\app\main.py")
+    try DirDelete(TEST_ROOT "\source", true)
+    EnvSet("FMU_EXECUTOR_SOURCE_DIR", TEST_ROOT "\missing-source")
     LS_TestAssert(!LS_FmuExecutor.IsAvailable(), "FMU executor is unavailable without source or a bundled runtime")
 
-    DirCreate(TEST_ROOT "\app")
-    FileAppend("# test executor" . Chr(10), TEST_ROOT "\app\main.py", "UTF-8")
-    LS_TestAssert(LS_FmuExecutor.IsAvailable(), "FMU executor development source remains available")
+    DirCreate(TEST_ROOT "\source\app")
+    FileAppend("# test executor" . Chr(10), TEST_ROOT "\source\app\main.py", "UTF-8")
+    EnvSet("FMU_EXECUTOR_SOURCE_DIR", TEST_ROOT "\source")
+    LS_TestAssert(LS_FmuExecutor.IsAvailable(), "FMU executor shared source checkout remains available")
 
     DirCreate(TEST_ROOT "\runtime")
     FileAppend("test executable", TEST_ROOT "\runtime\FMUExecutor.exe", "UTF-8")
     LS_TestAssert(LS_FmuExecutor.IsAvailable(), "FMU executor is available when its bundled executable is present")
+    EnvSet("FMU_EXECUTOR_SOURCE_DIR", originalSourceDirectory)
 }
 
 TestStartPrefersBundledRuntime() {
@@ -297,7 +308,7 @@ TestStartRunsTheConfiguredPythonExecutor() {
     LS_TestAssert(RecordingFmuExecutor.firewallCalls = 1, "FMU start configures firewall before launch")
     LS_TestAssert(RecordingFmuExecutor.launchCalls.Length = 1, "FMU start launches one executor process")
     LS_TestAssert(InStr(RecordingFmuExecutor.launchCalls[1]["command"], Chr(34) . "python" . Chr(34) . " -m app") > 0, "FMU start launches the Python app module")
-    LS_TestAssert(RecordingFmuExecutor.launchCalls[1]["workingDir"] = LAB_STATION_FMU_EXECUTOR_DIR, "FMU start uses the executor working directory")
+    LS_TestAssert(RecordingFmuExecutor.launchCalls[1]["workingDir"] = TEST_ROOT "\source", "FMU start uses the shared source checkout directory")
     LS_TestAssert(RecordingFmuExecutor._pid = 4242, "FMU start records the child process PID")
 }
 
@@ -453,6 +464,7 @@ TestFindPythonUsesTheFirstWorkingCandidate() {
 
 TestCleanTempStateUsesTheExecutorTempFolder() {
     RecordingFmuExecutor.Reset()
+    DirCreate(TEST_ROOT "\source\fmu-data\.tmp")
     RecordingFmuExecutor.shellResult := 5
 
     result := RecordingFmuExecutor.CleanTempState()

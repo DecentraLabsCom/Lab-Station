@@ -41,13 +41,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Read pinned FMU Executor commit
+        id: fmu-pin
+        shell: pwsh
+        run: |
+          $lock = Get-Content fmu-executor/SOURCE.lock.json -Raw | ConvertFrom-Json
+          "commit=$($lock.commit)" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout pinned FMU Executor source
+        uses: actions/checkout@v7
+        with:
+          repository: DecentraLabsCom/FMU-Executor
+          ref: ${{ steps.fmu-pin.outputs.commit }}
+          path: .fmu-executor-source
+
       - name: Set up Python analysis dependencies
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install FMU Executor dependencies
-        run: python -m pip install -r fmu-executor/requirements.txt
+        run: python -m pip install -r .fmu-executor-source/requirements.txt
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

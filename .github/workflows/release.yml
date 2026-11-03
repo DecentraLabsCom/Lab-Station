@@ -60,12 +60,16 @@ jobs:
           }
           "commit=$($lock.commit)" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
 
-      - name: Checkout canonical FMU Executor examples
+      - name: Checkout pinned FMU Executor source and examples
         uses: actions/checkout@v7
         with:
           repository: DecentraLabsCom/FMU-Executor
           ref: ${{ steps.fmu_executor_pin.outputs.commit }}
-          path: .fmu-executor-demo-source
+          path: .fmu-executor-source
+
+      - name: Verify pinned FMU Executor source
+        shell: powershell
+        run: .\scripts\verify-shared-fmu-executor.ps1 -SharedSource (Join-Path $env:GITHUB_WORKSPACE '.fmu-executor-source')
 
       - name: Setup portable AutoHotkey v2 + Ahk2Exe
         id: setup-tools
@@ -114,7 +118,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            fmu-executor/requirements.txt
+            .fmu-executor-source/requirements.txt
             fmu-executor/build-requirements.txt
 
       - name: Build the standalone FMU Executor runtime
@@ -122,9 +126,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           python -m pip install --upgrade pip
-          python -m pip install -r fmu-executor/requirements.txt -r fmu-executor/build-requirements.txt
+          python -m pip install -r .fmu-executor-source/requirements.txt -r fmu-executor/build-requirements.txt
           $version = '0.1.0'
-          $sourceVersion = Join-Path $PWD 'fmu-executor/VERSION'
+          $sourceVersion = Join-Path $PWD '.fmu-executor-source/VERSION'
           if (Test-Path -LiteralPath $sourceVersion -PathType Leaf) {
             $version = (Get-Content -LiteralPath $sourceVersion -Raw).Trim()
           }
@@ -172,7 +176,7 @@ jobs:
             '--onedir',
             '--console',
             '--name', 'FMUExecutor',
-            '--paths', 'fmu-executor',
+            '--paths', '.fmu-executor-source',
             '--distpath', 'dist/fmu-executor-runtime',
             '--workpath', 'build/fmu-executor',
             '--specpath', 'build/fmu-executor',
@@ -622,8 +626,8 @@ jobs:
           .\scripts\package-release.ps1 `
             -DistPath (Join-Path $PWD 'dist') `
             -OutputPath (Join-Path $PWD 'dist/Lab-Station.zip') `
-            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/smart-warehouse-cell') `
-            -ReferenceFmuExamplePath (Join-Path $PWD '.fmu-executor-demo-source/examples/reference-fmus')
+            -SmartWarehouseExamplePath (Join-Path $PWD '.fmu-executor-source/examples/smart-warehouse-cell') `
+            -ReferenceFmuExamplePath (Join-Path $PWD '.fmu-executor-source/examples/reference-fmus')
 
       - name: Extract release notes from the changelog
         shell: powershell
