@@ -18,6 +18,7 @@ from .session_protocol_common import (
 
 IO_COMMAND_TYPES = frozenset({
     "sim.setInputs",
+    "sim.reconfigure",
     "sim.getOutputs",
     "sim.subscribeOutputs",
     "sim.unsubscribeOutputs",
@@ -57,6 +58,33 @@ async def handle_io_command(
             raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
         return {
             "type": "sim.inputs.updated",
+            "sessionId": session.session_id,
+            "simTime": session._time,
+            "terminateSimulation": bool(
+                session._state == "stopped"
+                and session._finished_reason == "fmu_termination_requested"
+            ),
+        }
+
+    if msg_type == "sim.reconfigure":
+        values = msg.get("values", {})
+        if not isinstance(values, dict) or not values:
+            raise HTTPException(400, "sim.reconfigure requires a non-empty object 'values'")
+        try:
+            await asyncio.to_thread(session.validate_reconfiguration_values, values)
+        except ValueError as exc:
+            raise HTTPException(400, f"INVALID_RECONFIGURATION - {exc}") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
+        await asyncio.to_thread(services.reserve_input_update, session.gateway_context, access_key, values)
+        try:
+            await asyncio.to_thread(session.reconfigure_structural_parameters, values)
+        except ValueError as exc:
+            raise HTTPException(400, f"INVALID_RECONFIGURATION - {exc}") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, f"INVALID_SESSION_STATE - {exc}") from exc
+        return {
+            "type": "sim.reconfigured",
             "sessionId": session.session_id,
             "simTime": session._time,
         }
@@ -100,7 +128,12 @@ async def handle_io_command(
                 result = await asyncio.to_thread(session.get_outputs, refs)
         except process_runner.OutputReadRateLimitError as exc:
             raise _output_read_rate_limit_exception(exc) from exc
-        return _sim_outputs_payload(session, result["outputs"])
+        metadata = {
+            key: result[key]
+            for key in ("nextEventTimeDefined", "nextEventTime", "terminateSimulation", "finished")
+            if key in result
+        }
+        return _sim_outputs_payload(session, result["outputs"], metadata)
 
     if msg_type == "sim.subscribeOutputs":
         variables = msg.get("variables")

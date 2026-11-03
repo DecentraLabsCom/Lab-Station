@@ -1,4 +1,4 @@
-"""FMU execution engine – wraps FMPy for Co-Simulation execution."""
+"""FMU execution engine for FMI Co-Simulation and Model Exchange models."""
 
 from __future__ import annotations
 
@@ -22,12 +22,20 @@ from typing import Any, Generator, Optional
 from fmpy import (
     extract as fmpy_extract,
     instantiate_fmu as fmpy_instantiate_fmu,
+    platform_tuple,
     read_model_description,
+    sharedLibraryExtension,
 )
 from fmpy.fmi1 import FMICallException
 from fmpy.fmi2 import fmi2Discard, fmi2LastSuccessfulTime, fmi2Pending, fmi2Terminated
 
 from . import config
+from .fmi3_cosimulation import instantiate_fmi3_cosimulation
+from .fmi3_clock_scheduler import Fmi3InputClockSchedule, read_fmi3_input_clock_schedules
+from .fmi3_clock_runtime import Fmi3ClockRuntime
+from .fmi3_model_exchange import instantiate_fmi3_model_exchange
+from .fmi_ls_dae import Fmi3DaeIntegrator, FmiLsDaeDefinition, read_fmi_ls_dae
+from .fmi_model_exchange import FmiModelExchangeIntegrator
 from .fmu_metadata import describe_model_description
 from .simulation_defaults import DEFAULT_STEP_SIZE, resolve_simulation_time_options
 
@@ -62,12 +70,12 @@ def _ceil_step_count(expected_steps: float, current_time: float, target_time: fl
 def estimate_advance_samples(
     current_time: float,
     target_time: float,
-    stop_time: float,
+    stop_time: float | None,
     step_size: float,
     output_sample_every_steps: int,
 ) -> int:
     """Estimate output samples with the same time-boundary tolerance as the engine."""
-    effective_target = min(target_time, stop_time)
+    effective_target = min(target_time, stop_time) if stop_time is not None else target_time
     expected_steps = max(0.0, effective_target - current_time) / step_size
     if not math.isfinite(expected_steps):
         raise ValueError("targetTime and stepSize produce an invalid step count")
@@ -103,7 +111,7 @@ class OutputSubscription:
 
 
 class FmuSession:
-    """Manage one loaded FMI 2/FMI 3 Co-Simulation session."""
+    """Manage one FMI Co-Simulation or Model Exchange session."""
 
     def __init__(
         self,
@@ -124,15 +132,27 @@ class FmuSession:
         self._extract_dir: Path | None = None
         self._slave: Any | None = None
         self._md = None
+        self._fmi_ls_dae: FmiLsDaeDefinition | None = None
+        self._fmi_ls_dae_issue: str | None = None
+        self._execution_interface: str | None = None
+        self._dae_integrator: Fmi3DaeIntegrator | None = None
+        self._me_integrator: FmiModelExchangeIntegrator | None = None
+        self._fmi3_input_clock_references: list[int] = []
+        self._fmi3_clock_schedules: list[Fmi3InputClockSchedule] = []
+        self._fmi3_clock_runtime: Fmi3ClockRuntime | None = None
+        self._use_me = False
+        self._use_dae = False
         self._time: float = 0.0
         self._step_size: float = 0.001
         self._start_time: float = 0.0
-        self._stop_time: float = 1.0
+        self._stop_time: float | None = None
         self._initial_parameters: dict[str, Any] = {}
         self._time_mode = "simtime"
         self._playback_speed = 1.0
         self._early_return_allowed = False
         self._fmi3_event_mode_used = False
+        self._fmi3_cs_next_event_time_defined = False
+        self._fmi3_cs_next_event_time: float | None = None
         self._pending_event_outputs: dict[str, Any] | None = None
         self._finished_reason: str | None = None
         self._state: str = "new"
@@ -161,24 +181,54 @@ class FmuSession:
         ))
         fmpy_extract(str(self.fmu_path), unzipdir=str(self._extract_dir))
         self._md = read_model_description(str(self.fmu_path))
+        try:
+            self._fmi_ls_dae = read_fmi_ls_dae(self.fmu_path, self._md)
+        except ValueError as exc:
+            self._fmi_ls_dae_issue = str(exc)
+            logger.warning("FMI-LS-DAE manifest is unavailable for %s: %s", self.access_key, exc)
+        available_interfaces = self._available_execution_interfaces()
+        if self._fmi_ls_dae is not None and "ModelExchange" in available_interfaces:
+            self._execution_interface = "ModelExchange"
+        elif "CoSimulation" in available_interfaces:
+            self._execution_interface = "CoSimulation"
+        elif "ModelExchange" in available_interfaces:
+            self._execution_interface = "ModelExchange"
         return self._describe()
 
     def initialize(
         self,
         start_time: float = 0.0,
-        stop_time: float = 1.0,
+        stop_time: float | None = None,
         step_size: float | None = None,
         parameters: dict[str, Any] | None = None,
         time_mode: str = "simtime",
         playback_speed: float = 1.0,
         early_return_allowed: bool = False,
+        execution_interface: str | None = None,
     ) -> dict[str, Any]:
         if self._initialised:
             raise RuntimeError("Session already initialised")
         if self._md is None:
             raise RuntimeError("FMU not loaded – call load() first")
-        if self._md.coSimulation is None:
-            raise RuntimeError("FMU does not support Co-Simulation")
+        self._fmi3_input_clock_references = []
+        self._fmi3_clock_schedules = []
+        self._fmi3_clock_runtime = None
+        self._fmi3_event_mode_used = False
+        self._fmi3_cs_next_event_time_defined = False
+        self._fmi3_cs_next_event_time = None
+        self._pending_event_outputs = None
+        available_interfaces = self._available_execution_interfaces()
+        if execution_interface is not None:
+            if not isinstance(execution_interface, str) or execution_interface not in {"CoSimulation", "ModelExchange"}:
+                raise ValueError("executionInterface must be CoSimulation or ModelExchange")
+            if execution_interface not in available_interfaces:
+                raise ValueError(f"FMU does not provide an executable {execution_interface} interface")
+            self._execution_interface = execution_interface
+        elif self._execution_interface not in {"CoSimulation", "ModelExchange"}:
+            detail = self._fmi_ls_dae_issue or "FMU has no executable Co-Simulation or Model Exchange binary"
+            raise RuntimeError(detail)
+        self._use_me = self._execution_interface == "ModelExchange"
+        self._use_dae = False
 
         default_experiment = self._md.defaultExperiment
         default_step_size = getattr(default_experiment, "stepSize", None)
@@ -186,15 +236,20 @@ class FmuSession:
             {"defaultStepSize": default_step_size},
         )["stepSize"]
         self._start_time = float(start_time)
-        self._stop_time = float(stop_time)
-        if not all(math.isfinite(value) for value in (self._start_time, self._stop_time, self._step_size)):
-            raise ValueError("startTime, stopTime and stepSize must be finite")
-        if self._stop_time <= self._start_time:
+        self._stop_time = None if stop_time is None else float(stop_time)
+        times_to_validate = (self._start_time, self._step_size)
+        if self._stop_time is not None:
+            times_to_validate += (self._stop_time,)
+        if not all(math.isfinite(value) for value in times_to_validate):
+            raise ValueError("startTime and stepSize must be finite; stopTime must be finite when provided")
+        if self._stop_time is not None and self._stop_time <= self._start_time:
             raise ValueError("stopTime must be greater than startTime")
-        if not math.isfinite(self._stop_time - self._start_time):
+        if self._stop_time is not None and not math.isfinite(self._stop_time - self._start_time):
             raise ValueError("Simulation duration must be finite")
         if self._step_size <= 0:
             raise ValueError("stepSize must be positive")
+        if self._stop_time is None:
+            self._max_simulation_steps = None
         if time_mode not in {"simtime", "realtime", "external"}:
             raise ValueError("timeMode must be simtime, realtime, or external")
         if not math.isfinite(playback_speed) or not 0.1 <= playback_speed <= 100.0:
@@ -206,7 +261,20 @@ class FmuSession:
             raise ValueError("Initialization values must be an object")
         original_parameters = parameters if parameters is not None else {}
         initialization_values = self._merge_declared_start_values(original_parameters)
+        dae_enable_variable = self._dae_enable_variable()
+        if dae_enable_variable is not None:
+            dae_enable_name = str(dae_enable_variable.name)
+            requested_dae_value = original_parameters.get(dae_enable_name)
+            if not self._use_me and requested_dae_value is True:
+                raise ValueError("FMI-LS-DAE can only be enabled with the ModelExchange execution interface")
+            if self._use_me and dae_enable_name not in original_parameters:
+                # The Executor can run the declared DAE formulation by default;
+                # callers can explicitly pass false to retain the FMI ODE mode.
+                initialization_values[dae_enable_name] = True
         validated_parameters = self._validate_values(initialization_values, phase="initialization")
+        if self._use_me and dae_enable_variable is not None:
+            self._use_dae = validated_parameters.get(str(dae_enable_variable.name)) is True
+        initial_clock_references = self._active_fmi3_input_clock_references(validated_parameters)
         self._initial_parameters = copy.deepcopy(original_parameters)
         self._time_mode = time_mode
         self._playback_speed = float(playback_speed)
@@ -228,10 +296,19 @@ class FmuSession:
             for name, value in validated_parameters.items()
             if any(variable.name == name for variable in structural_variables)
         }
+        dimension_value_references = {
+            int(dimension.valueReference)
+            for variable in self._md.modelVariables
+            for dimension in (getattr(variable, "dimensions", None) or [])
+            if getattr(dimension, "valueReference", None) is not None
+        }
         dimension_values = {
             int(variable.valueReference): int(structural_parameters[variable.name])
             for variable in structural_variables
             if variable.name in structural_parameters
+            and int(variable.valueReference) in dimension_value_references
+            and str(getattr(variable, "type", "")) == "UInt64"
+            and not isinstance(structural_parameters[variable.name], bool)
         }
         self._pending_event_outputs = None
         if self._fmi_major() == "3":
@@ -255,15 +332,90 @@ class FmuSession:
         remaining_parameters = {
             name: value for name, value in validated_parameters.items()
             if name not in structural_parameters
+            and not self._is_fmi3_input_clock(name)
         }
         if remaining_parameters:
             self._apply_validated_values(remaining_parameters)
 
+        initial_clocked_outputs: dict[str, Any] = {}
+        initial_unknown_values: dict[int, Any] = {}
+        if self._fmi_major() == "3":
+            (
+                self._fmi3_input_clock_references,
+                self._fmi3_clock_schedules,
+            ) = read_fmi3_input_clock_schedules(slave, self._md, self._start_time)
+            if self._use_dae and self._use_me and self._fmi_ls_dae is not None:
+                clocked_output_names = {
+                    str(variable.name)
+                    for variable in self._effective_output_variables()
+                    if variable.causality == "output" and bool(getattr(variable, "clocks", None))
+                }
+                initial_outputs = self._read_outputs()
+                initial_clocked_outputs = {
+                    name: value for name, value in initial_outputs.items()
+                    if name in clocked_output_names
+                }
+                initial_unknown_values = self._read_fmi_ls_dae_initial_unknowns()
+            elif self._fmi3_model_has_clocks():
+                initial_outputs = self._read_outputs()
+                self._fmi3_clock_runtime = Fmi3ClockRuntime(
+                    slave,
+                    self._md,
+                    self._fmi3_input_clock_references,
+                    self._fmi3_clock_schedules,
+                    variable_size=self._variable_size,
+                    variable_is_array=self._is_array,
+                    normalize_value=self._normalise_output,
+                    initial_outputs=initial_outputs,
+                )
+
         slave.exitInitializationMode()
+        if self._use_dae:
+            if self._fmi_ls_dae is None:
+                raise RuntimeError("FMI-LS-DAE declarations are unavailable")
+            default_tolerance = getattr(default_experiment, "tolerance", None)
+            self._dae_integrator = Fmi3DaeIntegrator(
+                slave,
+                self._fmi_ls_dae,
+                model_description=self._md,
+                start_time=self._start_time,
+                relative_tolerance=default_tolerance,
+                input_clock_references=self._fmi3_input_clock_references,
+                clock_schedules=self._fmi3_clock_schedules,
+                initial_input_clock_references=initial_clock_references,
+                initial_clocked_outputs=initial_clocked_outputs,
+                initial_unknown_values=initial_unknown_values,
+            )
+            self._collect_dae_event_outputs()
+        elif self._use_me:
+            self._me_integrator = FmiModelExchangeIntegrator(
+                slave,
+                self._md,
+                start_time=self._start_time,
+                max_step=self._step_size,
+                relative_tolerance=getattr(default_experiment, "tolerance", None),
+                clock_runtime=self._fmi3_clock_runtime,
+                initial_input_clock_references=initial_clock_references,
+            )
+            self._collect_me_event_outputs()
         if self._fmi_major() == "3" and self._fmi3_event_mode_used:
             # FMI 3 Co-Simulation enters Event Mode when Event Mode is enabled.
             # Perform the initial discrete-state iteration before Step Mode.
-            if self._resolve_fmi3_event(slave, enter_event_mode=False):
+            initial_clock_references = (
+                set(self._fmi3_clock_runtime.due_input_clock_references(self._start_time))
+                if self._fmi3_clock_runtime is not None
+                else set()
+            )
+            initial_clock_references.update(
+                self._active_fmi3_input_clock_references(validated_parameters)
+            )
+            if self._resolve_fmi3_event(
+                slave,
+                enter_event_mode=False,
+                current_time=self._start_time,
+                active_input_clocks=initial_clock_references,
+                defer_input_clock_activation=bool(initial_clock_references),
+            ):
                 self._finished_reason = "fmu_terminated"
                 self._state = "stopped"
                 self._initialised = True
@@ -274,6 +426,7 @@ class FmuSession:
                     "state": self._state,
                     "timeMode": self._time_mode,
                     "playbackSpeed": self._playback_speed,
+                    "executionInterface": self._execution_interface,
                 }
         self._initialised = True
         self._terminated = False
@@ -285,6 +438,7 @@ class FmuSession:
             "state": "initialized",
             "timeMode": self._time_mode,
             "playbackSpeed": self._playback_speed,
+            "executionInterface": self._execution_interface,
         }
 
     def step(self, step_size: float | None = None) -> dict[str, Any]:
@@ -298,11 +452,11 @@ class FmuSession:
         requested_time = self._time + requested_h
         if not math.isfinite(requested_time) or requested_time <= self._time:
             raise ValueError("stepSize does not produce a finite later time")
-        remaining = max(0.0, self._stop_time - self._time)
-        tolerance = max(1e-12, abs(self._stop_time) * 1e-12)
-        if self._time_mode == "external" and requested_h > remaining + tolerance:
+        remaining = max(0.0, self._stop_time - self._time) if self._stop_time is not None else requested_h
+        tolerance = max(1e-12, abs(self._stop_time) * 1e-12) if self._stop_time is not None else 1e-12
+        if self._time_mode == "external" and self._stop_time is not None and requested_h > remaining + tolerance:
             raise ValueError("stepSize would advance past stopTime")
-        h = min(requested_h, remaining)
+        h = min(requested_h, remaining) if self._stop_time is not None else requested_h
         if h <= 0.0:
             self._state = "stopped"
             self._finished_reason = self._finished_reason or "stop_time_reached"
@@ -318,7 +472,7 @@ class FmuSession:
         if result["terminateSimulation"]:
             self._state = "stopped"
             self._finished_reason = "fmu_termination_requested"
-        elif self._time >= self._stop_time - 1e-12:
+        elif self._stop_time is not None and self._time >= self._stop_time - 1e-12:
             self._state = "stopped"
             self._finished_reason = "stop_time_reached"
         else:
@@ -336,7 +490,8 @@ class FmuSession:
         if self._state in {"paused", "stopped", "error"}:
             raise RuntimeError(f"Session cannot run from state {self._state}")
         requested_target = target_time
-        target_time = min(target_time, self._stop_time)
+        if self._stop_time is not None:
+            target_time = min(target_time, self._stop_time)
         h = self._step_size if step_size is None else step_size
         if not math.isfinite(h) or h <= 0:
             raise ValueError("stepSize must be positive")
@@ -344,7 +499,9 @@ class FmuSession:
         if not math.isfinite(expected_steps):
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
         estimated_steps = _ceil_step_count(expected_steps, self._time, target_time, h)
-        if estimated_steps > self._max_simulation_steps:
+        if estimated_steps > config.MAX_SIMULATION_STEPS:
+            raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
+        if self._max_simulation_steps is not None and estimated_steps > self._max_simulation_steps:
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
         self._ensure_step_budget(estimated_steps)
         self._state = "running"
@@ -378,7 +535,7 @@ class FmuSession:
             else:
                 consecutive_no_progress_events = 0
         if self._state != "stopped":
-            self._state = "stopped" if self._time >= self._stop_time - 1e-12 else "initialized"
+            self._state = "stopped" if self._stop_time is not None and self._time >= self._stop_time - 1e-12 else "initialized"
             if self._state == "stopped":
                 self._finished_reason = "stop_time_reached"
         return {
@@ -393,6 +550,7 @@ class FmuSession:
             "terminateSimulation": terminate_simulation,
             "finished": self._state == "stopped",
             "finishReason": self._finished_reason,
+            **self._fmi3_event_time_metadata(),
         }
 
     def run_until_streaming(
@@ -458,7 +616,8 @@ class FmuSession:
             raise ValueError("targetTime must not be earlier than current simulation time")
         if self._state in {"paused", "stopped", "error"}:
             raise RuntimeError(f"Session cannot run from state {self._state}")
-        target_time = min(target_time, self._stop_time)
+        if self._stop_time is not None:
+            target_time = min(target_time, self._stop_time)
         h = self._step_size if step_size is None else step_size
         if not math.isfinite(h) or h <= 0:
             raise ValueError("stepSize must be positive")
@@ -466,7 +625,9 @@ class FmuSession:
         if not math.isfinite(expected_steps):
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
         estimated_steps = _ceil_step_count(expected_steps, self._time, target_time, h)
-        if estimated_steps > self._max_simulation_steps:
+        if estimated_steps > config.MAX_SIMULATION_STEPS:
+            raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
+        if self._max_simulation_steps is not None and estimated_steps > self._max_simulation_steps:
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
         self._ensure_step_budget(estimated_steps)
         self._state = "running"
@@ -487,7 +648,8 @@ class FmuSession:
                     raise RuntimeError("FMI step returned repeatedly without advancing simulation time")
             else:
                 consecutive_no_progress_events = 0
-            finished = step_result["terminateSimulation"] or self._time >= self._stop_time - 1e-12
+            stop_time_reached = self._stop_time is not None and self._time >= self._stop_time - 1e-12
+            finished = step_result["terminateSimulation"] or stop_time_reached
             if step_result["terminateSimulation"]:
                 self._state = "stopped"
                 self._finished_reason = "fmu_termination_requested"
@@ -523,14 +685,14 @@ class FmuSession:
                 return
             if finished:
                 return
-        if self._time >= self._stop_time - 1e-12:
+        if self._stop_time is not None and self._time >= self._stop_time - 1e-12:
             self._state = "stopped"
             self._finished_reason = "stop_time_reached"
         else:
             self._state = "initialized"
 
     def _ensure_step_budget(self, additional_steps: int) -> None:
-        if self._step_count + additional_steps > self._max_simulation_steps:
+        if self._max_simulation_steps is not None and self._step_count + additional_steps > self._max_simulation_steps:
             raise ValueError("MAX_SIMULATION_STEPS_EXCEEDED")
 
     def advance(
@@ -563,6 +725,15 @@ class FmuSession:
             raise AdvancePreExecutionError("targetTime must be later than the current simulation time")
         input_events_applied = [0]
         try:
+            effective_target = min(target_time, self._stop_time) if self._stop_time is not None else target_time
+            requested_steps = _ceil_step_count(
+                max(0.0, effective_target - self._time) / h,
+                self._time,
+                effective_target,
+                h,
+            )
+            if requested_steps > config.MAX_SIMULATION_STEPS:
+                raise AdvancePreExecutionError("MAX_SIMULATION_STEPS_EXCEEDED")
             expected_samples = estimate_advance_samples(
                 self._time,
                 target_time,
@@ -621,6 +792,11 @@ class FmuSession:
                         "earlyReturn": bool(snapshot.get("earlyReturn", False)),
                         "terminateSimulation": bool(snapshot.get("terminateSimulation", False)),
                         "finished": bool(snapshot.get("finished", False)),
+                        **{
+                            key: snapshot[key]
+                            for key in ("nextEventTimeDefined", "nextEventTime")
+                            if key in snapshot
+                        },
                     })
 
                 if max_compute_ms is not None:
@@ -670,6 +846,7 @@ class FmuSession:
             "sampleBytes": sample_bytes,
             "computeMs": execution_ms,
             "computeBudgetOverrunMs": compute_budget_overrun_ms,
+            **self._fmi3_event_time_metadata(),
         }
         if max_compute_ms is not None:
             result["maxComputeMs"] = float(max_compute_ms)
@@ -680,7 +857,227 @@ class FmuSession:
         if self._state in {"stopped", "error"}:
             raise RuntimeError(f"Session cannot accept inputs from state {self._state}")
         validated = self._validate_values(values, phase="runtime")
-        self._apply_validated_values(validated)
+        if self._dae_integrator is not None and validated:
+            try:
+                requires_event_mode = self._dae_change_requires_event_mode(validated)
+                if requires_event_mode:
+                    terminated = self._apply_dae_event_mode_values(validated)
+                    if terminated:
+                        self._state = "stopped"
+                        self._finished_reason = "fmu_termination_requested"
+                else:
+                    self._apply_validated_values(validated)
+                if self._state != "stopped" and not requires_event_mode:
+                    self._dae_integrator.restart_after_input_change(self._time, step_size=self._step_size)
+                self._collect_dae_event_outputs()
+            except Exception:
+                self._state = "error"
+                raise
+            return
+
+        if self._me_integrator is not None and validated:
+            active_clock_references = self._active_fmi3_input_clock_references(validated)
+            model_values = {
+                name: value
+                for name, value in validated.items()
+                if not self._is_fmi3_input_clock(name)
+            }
+            terminated = self._me_integrator.apply_input_change(
+                self._time,
+                lambda: self._apply_validated_values(model_values),
+                active_clock_references=active_clock_references,
+                refresh_tunable_clocks=self._contains_tunable_parameter(validated),
+            )
+            self._collect_me_event_outputs()
+            if terminated:
+                self._state = "stopped"
+                self._finished_reason = "fmu_termination_requested"
+        elif self._fmi_major() == "3" and self._fmi3_event_mode_used and validated:
+            self._apply_fmi3_cosimulation_event(validated)
+        else:
+            self._apply_validated_values(validated)
+
+    def validate_reconfiguration_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Validate writes that arrive through FMI 3 Reconfiguration Mode."""
+        self._ensure_live()
+        return self._validate_values(values, phase="reconfiguration")
+
+    def reconfigure_structural_parameters(self, values: dict[str, Any]) -> None:
+        """Apply tunable FMI 3 structural parameters at a legal reconfiguration point."""
+        self._ensure_live()
+        validated = self._validate_values(values, phase="reconfiguration")
+        if self._fmi_major() != "3":
+            raise ValueError("Structural reconfiguration requires FMI 3")
+        if not self._initialised or self._state in {"stopped", "error"}:
+            raise RuntimeError("Structural reconfiguration requires an active simulation")
+        if not validated:
+            return
+
+        slave = self._require_slave()
+        model_description = self._md
+        if model_description is None:
+            raise RuntimeError("FMU model description is unavailable")
+        dimension_value_references = {
+            int(dimension.valueReference)
+            for variable in model_description.modelVariables
+            for dimension in (getattr(variable, "dimensions", None) or [])
+            if getattr(dimension, "valueReference", None) is not None
+        }
+        dimension_values: dict[int, int] = {}
+        for name, value in validated.items():
+            variable = next((item for item in model_description.modelVariables if item.name == name), None)
+            if variable is None:
+                raise ValueError(f"Unknown structural parameter '{name}'")
+            reference = int(variable.valueReference)
+            if reference in dimension_value_references:
+                if str(getattr(variable, "type", "")) != "UInt64" or isinstance(value, bool):
+                    raise ValueError(f"Structural dimension '{name}' must be UInt64")
+                extent = int(value)
+                if extent < 0:
+                    raise ValueError(f"Reconfigured structural dimension '{name}' must be non-negative")
+                dimension_values[reference] = extent
+        for variable in model_description.modelVariables:
+            reference = int(getattr(variable, "valueReference", -1))
+            if reference not in dimension_value_references or reference in dimension_values:
+                continue
+            getter = getattr(slave, f"get{self._variable_type(variable)}", None)
+            current_values = getter([reference]) if getter is not None else []
+            current_value: Any = current_values[0] if current_values else self._initial_parameters.get(
+                str(variable.name), getattr(variable, "start", None)
+            )
+            if current_value is None:
+                raise ValueError(f"Structural dimension '{variable.name}' has no current value")
+            try:
+                dimension_extent = int(current_value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"Structural dimension '{variable.name}' must be a non-negative UInt64") from exc
+            if isinstance(current_value, bool) or dimension_extent != current_value or dimension_extent < 0:
+                raise ValueError(f"Structural dimension '{variable.name}' must be a non-negative UInt64")
+            dimension_values[reference] = dimension_extent
+
+        definition = self._fmi_ls_dae
+        enable_variable = self._dae_enable_variable()
+        enable_name = str(enable_variable.name) if enable_variable is not None else None
+        target_dae_mode = (
+            validated[enable_name]
+            if enable_name is not None and enable_name in validated
+            else self._use_dae
+        )
+        try:
+            if self._use_me:
+                slave.enterEventMode()
+            slave.enterConfigurationMode()
+            self._apply_validated_values(validated)
+            self._apply_structural_array_shapes(dimension_values)
+            slave.exitConfigurationMode()
+
+            if self._use_me:
+                initial_clocked_outputs = (
+                    self._dae_integrator.clocked_output_cache()
+                    if self._dae_integrator is not None
+                    else (
+                        self._fmi3_clock_runtime.clocked_output_cache()
+                        if self._fmi3_clock_runtime is not None
+                        else {}
+                    )
+                )
+                if self._dae_integrator is not None:
+                    self._dae_integrator.close()
+                    self._dae_integrator = None
+                if self._me_integrator is not None:
+                    self._me_integrator.close()
+                    self._me_integrator = None
+                self._fmi3_clock_runtime = None
+
+                default_tolerance = getattr(getattr(self._md, "defaultExperiment", None), "tolerance", None)
+                if target_dae_mode:
+                    if definition is None:
+                        raise ValueError("DAE mode is enabled but the FMI-LS-DAE manifest is unavailable")
+                    self._dae_integrator = Fmi3DaeIntegrator(
+                        slave,
+                        definition,
+                        model_description=self._md,
+                        start_time=self._time,
+                        relative_tolerance=default_tolerance,
+                        input_clock_references=self._fmi3_input_clock_references,
+                        clock_schedules=self._fmi3_clock_schedules,
+                        initial_clocked_outputs=initial_clocked_outputs,
+                    )
+                    self._collect_dae_event_outputs()
+                else:
+                    self._fmi3_clock_runtime = self._create_fmi3_clock_runtime(initial_clocked_outputs)
+                    self._me_integrator = FmiModelExchangeIntegrator(
+                        slave,
+                        self._md,
+                        start_time=self._time,
+                        max_step=self._step_size,
+                        relative_tolerance=default_tolerance,
+                        clock_runtime=self._fmi3_clock_runtime,
+                    )
+                    self._collect_me_event_outputs()
+                self._use_dae = target_dae_mode
+        except Exception:
+            self._state = "error"
+            raise
+
+    def _dae_change_requires_event_mode(self, values: dict[str, Any]) -> bool:
+        """Treat runtime input changes and tunable writes as FMI event instants."""
+        model_description = self._md
+        if model_description is None:
+            raise RuntimeError("FMU model description is not loaded")
+        variables = {str(variable.name): variable for variable in model_description.modelVariables}
+        for name in values:
+            variable = variables.get(name)
+            if variable is None:
+                continue
+            causality = str(getattr(variable, "causality", ""))
+            variability = str(getattr(variable, "variability", ""))
+            if causality == "input" or (causality == "parameter" and variability == "tunable"):
+                return True
+        return False
+
+    def _apply_dae_event_mode_values(self, values: dict[str, Any]) -> bool:
+        """Apply tunable/discrete DAE changes through FMI 3 Event Mode."""
+        if self._fmi_major() != "3":
+            raise RuntimeError("FMI-LS-DAE event updates require FMI 3")
+        if self._dae_integrator is None:
+            raise RuntimeError("FMI-LS-DAE event handling is not initialized")
+        model_description = self._md
+        if model_description is None:
+            raise RuntimeError("FMU model description is not loaded")
+        variables = {str(variable.name): variable for variable in model_description.modelVariables}
+        active_clock_references = [
+            int(variables[name].valueReference)
+            for name, value in values.items()
+            if value is True
+            and name in variables
+            and str(getattr(variables[name], "type", "")) == "Clock"
+        ]
+        tunable_parameter_changed = any(
+            name in variables
+            and str(getattr(variables[name], "causality", "")) == "parameter"
+            and str(getattr(variables[name], "variability", "")) == "tunable"
+            for name in values
+        )
+        non_clock_values = {
+            name: value
+            for name, value in values.items()
+            if name not in variables or str(getattr(variables[name], "type", "")) != "Clock"
+        }
+        return self._dae_integrator.apply_event_mode(
+            self._time,
+            lambda: self._apply_validated_values(non_clock_values),
+            step_size=self._step_size,
+            active_clock_references=active_clock_references,
+            refresh_tunable_clocks=tunable_parameter_changed,
+        )
+
+    def _collect_dae_event_outputs(self) -> None:
+        if self._dae_integrator is None:
+            return
+        outputs = self._dae_integrator.take_event_outputs()
+        if outputs:
+            self._pending_event_outputs = {**(self._pending_event_outputs or {}), **outputs}
 
     def capture_fmu_state(self) -> dict[str, Any]:
         """Capture a serialized checkpoint when the source FMU supports it."""
@@ -719,6 +1116,31 @@ class FmuSession:
                 "playbackSpeed": self._playback_speed,
                 "earlyReturnAllowed": self._early_return_allowed,
                 "initialParameters": copy.deepcopy(self._initial_parameters),
+                **(
+                    {"fmiLsDae": self._dae_integrator.snapshot_event_schedule()}
+                    if self._dae_integrator is not None
+                    else {}
+                ),
+                **(
+                    {"modelExchange": self._me_integrator.snapshot_event_schedule()}
+                    if self._me_integrator is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "fmi3CoSimulation": {
+                            **self._fmi3_clock_runtime.snapshot(),
+                            "nextEventTimeDefined": self._fmi3_cs_next_event_time_defined,
+                            **(
+                                {"nextEventTime": self._fmi3_cs_next_event_time}
+                                if self._fmi3_cs_next_event_time_defined
+                                else {}
+                            ),
+                        }
+                    }
+                    if self._fmi3_clock_runtime is not None and not self._use_me
+                    else {}
+                ),
             },
         }
 
@@ -744,6 +1166,12 @@ class FmuSession:
         from .fmu_state import MAX_FMU_STATE_CHECKPOINT_JSON_BYTES
         if len(encoded_state) > MAX_FMU_STATE_CHECKPOINT_JSON_BYTES:
             raise ValueError("FMU state checkpoint exceeds the size limit")
+        raw_model_exchange_event_state: Any = None
+        model_exchange_event_state: dict[str, Any] = {}
+        raw_dae_event_state: Any = None
+        raw_fmi3_cosimulation_clock_state: Any = None
+        fmi3_cs_next_event_time_defined = False
+        fmi3_cs_next_event_time: float | None = None
         try:
             serialized = base64.b64decode(encoded_state, validate=True)
             raw_time = simulation["time"]
@@ -755,14 +1183,47 @@ class FmuSession:
             time_value = float(raw_time)
             step_count = raw_step_count
             initial_parameters = simulation["initialParameters"]
+            raw_model_exchange_event_state = simulation.get("modelExchange")
+            raw_dae_event_state = simulation.get("fmiLsDae")
+            raw_fmi3_cosimulation_clock_state = simulation.get("fmi3CoSimulation")
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise ValueError("FMU state checkpoint is invalid or incompatible") from exc
-        if not math.isfinite(time_value) or time_value < self._start_time or time_value >= self._stop_time:
+        if not math.isfinite(time_value) or time_value < self._start_time or (
+            self._stop_time is not None and time_value >= self._stop_time
+        ):
             raise ValueError("FMU state checkpoint time must fall within the new simulation interval")
-        if step_count < 0 or step_count > self._max_simulation_steps:
+        if step_count < 0 or (self._max_simulation_steps is not None and step_count > self._max_simulation_steps):
             raise ValueError("FMU state checkpoint exceeds the simulation step budget")
         if not isinstance(initial_parameters, dict):
             raise ValueError("FMU state checkpoint is invalid or incompatible")
+        if self._me_integrator is not None:
+            if not isinstance(raw_model_exchange_event_state, dict):
+                raise ValueError("FMU state checkpoint is missing Model Exchange event metadata")
+            for key, value in raw_model_exchange_event_state.items():
+                if not isinstance(key, str):
+                    raise ValueError("FMU state checkpoint has invalid Model Exchange event metadata")
+                model_exchange_event_state[key] = value
+            self._me_integrator.validate_event_schedule(model_exchange_event_state, time_value)
+        if self._dae_integrator is not None and not isinstance(raw_dae_event_state, dict):
+            raise ValueError("FMU state checkpoint is missing FMI-LS-DAE event metadata")
+        if self._fmi3_clock_runtime is not None and not self._use_me:
+            if not isinstance(raw_fmi3_cosimulation_clock_state, dict):
+                raise ValueError("FMU state checkpoint is missing FMI 3 Co-Simulation Clock metadata")
+            self._fmi3_clock_runtime.validate_snapshot(raw_fmi3_cosimulation_clock_state, time_value)
+            raw_next_event_defined = raw_fmi3_cosimulation_clock_state.get("nextEventTimeDefined")
+            raw_next_event_time = raw_fmi3_cosimulation_clock_state.get("nextEventTime")
+            if type(raw_next_event_defined) is not bool:
+                raise ValueError("FMU state checkpoint has invalid FMI 3 Co-Simulation event metadata")
+            if raw_next_event_defined:
+                if isinstance(raw_next_event_time, bool) or not isinstance(raw_next_event_time, (int, float)):
+                    raise ValueError("FMU state checkpoint has invalid FMI 3 Co-Simulation event time")
+                fmi3_cs_next_event_time = float(raw_next_event_time)
+                if not math.isfinite(fmi3_cs_next_event_time) or fmi3_cs_next_event_time < time_value - max(
+                    1e-12,
+                    abs(time_value) * 1e-12,
+                ):
+                    raise ValueError("FMU state checkpoint has an FMI 3 Co-Simulation event before its time")
+                fmi3_cs_next_event_time_defined = True
         state = None
         try:
             state = slave.deserializeFMUState(serialized)
@@ -777,6 +1238,17 @@ class FmuSession:
                     logger.debug("Could not free restored FMU state for session %s", self.session_id, exc_info=True)
         self._time = time_value
         self._step_count = step_count
+        if self._dae_integrator is not None:
+            slave.setTime(self._time)
+            self._dae_integrator.restore_event_schedule(raw_dae_event_state, self._time)
+            self._dae_integrator.restart_after_input_change(self._time, step_size=self._step_size)
+        if self._me_integrator is not None:
+            self._me_integrator.restore_event_schedule(model_exchange_event_state, self._time)
+            self._me_integrator.reset_after_restore(self._time)
+        if self._fmi3_clock_runtime is not None and not self._use_me:
+            self._fmi3_clock_runtime.restore_snapshot(raw_fmi3_cosimulation_clock_state, self._time)
+            self._fmi3_cs_next_event_time_defined = fmi3_cs_next_event_time_defined
+            self._fmi3_cs_next_event_time = fmi3_cs_next_event_time
         self._initial_parameters = copy.deepcopy(initial_parameters)
         self._finished_reason = None
         self._terminated = False
@@ -784,10 +1256,12 @@ class FmuSession:
         # explicit sim.advance. Keep that newly initialized session runnable;
         # restoring into an existing paused session should remain paused.
         self._state = "initialized" if initialized_for_run else "paused"
-        return {"state": self._state, "simTime": self._time}
+        result = {"state": self._state, "simTime": self._time}
+        result.update(self._fmi3_event_time_metadata())
+        return result
 
     def _supports_serialized_fmu_state(self) -> bool:
-        interface = getattr(self._md, "coSimulation", None)
+        interface = getattr(self._md, "modelExchange", None) if self._use_me else getattr(self._md, "coSimulation", None)
         if interface is None:
             return False
         return bool(
@@ -830,7 +1304,31 @@ class FmuSession:
 
     def get_outputs(self, refs: list[int] | None = None) -> dict[str, Any]:
         self._ensure_live()
-        return {"time": self._time, "outputs": self._read_outputs(refs)}
+        result = {"time": self._time, "outputs": self._read_outputs(refs)}
+        result.update(self._fmi3_event_time_metadata())
+        if self._fmi_major() == "3" and not self._use_me:
+            result["terminateSimulation"] = self._finished_reason == "fmu_termination_requested"
+            result["finished"] = self._state == "stopped"
+        return result
+
+    def _fmi3_event_time_metadata(self) -> dict[str, Any]:
+        if self._fmi_major() != "3":
+            return {}
+        if self._use_me:
+            integrator = self._dae_integrator if self._use_dae else self._me_integrator
+            snapshot = getattr(integrator, "snapshot_event_schedule", None)
+            event_schedule = snapshot() if callable(snapshot) else {}
+            if isinstance(event_schedule, dict):
+                return {
+                    key: event_schedule[key]
+                    for key in ("nextEventTimeDefined", "nextEventTime")
+                    if key in event_schedule
+                }
+            return {"nextEventTimeDefined": False}
+        result: dict[str, Any] = {"nextEventTimeDefined": self._fmi3_cs_next_event_time_defined}
+        if self._fmi3_cs_next_event_time_defined and self._fmi3_cs_next_event_time is not None:
+            result["nextEventTime"] = self._fmi3_cs_next_event_time
+        return result
 
     def pause(self) -> dict[str, Any]:
         """Pause automatic execution without destroying FMU state."""
@@ -1008,22 +1506,102 @@ class FmuSession:
     def _fmi_major(self) -> str:
         return str(getattr(self._md, "fmiVersion", "2.0")).split(".", 1)[0]
 
+    def _has_native_interface_binary(self, interface: Any) -> bool:
+        if self._extract_dir is None or interface is None:
+            return False
+        model_identifier = str(getattr(interface, "modelIdentifier", "") or "")
+        if not model_identifier:
+            return False
+        directories = [platform_tuple]
+        if self._fmi_major() == "2":
+            legacy_platform = {
+                ("windows", "amd64"): "win64",
+                ("windows", "x86_64"): "win64",
+                ("windows", "x64"): "win64",
+                ("windows", "x86"): "win32",
+                ("windows", "i386"): "win32",
+                ("windows", "i686"): "win32",
+                ("linux", "x86_64"): "linux64",
+                ("linux", "amd64"): "linux64",
+                ("linux", "x86"): "linux32",
+                ("linux", "i386"): "linux32",
+                ("linux", "i686"): "linux32",
+                ("darwin", "x86_64"): "darwin64",
+                ("darwin", "amd64"): "darwin64",
+            }.get((platform.system().lower(), platform.machine().lower()))
+            if legacy_platform:
+                directories.insert(0, legacy_platform)
+        return any(
+            (self._extract_dir / "binaries" / directory / f"{model_identifier}{sharedLibraryExtension}").is_file()
+            for directory in directories
+        )
+
+    def _available_execution_interfaces(self) -> list[str]:
+        if self._md is None:
+            return []
+        interfaces = []
+        if self._md.coSimulation is not None and self._has_native_interface_binary(self._md.coSimulation):
+            interfaces.append("CoSimulation")
+        if self._md.modelExchange is not None and self._has_native_interface_binary(self._md.modelExchange):
+            interfaces.append("ModelExchange")
+        return interfaces
+
+    def _dae_enable_variable(self) -> Any | None:
+        if self._md is None or self._fmi_ls_dae is None:
+            return None
+        return next(
+            (
+                variable
+                for variable in self._md.modelVariables
+                if getattr(variable, "valueReference", None)
+                == self._fmi_ls_dae.enable_dae_value_reference
+            ),
+            None,
+        )
+
+    def _fmi3_model_has_clocks(self) -> bool:
+        if self._md is None or self._fmi_major() != "3":
+            return False
+        return any(
+            self._variable_type(variable) == "Clock" or bool(getattr(variable, "clocks", None))
+            for variable in self._md.modelVariables
+        )
+
     def _instantiate(self) -> Any:
-        """Instantiate through FMPy's FMI 2/FMI 3 selector."""
+        """Instantiate through the selected FMI Co-Simulation or Model Exchange API."""
         if self._extract_dir is None or self._md is None:
             raise RuntimeError("FMU is not loaded")
+        if self._use_me:
+            model_exchange = getattr(self._md, "modelExchange", None)
+            if model_exchange is None:
+                raise RuntimeError("FMU does not declare Model Exchange")
+            if self._fmi_major() == "3":
+                return instantiate_fmi3_model_exchange(self._extract_dir, self._md)
+            return fmpy_instantiate_fmu(
+                str(self._extract_dir),
+                self._md,
+                fmi_type="ModelExchange",
+            )
         # Negotiate FMI 3 early return and event mode only when the FMU exposes
         # Event Mode. FMPy reports the actual reached time on every FMI 3 step.
         co_simulation = self._md.coSimulation
+        has_event_mode = bool(getattr(co_simulation, "hasEventMode", False))
+        if self._fmi_major() == "3" and self._fmi3_model_has_clocks() and not has_event_mode:
+            raise ValueError("FMI 3 Co-Simulation FMUs with Clocks must declare hasEventMode=true")
         self._fmi3_event_mode_used = bool(
-            self._fmi_major() == "3" and getattr(co_simulation, "hasEventMode", False)
+            self._fmi_major() == "3" and has_event_mode
         )
+        if self._fmi_major() == "3":
+            return instantiate_fmi3_cosimulation(
+                self._extract_dir,
+                self._md,
+                early_return_allowed=self._early_return_allowed,
+                event_mode_used=self._fmi3_event_mode_used,
+            )
         return fmpy_instantiate_fmu(
             str(self._extract_dir),
             self._md,
             fmi_type="CoSimulation",
-            early_return_allowed=self._fmi_major() == "3" and self._early_return_allowed,
-            event_mode_used=self._fmi3_event_mode_used,
         )
 
     def _do_step(self, slave: Any, step_size: float) -> tuple[float, dict[str, Any]]:
@@ -1031,20 +1609,132 @@ class FmuSession:
         requested_time = current_time + step_size
         if not math.isfinite(requested_time) or requested_time <= current_time:
             raise ValueError("FMI step does not produce a finite later time")
+        if self._use_dae:
+            if self._dae_integrator is None:
+                raise RuntimeError("FMI-LS-DAE integrator is not initialized")
+            result = self._dae_integrator.advance(
+                current_time,
+                requested_time,
+                step_size=step_size,
+            )
+            self._collect_dae_event_outputs()
+            return float(result["time"]), {
+                "requestedTime": requested_time,
+                "earlyReturn": bool(result["earlyReturn"]),
+                "eventOccurred": bool(result["eventOccurred"]),
+                "eventHandlingNeeded": False,
+                "terminateSimulation": bool(result["terminateSimulation"]),
+            }
+        if self._use_me:
+            if self._me_integrator is None:
+                raise RuntimeError("FMI Model Exchange integrator is not initialized")
+            result = self._me_integrator.advance(current_time, requested_time)
+            self._collect_me_event_outputs()
+            return float(result["time"]), {
+                "requestedTime": requested_time,
+                "earlyReturn": bool(result["earlyReturn"]),
+                "eventOccurred": bool(result["eventOccurred"]),
+                "eventHandlingNeeded": False,
+                "terminateSimulation": bool(result["terminateSimulation"]),
+            }
         event_handling_needed = False
         terminate_simulation = False
         early_return = False
+        event_occurred = False
 
         if self._fmi_major() == "3":
+            communication_step_size = step_size
+            tolerance = max(1e-12, abs(current_time) * 1e-12)
+            if self._fmi3_event_mode_used and self._fmi3_clock_runtime is not None:
+                clock_time = self._fmi3_clock_runtime.next_event_time
+            else:
+                clock_time = None
+            next_fmi3_event_time = (
+                self._fmi3_cs_next_event_time
+                if self._fmi3_cs_next_event_time_defined
+                else None
+            )
+            due_clocks = (
+                set(self._fmi3_clock_runtime.due_input_clock_references(current_time))
+                if self._fmi3_event_mode_used and self._fmi3_clock_runtime is not None
+                else set()
+            )
+            time_event_due = (
+                next_fmi3_event_time is not None
+                and next_fmi3_event_time <= current_time + tolerance
+            )
+            if self._fmi3_event_mode_used and (due_clocks or time_event_due):
+                terminate_simulation = self._handle_fmi3_event(
+                    slave,
+                    current_time=current_time,
+                    active_input_clocks=due_clocks,
+                    defer_input_clock_activation=time_event_due,
+                )
+                if terminate_simulation:
+                    reached_time = current_time
+                    return reached_time, {
+                        "requestedTime": requested_time,
+                        "earlyReturn": True,
+                        "eventOccurred": True,
+                        "eventHandlingNeeded": False,
+                        "terminateSimulation": True,
+                    }
+                clock_time = self._fmi3_clock_runtime.next_event_time if self._fmi3_clock_runtime else None
+                next_fmi3_event_time = (
+                    self._fmi3_cs_next_event_time
+                    if self._fmi3_cs_next_event_time_defined
+                    else None
+                )
+                if any(
+                    value is not None and value <= current_time + tolerance
+                    for value in (clock_time, next_fmi3_event_time)
+                ):
+                    raise RuntimeError("FMI 3 event scheduler did not advance past the current time")
+
+            scheduled_event_times = [
+                value for value in (clock_time, next_fmi3_event_time) if value is not None
+            ]
+            if self._fmi3_event_mode_used and scheduled_event_times:
+                next_scheduled_event = min(scheduled_event_times)
+                if next_scheduled_event < requested_time - tolerance:
+                    communication_step_size = next_scheduled_event - current_time
             event_handling_needed, terminate_simulation, early_return, reached_time = slave.doStep(
                 currentCommunicationPoint=current_time,
-                communicationStepSize=step_size,
+                communicationStepSize=communication_step_size,
             )
             reached_time = float(reached_time)
+            scheduled_clock_references = (
+                set(self._fmi3_clock_runtime.due_input_clock_references(reached_time))
+                if self._fmi3_clock_runtime is not None
+                else set()
+            )
+            time_event_reached = (
+                self._fmi3_cs_next_event_time_defined
+                and self._fmi3_cs_next_event_time is not None
+                and abs(reached_time - self._fmi3_cs_next_event_time) <= tolerance
+            )
             if event_handling_needed:
                 if not self._fmi3_event_mode_used:
                     raise RuntimeError("FMI_EVENT_MODE_NOT_NEGOTIATED")
-                terminate_simulation = self._handle_fmi3_event(slave) or terminate_simulation
+                event_occurred = True
+                terminate_simulation = self._handle_fmi3_event(
+                    slave,
+                    current_time=reached_time,
+                    active_input_clocks=scheduled_clock_references,
+                    defer_input_clock_activation=bool(event_handling_needed or time_event_reached),
+                ) or terminate_simulation
+            elif scheduled_clock_references or time_event_reached:
+                if not self._fmi3_event_mode_used:
+                    raise RuntimeError("FMI_EVENT_MODE_NOT_NEGOTIATED")
+                event_occurred = True
+                terminate_simulation = self._handle_fmi3_event(
+                    slave,
+                    current_time=reached_time,
+                    active_input_clocks=scheduled_clock_references,
+                    defer_input_clock_activation=time_event_reached,
+                ) or terminate_simulation
+            self._collect_fmi3_event_outputs()
+            early_return = bool(early_return or reached_time < requested_time - tolerance)
         else:
             try:
                 slave.doStep(currentCommunicationPoint=current_time, communicationStepSize=step_size)
@@ -1076,28 +1766,206 @@ class FmuSession:
             # Event mode is resolved in the isolated executor before this
             # response returns. Expose occurrence for telemetry, and report
             # that the remote importer still needs event handling as false.
-            "eventOccurred": bool(event_handling_needed),
+            "eventOccurred": event_occurred,
             "eventHandlingNeeded": False,
             "terminateSimulation": bool(terminate_simulation),
         }
 
-    def _handle_fmi3_event(self, slave: Any) -> bool:
-        return self._resolve_fmi3_event(slave, enter_event_mode=True)
+    def _handle_fmi3_event(
+        self,
+        slave: Any,
+        *,
+        current_time: float,
+        active_input_clocks: set[int] | None = None,
+        defer_input_clock_activation: bool = False,
+    ) -> bool:
+        return self._resolve_fmi3_event(
+            slave,
+            enter_event_mode=True,
+            current_time=current_time,
+            active_input_clocks=active_input_clocks,
+            defer_input_clock_activation=defer_input_clock_activation,
+        )
 
-    def _resolve_fmi3_event(self, slave: Any, *, enter_event_mode: bool) -> bool:
+    def _resolve_fmi3_event(
+        self,
+        slave: Any,
+        *,
+        enter_event_mode: bool,
+        current_time: float,
+        active_input_clocks: set[int] | None = None,
+        defer_input_clock_activation: bool = False,
+        apply_values: dict[str, Any] | None = None,
+        refresh_tunable_clocks: bool = False,
+    ) -> bool:
         if enter_event_mode:
             slave.enterEventMode()
+        if apply_values:
+            self._apply_validated_values(apply_values)
+        pending_clocks = set(active_input_clocks or [])
+        clock_activation_deferred = bool(defer_input_clock_activation and pending_clocks)
+        next_event_time_defined = False
+        next_event_time: float | None = None
         for _ in range(1000):
-            needs_update, terminate, *_ = slave.updateDiscreteStates()
+            activated_clocks: set[int] = set()
+            if pending_clocks and not clock_activation_deferred and self._fmi3_clock_runtime is not None:
+                activated_clocks = self._fmi3_clock_runtime.activate_input_clocks(
+                    pending_clocks,
+                    current_time,
+                )
+                pending_clocks.clear()
+            (
+                needs_update,
+                terminate,
+                _nominals_changed,
+                _states_changed,
+                next_event_time_defined,
+                next_event_time,
+            ) = slave.updateDiscreteStates()
+            if type(next_event_time_defined) is not bool and next_event_time_defined not in (0, 1):
+                raise RuntimeError("FMU returned an invalid next event time flag")
+            next_event_time_defined = bool(next_event_time_defined)
+            if next_event_time_defined:
+                if (
+                    next_event_time is None
+                    or isinstance(next_event_time, bool)
+                    or not isinstance(next_event_time, (int, float))
+                    or not math.isfinite(float(next_event_time))
+                ):
+                    raise RuntimeError("FMU returned an invalid next event time")
+                normalized_next_event_time = float(next_event_time)
+                if normalized_next_event_time < current_time - max(1e-12, abs(current_time) * 1e-12):
+                    raise RuntimeError("FMU returned a next event time before the current simulation time")
+                self._fmi3_cs_next_event_time = normalized_next_event_time
+                self._fmi3_cs_next_event_time_defined = True
+            else:
+                self._fmi3_cs_next_event_time = None
+                self._fmi3_cs_next_event_time_defined = False
             if terminate:
                 return True
+            if self._fmi3_clock_runtime is not None:
+                self._fmi3_clock_runtime.capture_event_outputs(activated_clocks)
+                self._fmi3_clock_runtime.refresh_after_event(
+                    current_time,
+                    activated_clocks,
+                    refresh_tunable_clocks=refresh_tunable_clocks,
+                )
+                due_clocks = set(
+                    self._fmi3_clock_runtime.due_input_clock_references(current_time)
+                )
+                refresh_tunable_clocks = False
+            else:
+                due_clocks = set()
+            tolerance = max(1e-12, abs(current_time) * 1e-12)
+            time_event_due = (
+                self._fmi3_cs_next_event_time_defined
+                and self._fmi3_cs_next_event_time is not None
+                and self._fmi3_cs_next_event_time <= current_time + tolerance
+            )
+            if clock_activation_deferred:
+                if needs_update or time_event_due:
+                    continue
+                clock_activation_deferred = False
+                continue
+            pending_clocks = due_clocks
             if not needs_update:
-                # Triggered output Clocks are only observable in Event Mode.
-                # Preserve this snapshot before entering Step Mode.
-                self._pending_event_outputs = self._read_outputs()
-                slave.enterStepMode()
-                return False
+                if not pending_clocks and not time_event_due:
+                    # Output Clocks and their clocked variables can only be
+                    # read while the FMU is still in Event Mode.
+                    event_outputs = self._read_outputs()
+                    self._pending_event_outputs = {
+                        **(self._pending_event_outputs or {}),
+                        **event_outputs,
+                    }
+                    slave.enterStepMode()
+                    self._collect_fmi3_event_outputs()
+                    return False
         raise RuntimeError("FMI_EVENT_ITERATION_LIMIT_EXCEEDED")
+
+    def _apply_fmi3_cosimulation_event(self, values: dict[str, Any]) -> None:
+        slave = self._require_slave()
+        active_clock_references = self._active_fmi3_input_clock_references(values)
+        values_to_set = {
+            name: value
+            for name, value in values.items()
+            if not self._is_fmi3_input_clock(name)
+        }
+        try:
+            terminated = self._resolve_fmi3_event(
+                slave,
+                enter_event_mode=True,
+                current_time=self._time,
+                active_input_clocks=active_clock_references,
+                apply_values=values_to_set,
+                refresh_tunable_clocks=self._contains_tunable_parameter(values),
+            )
+            if terminated:
+                self._state = "stopped"
+                self._finished_reason = "fmu_termination_requested"
+        except Exception:
+            self._state = "error"
+            raise
+
+    def _collect_fmi3_event_outputs(self) -> None:
+        if self._fmi3_clock_runtime is None:
+            return
+        outputs = self._fmi3_clock_runtime.take_event_outputs()
+        if outputs:
+            self._pending_event_outputs = {**(self._pending_event_outputs or {}), **outputs}
+
+    def _create_fmi3_clock_runtime(self, initial_outputs: dict[str, Any] | None = None) -> Fmi3ClockRuntime:
+        if self._fmi_major() != "3" or self._md is None or self._slave is None:
+            raise RuntimeError("FMI 3 Clock support requires an initialized FMI 3 instance")
+        return Fmi3ClockRuntime(
+            self._slave,
+            self._md,
+            self._fmi3_input_clock_references,
+            self._fmi3_clock_schedules,
+            variable_size=self._variable_size,
+            variable_is_array=self._is_array,
+            normalize_value=self._normalise_output,
+            initial_outputs=initial_outputs,
+        )
+
+    def _collect_me_event_outputs(self) -> None:
+        if self._me_integrator is None:
+            return
+        outputs = self._me_integrator.take_event_outputs()
+        if outputs:
+            self._pending_event_outputs = {**(self._pending_event_outputs or {}), **outputs}
+
+    def _active_fmi3_input_clock_references(self, values: dict[str, Any]) -> set[int]:
+        if self._md is None or self._fmi_major() != "3":
+            return set()
+        return {
+            int(variable.valueReference)
+            for variable in self._md.modelVariables
+            if str(getattr(variable, "name", "")) in values
+            and self._variable_type(variable) == "Clock"
+            and getattr(variable, "causality", None) == "input"
+            and values[str(variable.name)] is True
+        }
+
+    def _is_fmi3_input_clock(self, name: str) -> bool:
+        if self._md is None or self._fmi_major() != "3":
+            return False
+        return any(
+            str(getattr(variable, "name", "")) == name
+            and self._variable_type(variable) == "Clock"
+            and getattr(variable, "causality", None) == "input"
+            for variable in self._md.modelVariables
+        )
+
+    def _contains_tunable_parameter(self, values: dict[str, Any]) -> bool:
+        if self._md is None:
+            return False
+        names = set(values)
+        return any(
+            str(getattr(variable, "name", "")) in names
+            and getattr(variable, "causality", None) == "parameter"
+            and getattr(variable, "variability", None) == "tunable"
+            for variable in self._md.modelVariables
+        )
 
     def _step_result(
         self,
@@ -1122,13 +1990,19 @@ class FmuSession:
             "terminateSimulation": terminateSimulation,
             "finished": finished or self._state == "stopped",
             "finishReason": self._finished_reason,
+            **self._fmi3_event_time_metadata(),
         }
 
     def _describe(self) -> dict[str, Any]:
         # The isolated worker may only access the staged FMU path, not the
         # catalog root used to resolve access keys. Reuse its parsed model
         # description and avoid opening a large modelDescription.xml twice.
-        return describe_model_description(self._md)
+        return describe_model_description(
+            self._md,
+            fmi_ls_dae=self._fmi_ls_dae,
+            fmi_ls_dae_issue=self._fmi_ls_dae_issue,
+            execution_interface=self._execution_interface,
+        )
 
     def _merge_declared_start_values(self, values: dict[str, Any]) -> dict[str, Any]:
         """Seed writable FMI starts before applying explicit initialization values."""
@@ -1146,13 +2020,15 @@ class FmuSession:
             variability = str(getattr(variable, "variability", ""))
             variable_type = str(getattr(variable, "type", ""))
             writable_start = (
-                causality == "input"
+                (causality == "input" and not (is_fmi3 and variable_type == "Clock"))
                 or (causality == "parameter" and variability != "constant")
                 or (
                     is_fmi3
                     and causality == "structuralParameter"
-                    and variability == "fixed"
-                    and variable_type == "UInt64"
+                    and (
+                        (variability == "fixed" and variable_type == "UInt64")
+                        or (variability == "tunable" and variable_type == "Boolean")
+                    )
                 )
             )
             if writable_start:
@@ -1244,7 +2120,13 @@ class FmuSession:
         var_map = {v.name: v for v in self._md.modelVariables}
         normalized: dict[str, Any] = {}
         dimension_values: dict[int, int] = {}
-        if phase == "initialization" and self._fmi_major() == "3":
+        if phase in {"initialization", "reconfiguration"} and self._fmi_major() == "3":
+            dimension_value_references = {
+                int(dimension.valueReference)
+                for variable in self._md.modelVariables
+                for dimension in (getattr(variable, "dimensions", None) or [])
+                if getattr(dimension, "valueReference", None) is not None
+            }
             for name, value in params.items():
                 var = var_map.get(name)
                 if var is None or getattr(var, "causality", None) != "structuralParameter":
@@ -1252,7 +2134,14 @@ class FmuSession:
                 self._validate_write_access(var, phase=phase)
                 values = self._coerce_values(var, value)
                 normalized[name] = values if self._is_array(var) else values[0]
-                dimension_values[int(var.valueReference)] = int(values[0])
+                value_reference = int(var.valueReference)
+                if value_reference in dimension_value_references:
+                    if str(getattr(var, "type", "")) != "UInt64" or isinstance(values[0], bool):
+                        raise ValueError(f"Structural dimension '{name}' must be UInt64")
+                    extent = int(values[0])
+                    if phase == "initialization" and extent <= 0:
+                        raise ValueError(f"Initial structural dimension '{name}' must be positive")
+                    dimension_values[value_reference] = extent
         for name, value in params.items():
             if name in normalized:
                 continue
@@ -1274,13 +2163,18 @@ class FmuSession:
                 or (
                     self._fmi_major() == "3"
                     and causality == "structuralParameter"
-                    and variability == "fixed"
-                    and str(getattr(var, "type", "")) == "UInt64"
+                    and variability in {"fixed", "tunable"}
                 )
             )
         elif phase == "runtime":
             allowed = causality == "input" or (
                 causality == "parameter" and variability == "tunable"
+            )
+        elif phase == "reconfiguration":
+            allowed = (
+                self._fmi_major() == "3"
+                and causality == "structuralParameter"
+                and variability == "tunable"
             )
         else:
             raise ValueError(f"Unknown variable write phase '{phase}'")
@@ -1309,28 +2203,51 @@ class FmuSession:
         if not self._md or not self._slave:
             return {}
         outputs: dict[str, Any] = {}
-        output_variables = [v for v in self._md.modelVariables if v.causality == "output"]
+        output_variables = self._effective_output_variables()
         output_refs = {int(v.valueReference) for v in output_variables}
         if refs is not None:
             unknown_refs = set(int(ref) for ref in refs) - output_refs
             if unknown_refs:
                 raise ValueError("Requested value reference is unknown or is not an output")
-        pending_event_outputs = self._pending_event_outputs
+        pending_event_outputs = getattr(self, "_pending_event_outputs", None)
         remaining_event_outputs = (
             dict(pending_event_outputs) if pending_event_outputs is not None else None
         )
-        for var in self._md.modelVariables:
-            if var.causality != "output":
-                continue
+        clocked_output_cache = (
+            self._dae_integrator.clocked_output_cache()
+            if self._dae_integrator is not None
+            else (
+                self._fmi3_clock_runtime.clocked_output_cache()
+                if self._fmi3_clock_runtime is not None
+                else {}
+            )
+        )
+        for var in output_variables:
             if refs is not None and var.valueReference not in refs:
                 continue
+            vtype = self._variable_type(var)
             if pending_event_outputs is not None and var.name in pending_event_outputs:
                 outputs[var.name] = pending_event_outputs[var.name]
                 if remaining_event_outputs is not None:
                     remaining_event_outputs.pop(var.name, None)
                 continue
+            if vtype == "Clock" and self._fmi_major() == "3":
+                # FMI 3 output Clocks are observable in Event Mode, not during
+                # Initialization Mode or ordinary Step/Continuous Time Mode.
+                outputs[var.name] = False
+                continue
+            if (self._dae_integrator is not None or self._fmi3_clock_runtime is not None) and bool(
+                getattr(var, "clocks", None)
+            ):
+                if var.name in clocked_output_cache:
+                    outputs[var.name] = clocked_output_cache[var.name]
+                # FMI 3 only permits reading clocked variables in Initialization
+                # Mode or while one of their associated Clocks is active.
+                continue
+            if (self._dae_integrator is not None or self._fmi3_clock_runtime is not None) and vtype == "Clock":
+                outputs[var.name] = False
+                continue
             vr = [int(var.valueReference)]
-            vtype = self._variable_type(var)
             getter = getattr(self._slave, f"get{vtype}", None)
             if getter is None:
                 raise RuntimeError(f"FMU output '{var.name}' uses unsupported type {vtype}")
@@ -1344,6 +2261,72 @@ class FmuSession:
             outputs[var.name] = normalised if self._is_array(var) else normalised[0]
         self._pending_event_outputs = remaining_event_outputs or None
         return outputs
+
+    def _effective_output_variables(self) -> list[Any]:
+        if self._md is None:
+            return []
+        model_outputs = [
+            variable for variable in self._md.modelVariables
+            if getattr(variable, "causality", None) == "output"
+        ]
+        if not self._use_dae or self._fmi_ls_dae is None:
+            return model_outputs
+        outputs_by_reference: dict[int, Any] = {}
+        for variable in model_outputs:
+            reference = getattr(variable, "valueReference", None)
+            if isinstance(reference, int) and not isinstance(reference, bool):
+                outputs_by_reference.setdefault(reference, variable)
+        ordered_outputs = []
+        for reference in self._fmi_ls_dae.output_value_references:
+            variable = outputs_by_reference.get(reference)
+            if variable is None:
+                raise RuntimeError(
+                    f"FMI-LS-DAE Output value reference {reference} is missing from the model description"
+                )
+            ordered_outputs.append(variable)
+        return ordered_outputs
+
+    def _read_fmi_ls_dae_initial_unknowns(self) -> dict[int, Any]:
+        """Snapshot ordered FMI-LS-DAE InitialUnknown variables in Initialization Mode."""
+        if self._md is None or self._slave is None or self._fmi_ls_dae is None:
+            return {}
+        variables_by_reference: dict[int, Any] = {}
+        for variable in self._md.modelVariables:
+            reference = getattr(variable, "valueReference", None)
+            if isinstance(reference, int) and not isinstance(reference, bool):
+                variables_by_reference.setdefault(reference, variable)
+        values: dict[int, Any] = {}
+        for reference in self._fmi_ls_dae.initial_unknown_value_references:
+            variable = variables_by_reference.get(reference)
+            if variable is None:
+                raise RuntimeError(
+                    f"FMI-LS-DAE InitialUnknown value reference {reference} is missing from the model description"
+                )
+            value_type = self._variable_type(variable)
+            getter = getattr(self._slave, f"get{value_type}", None)
+            if getter is None:
+                raise RuntimeError(
+                    f"FMI-LS-DAE InitialUnknown '{variable.name}' has an unsupported type {value_type}"
+                )
+            value_reference = [reference]
+            size = self._variable_size(variable)
+            try:
+                raw_values = (
+                    getter(value_reference, nValues=size)
+                    if self._is_array(variable)
+                    else getter(value_reference)
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not read FMI-LS-DAE InitialUnknown '{variable.name}' during initialization"
+                ) from exc
+            normalized = list(raw_values)
+            if len(normalized) != size:
+                raise RuntimeError(
+                    f"FMI-LS-DAE InitialUnknown '{variable.name}' returned an unexpected value count"
+                )
+            values[reference] = normalized if self._is_array(variable) else normalized[0]
+        return values
 
     @staticmethod
     def _normalise_type(var: Any) -> str:
@@ -1365,7 +2348,7 @@ class FmuSession:
                     normalised_extent = int(extent)
                 except (TypeError, ValueError, OverflowError) as exc:
                     raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an unresolved dimension") from exc
-                if normalised_extent <= 0 or normalised_extent != extent:
+                if normalised_extent < 0 or normalised_extent != extent:
                     raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an invalid dimension")
                 extents.append(normalised_extent)
             return int(reduce(mul, extents, 1))
@@ -1399,7 +2382,7 @@ class FmuSession:
                     raise ValueError(
                         f"FMU array '{getattr(var, 'name', '')}' has an unresolved dimension"
                     ) from exc
-                if normalised_extent <= 0:
+                if normalised_extent < 0:
                     raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an invalid dimension")
                 extents.append(normalised_extent)
             return int(reduce(mul, extents, 1))
@@ -1411,7 +2394,7 @@ class FmuSession:
                     normalised_extent = int(extent)
                 except (TypeError, ValueError, OverflowError) as exc:
                     raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an unresolved dimension") from exc
-                if normalised_extent <= 0 or normalised_extent != extent:
+                if normalised_extent < 0 or normalised_extent != extent:
                     raise ValueError(f"FMU array '{getattr(var, 'name', '')}' has an invalid dimension")
                 extents.append(normalised_extent)
             return int(reduce(mul, extents, 1))
@@ -1448,6 +2431,21 @@ class FmuSession:
                     extent = int(getattr(referenced_variable, "start"))
                 resolved_shape.append(extent)
             variable.shape = tuple(resolved_shape)
+        for attribute, count_attribute in (
+            ("derivatives", "numberOfContinuousStates"),
+            ("eventIndicators", "numberOfEventIndicators"),
+        ):
+            variables = getattr(self._md, attribute, None)
+            if isinstance(variables, (list, tuple)):
+                setattr(
+                    self._md,
+                    count_attribute,
+                    sum(
+                        self._variable_size(getattr(unknown, "variable", None))
+                        for unknown in variables
+                        if getattr(unknown, "variable", None) is not None
+                    ),
+                )
 
     @staticmethod
     def _is_array(var: Any) -> bool:
@@ -1573,17 +2571,40 @@ class FmuSession:
         return value
 
     def _release_fmu(self) -> None:
-        if self._slave is not None:
+        dae_integrator = getattr(self, "_dae_integrator", None)
+        me_integrator = getattr(self, "_me_integrator", None)
+        if dae_integrator is not None:
             try:
-                self._slave.terminate()
+                dae_integrator.close()
             except Exception:
-                logger.debug("FMU terminate failed for session %s", self.session_id, exc_info=True)
+                logger.debug("FMI-LS-DAE solver release failed for session %s", getattr(self, "session_id", "unknown"), exc_info=True)
+            self._dae_integrator = None
+        if me_integrator is not None:
             try:
-                self._slave.freeInstance()
+                me_integrator.close()
             except Exception:
-                logger.debug("FMU freeInstance failed for session %s", self.session_id, exc_info=True)
+                logger.debug("FMI Model Exchange solver release failed for session %s", getattr(self, "session_id", "unknown"), exc_info=True)
+            self._me_integrator = None
+        slave = getattr(self, "_slave", None)
+        if slave is not None:
+            try:
+                slave.terminate()
+            except Exception:
+                logger.debug("FMU terminate failed for session %s", getattr(self, "session_id", "unknown"), exc_info=True)
+            try:
+                slave.freeInstance()
+            except Exception:
+                logger.debug("FMU freeInstance failed for session %s", getattr(self, "session_id", "unknown"), exc_info=True)
         self._slave = None
-        self._initialised = False
+        self._fmi3_input_clock_references = []
+        self._fmi3_clock_schedules = []
+        self._fmi3_clock_runtime = None
+        self._fmi3_event_mode_used = False
+        self._fmi3_cs_next_event_time_defined = False
+        self._fmi3_cs_next_event_time = None
+        self._pending_event_outputs = None
+        if hasattr(self, "_initialised"):
+            self._initialised = False
 
     def _cleanup_temp(self) -> None:
         extract_dir = getattr(self, "_extract_dir", None)

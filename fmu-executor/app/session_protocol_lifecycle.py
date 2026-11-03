@@ -131,17 +131,24 @@ async def _handle_sim_initialize(
         raise HTTPException(status_code=400, detail="INVALID_TIME_MODE")
     try:
         model_metadata = await asyncio.to_thread(session.load)
-        time_options = resolve_simulation_time_options(model_metadata, options)
+        time_options = resolve_simulation_time_options(
+            model_metadata,
+            options,
+            allow_undefined_stop=True,
+        )
         start_time = services.strict_number(time_options["startTime"], "startTime")
-        stop_time = services.strict_number(time_options["stopTime"], "stopTime")
+        stop_time = (
+            services.strict_number(time_options["stopTime"], "stopTime")
+            if time_options["stopTime"] is not None else None
+        )
         step_value = services.strict_number(time_options["stepSize"], "stepSize")
         playback_speed = services.strict_number(options.get("playbackSpeed", 1.0), "playbackSpeed")
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="INVALID_SIMULATION_OPTIONS") from exc
     if (
-        not all(math.isfinite(value) for value in (start_time, stop_time, step_value, playback_speed))
-        or stop_time <= start_time
-        or not math.isfinite(stop_time - start_time)
+        not all(math.isfinite(value) for value in (start_time, step_value, playback_speed))
+        or (stop_time is not None and (not math.isfinite(stop_time) or stop_time <= start_time
+            or not math.isfinite(stop_time - start_time)))
         or step_value <= 0
         or not 0.1 <= playback_speed <= 100.0
     ):
@@ -149,6 +156,12 @@ async def _handle_sim_initialize(
     early_return_allowed = options.get("earlyReturnAllowed", False)
     if type(early_return_allowed) is not bool:
         raise HTTPException(status_code=400, detail="INVALID_SIMULATION_OPTIONS")
+    execution_interface = options.get("executionInterface")
+    if execution_interface is not None and (
+        not isinstance(execution_interface, str)
+        or execution_interface not in {"CoSimulation", "ModelExchange"}
+    ):
+        raise HTTPException(status_code=400, detail="INVALID_EXECUTION_INTERFACE")
     try:
         await asyncio.to_thread(session.validate_initial_values, params)
     except ValueError as exc:
@@ -164,15 +177,20 @@ async def _handle_sim_initialize(
     if stop_runner is not None:
         await stop_runner()
     try:
+        initialization_options = {
+            "start_time": start_time,
+            "stop_time": stop_time,
+            "step_size": step_value,
+            "parameters": params or None,
+            "time_mode": time_mode,
+            "playback_speed": playback_speed,
+            "early_return_allowed": early_return_allowed,
+        }
+        if execution_interface is not None:
+            initialization_options["execution_interface"] = execution_interface
         await asyncio.to_thread(
             session.initialize,
-            start_time=start_time,
-            stop_time=stop_time,
-            step_size=step_value,
-            parameters=params or None,
-            time_mode=time_mode,
-            playback_speed=playback_speed,
-            early_return_allowed=early_return_allowed,
+            **initialization_options,
         )
         if checkpoint_snapshot is not None:
             await asyncio.to_thread(session.restore_fmu_state, checkpoint_snapshot)
@@ -185,6 +203,7 @@ async def _handle_sim_initialize(
         "simTime": session._time,
         "timeMode": session._time_mode,
         "playbackSpeed": session._playback_speed,
+        "executionInterface": getattr(session, "_execution_interface", None),
     }
 
 
@@ -240,6 +259,7 @@ async def _handle_fmu_state_message(
         )
         restored = await asyncio.to_thread(session.restore_fmu_state, snapshot)
         outputs: dict[str, Any] = {}
+        output_event_metadata: dict[str, Any] = {}
         if variables:
             model_description = session._md
             if model_description is None:
@@ -254,17 +274,28 @@ async def _handle_fmu_state_message(
             refs = [int(outputs_by_name[name].valueReference) for name in variables]
             outputs_snapshot = await asyncio.to_thread(session.get_outputs, refs)
             outputs = outputs_snapshot.get("outputs", {})
+            output_event_metadata = {
+                key: outputs_snapshot[key]
+                for key in ("nextEventTimeDefined", "nextEventTime", "terminateSimulation", "finished")
+                if key in outputs_snapshot
+            }
     except ValueError as exc:
         raise HTTPException(400, "INVALID_FMU_STATE_CHECKPOINT") from exc
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
-    return {
+    response = {
         "type": "sim.state",
         "sessionId": session.session_id,
         "state": restored.get("state", session.state),
         "simTime": restored.get("simTime", session._time),
         "outputs": outputs,
     }
+    for key in ("nextEventTimeDefined", "nextEventTime"):
+        if key in output_event_metadata:
+            response[key] = output_event_metadata[key]
+        elif key in restored:
+            response[key] = restored[key]
+    return response
 
 async def handle_session_bootstrap(
     msg_type: str,
