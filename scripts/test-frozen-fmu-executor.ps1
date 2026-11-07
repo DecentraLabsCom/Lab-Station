@@ -2,11 +2,14 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$ExecutablePath,
+    [Parameter(Mandatory = $true)]
+    [string]$SmokeFmuPath,
     [int]$TimeoutSeconds = 30
 )
 
 $ErrorActionPreference = 'Stop'
 $executable = (Resolve-Path -LiteralPath $ExecutablePath).Path
+$smokeFmuSource = (Resolve-Path -LiteralPath $SmokeFmuPath).Path
 $runtimeRoot = Split-Path -Parent (Split-Path -Parent $executable)
 $expectedFmuRoot = Join-Path $runtimeRoot 'fmu-data'
 $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -64,32 +67,23 @@ try {
         throw "Frozen FMU Executor did not create its default FMU data directory: $expectedFmuRoot"
     }
 
-    $smokeFmu = Join-Path $expectedFmuRoot 'RuntimeSmoke.fmu'
-    Set-Content -LiteralPath $smokeFmu -Value 'not a valid FMU archive' -NoNewline
+    $smokeFmuName = 'BouncingBall.fmu'
+    $smokeFmu = Join-Path $expectedFmuRoot $smokeFmuName
+    Copy-Item -LiteralPath $smokeFmuSource -Destination $smokeFmu -Force
     $simulationBody = @{
-        accessKey = 'RuntimeSmoke.fmu'
+        accessKey = $smokeFmuName
         parameters = @{}
         options = @{ stopTime = 0.1 }
     } | ConvertTo-Json -Depth 5 -Compress
-    $workerErrorReturned = $false
-    try {
-        Invoke-WebRequest -UseBasicParsing -Method Post `
-            -Uri "http://127.0.0.1:$port/internal/fmu/simulations/run" `
-            -Headers @{ 'X-Internal-Session-Token' = 'runtime-smoke-test-token' } `
-            -ContentType 'application/json' -Body $simulationBody -TimeoutSec 20 | Out-Null
-    } catch {
-        $statusCode = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
-        $responseBody = [string]$_.ErrorDetails.Message
-        if ($statusCode -ne 500 -or $responseBody -notmatch 'FMU_EXECUTION_FAILED') {
-            throw "Frozen worker path returned an unexpected response (HTTP $statusCode): $responseBody"
-        }
-        $workerErrorReturned = $true
-    }
-    if (-not $workerErrorReturned) {
-        throw 'Frozen FMU worker smoke request unexpectedly succeeded with an invalid FMU.'
+    $simulation = Invoke-RestMethod -Method Post `
+        -Uri "http://127.0.0.1:$port/internal/fmu/simulations/run" `
+        -Headers @{ 'X-Internal-Session-Token' = 'runtime-smoke-test-token' } `
+        -ContentType 'application/json' -Body $simulationBody -TimeoutSec 20
+    if ($null -eq $simulation -or $null -eq $simulation.time) {
+        throw 'Frozen worker path returned no simulation result.'
     }
 
-    Write-Host "Frozen FMU Executor passed health, authenticated API, and spawned-worker checks (capacity=$($capacity.capacity))." -ForegroundColor Green
+    Write-Host "Frozen FMU Executor passed health, authenticated API, and spawned-worker checks (capacity=$($capacity.capacity), time=$($simulation.time))." -ForegroundColor Green
 } finally {
     if ($process -and -not $process.HasExited) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue

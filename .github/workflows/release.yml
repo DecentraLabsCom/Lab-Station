@@ -200,7 +200,8 @@ jobs:
         shell: powershell
         run: |
           $runtime = Join-Path $PWD 'dist/fmu-executor-runtime/FMUExecutor/FMUExecutor.exe'
-          .\scripts\test-frozen-fmu-executor.ps1 -ExecutablePath $runtime
+          $smokeFmu = Join-Path $PWD '.fmu-executor-source/examples/reference-fmus/BouncingBall.fmu'
+          .\scripts\test-frozen-fmu-executor.ps1 -ExecutablePath $runtime -SmokeFmuPath $smokeFmu
 
       - name: Compile AppControl
         shell: powershell
