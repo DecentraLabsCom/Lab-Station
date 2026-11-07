@@ -11,12 +11,14 @@
 - Track windows delegated to existing application processes and attach windows created after startup so browser windows remain inside their workspace tabs.
 - Hide application windows before cross-process reparenting to avoid startup stalls with applications such as PuTTY.
 - Start frozen FMU Executor workers from the runtime directory and transfer their pipes into isolated processes without opening the parent service process.
+- Report FMU extraction-directory permission errors immediately instead of letting frozen AppContainer workers retry them as name collisions.
 
 ### Changed
 - Store LABUSER autologon credentials in the Windows LSA secret store and remove the plaintext Winlogon password value.
 - Require separate Gateway source scopes for RDP and WinRM, disable matching generic inbound rules, and report whether the scoped firewall rules remain active.
 - Apply per-user shell, Task Manager, Control Panel, Run, and Explorer drive restrictions to LABUSER in the dedicated station profile.
 - Replace the two-application RemoteApp container with a protected, manifest-driven workspace for up to five applications; preserve the existing single-application launch mode.
+- Update the separately packaged FMU Executor runtime to 0.3.10.
 - Grant standard lab users read access to saved workspace manifests while keeping workspace editing administrative.
 - Align the Lab Station UI and reported agent version with the 3.6.0 executable metadata.
 
