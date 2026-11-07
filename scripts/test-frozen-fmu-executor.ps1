@@ -22,7 +22,8 @@ $environmentNames = @(
     'FMU_EXECUTOR_PORT',
     'FMU_INTERNAL_TOKEN',
     'FMU_ROOT',
-    'FMU_EXECUTOR_TEMP'
+    'FMU_EXECUTOR_TEMP',
+    'FMU_EXECUTION_TIMEOUT_SECONDS'
 )
 $previousEnvironment = @{}
 foreach ($name in $environmentNames) {
@@ -38,6 +39,7 @@ try {
     $env:FMU_EXECUTOR_HOST = '127.0.0.1'
     $env:FMU_EXECUTOR_PORT = [string]$port
     $env:FMU_INTERNAL_TOKEN = 'runtime-smoke-test-token'
+    $env:FMU_EXECUTION_TIMEOUT_SECONDS = '15'
     Remove-Item Env:FMU_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:FMU_EXECUTOR_TEMP -ErrorAction SilentlyContinue
 
@@ -79,9 +81,12 @@ try {
         $simulation = Invoke-RestMethod -Method Post `
             -Uri "http://127.0.0.1:$port/internal/fmu/simulations/run" `
             -Headers @{ 'X-Internal-Session-Token' = 'runtime-smoke-test-token' } `
-            -ContentType 'application/json' -Body $simulationBody -TimeoutSec 20
+            -ContentType 'application/json' -Body $simulationBody -TimeoutSec 30
     } catch {
-        $apiError = [string]$_.ErrorDetails.Message
+        $apiError = "$($_.Exception.GetType().FullName): $($_.Exception.Message)"
+        if ($_.ErrorDetails.Message) {
+            $apiError += "`n$($_.ErrorDetails.Message)"
+        }
         $stdoutDetails = if (Test-Path -LiteralPath $stdout) {
             (Get-Content -LiteralPath $stdout -Tail 120 | Out-String).TrimEnd()
         } else { '(no stdout log)' }
