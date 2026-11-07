@@ -1,14 +1,14 @@
 {
     "repository":  "DecentraLabsCom/FMU-Executor",
-    "version":  "0.3.7",
+    "version":  "0.3.8",
     "runtimeDownloads":  false,
-    "commit":  "2c783a0d0f40da2ea0d748d1d65e27784779770b",
+    "commit":  "2b6cb70be4427287fac85171d8ffe373fb3a3414",
     "sourceTree":  {
                        "format":  "git-ls-tree-manifest-v1",
-                       "sha256":  "46d109e7a5478b1c817bd4f7ff5ae0db9f2ba73f0eb620ff01a558f8f2f55a4e"
+                       "sha256":  "5d240f1b5f53ae796c62e51098faeb5297ec6d66254d0f57cb2d1d0d55a06e7f"
                    },
     "runtimePayload":  {
                            "format":  "sha256-path-manifest-v1",
-                           "sha256":  "8107a4dea48feca76d8ea5b26a17c7e293d541d88d10fa3c05044fc1d2b9e165"
+                           "sha256":  "bea3348a7c2469f6f24085fe7f9ac0cc3995438e648b769711ce34de26650673"
                        }
 }
