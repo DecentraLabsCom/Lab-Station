@@ -31,6 +31,39 @@ os.chdir(runtime_directory)
 os.environ.setdefault("FMU_ROOT", str(executor_root / "fmu-data"))
 os.environ.setdefault("FMU_EXECUTOR_TEMP", str(executor_root / "fmu-data" / ".tmp"))
 
+
+def _register_appcontainer_pipe_reducer() -> None:
+    """Duplicate multiprocessing pipes into workers before AppContainer launch."""
+    if os.name != "nt":
+        return
+
+    from multiprocessing import connection as mp_connection
+    from multiprocessing.context import get_spawning_popen
+
+    original_reducer = mp_connection.reduce_pipe_connection
+    reduction = mp_connection.reduction
+
+    def reduce_pipe_connection_for_worker(pipe):
+        popen = get_spawning_popen()
+        if popen is None or popen.pid is None:
+            return original_reducer(pipe)
+
+        access = (
+            (mp_connection._winapi.FILE_GENERIC_READ if pipe.readable else 0)
+            | (mp_connection._winapi.FILE_GENERIC_WRITE if pipe.writable else 0)
+        )
+        duplicated_handle = reduction.DupHandle(pipe.fileno(), access, pid=popen.pid)
+        return mp_connection.rebuild_pipe_connection, (
+            duplicated_handle,
+            pipe.readable,
+            pipe.writable,
+        )
+
+    reduction.register(mp_connection.PipeConnection, reduce_pipe_connection_for_worker)
+
+
+_register_appcontainer_pipe_reducer()
+
 from app import config  # noqa: E402
 import uvicorn  # noqa: E402
 

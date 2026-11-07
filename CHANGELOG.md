@@ -10,6 +10,7 @@
 ### Fixed
 - Track windows delegated to existing application processes and attach windows created after startup so browser windows remain inside their workspace tabs.
 - Hide application windows before cross-process reparenting to avoid startup stalls with applications such as PuTTY.
+- Start frozen FMU Executor workers from the runtime directory and transfer their pipes into isolated processes without opening the parent service process.
 
 ### Changed
 - Store LABUSER autologon credentials in the Windows LSA secret store and remove the plaintext Winlogon password value.
