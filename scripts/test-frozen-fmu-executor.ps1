@@ -23,7 +23,8 @@ $environmentNames = @(
     'FMU_INTERNAL_TOKEN',
     'FMU_ROOT',
     'FMU_EXECUTOR_TEMP',
-    'FMU_EXECUTION_TIMEOUT_SECONDS'
+    'FMU_EXECUTION_TIMEOUT_SECONDS',
+    'FMU_WORKER_STARTUP_TRACE'
 )
 $previousEnvironment = @{}
 foreach ($name in $environmentNames) {
@@ -40,6 +41,7 @@ try {
     $env:FMU_EXECUTOR_PORT = [string]$port
     $env:FMU_INTERNAL_TOKEN = 'runtime-smoke-test-token'
     $env:FMU_EXECUTION_TIMEOUT_SECONDS = '15'
+    $env:FMU_WORKER_STARTUP_TRACE = '1'
     Remove-Item Env:FMU_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:FMU_EXECUTOR_TEMP -ErrorAction SilentlyContinue
 
