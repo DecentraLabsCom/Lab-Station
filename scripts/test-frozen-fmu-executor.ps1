@@ -75,10 +75,21 @@ try {
         parameters = @{}
         options = @{ stopTime = 0.1 }
     } | ConvertTo-Json -Depth 5 -Compress
-    $simulation = Invoke-RestMethod -Method Post `
-        -Uri "http://127.0.0.1:$port/internal/fmu/simulations/run" `
-        -Headers @{ 'X-Internal-Session-Token' = 'runtime-smoke-test-token' } `
-        -ContentType 'application/json' -Body $simulationBody -TimeoutSec 20
+    try {
+        $simulation = Invoke-RestMethod -Method Post `
+            -Uri "http://127.0.0.1:$port/internal/fmu/simulations/run" `
+            -Headers @{ 'X-Internal-Session-Token' = 'runtime-smoke-test-token' } `
+            -ContentType 'application/json' -Body $simulationBody -TimeoutSec 20
+    } catch {
+        $apiError = [string]$_.ErrorDetails.Message
+        $stdoutDetails = if (Test-Path -LiteralPath $stdout) {
+            (Get-Content -LiteralPath $stdout -Tail 120 | Out-String).TrimEnd()
+        } else { '(no stdout log)' }
+        $stderrDetails = if (Test-Path -LiteralPath $stderr) {
+            (Get-Content -LiteralPath $stderr -Tail 120 | Out-String).TrimEnd()
+        } else { '(no stderr log)' }
+        throw "Frozen worker simulation failed: $apiError`n--- FMU Executor stdout ---`n$stdoutDetails`n--- FMU Executor stderr ---`n$stderrDetails"
+    }
     if ($null -eq $simulation -or $null -eq $simulation.time) {
         throw 'Frozen worker path returned no simulation result.'
     }
