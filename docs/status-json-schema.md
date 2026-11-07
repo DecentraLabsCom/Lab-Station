@@ -53,8 +53,9 @@ The status document can also include the following diagnostic blocks:
 | Field | Description |
 | --- | --- |
 | `identity` | Lab account and local profile information. |
+| `firewall` | Whether inbound traffic defaults to Block, RDP/WinRM rules match their configured Gateway sources, and WinRM HTTP/5985 is blocked. |
 | `biosChecklist` | BIOS/UEFI Wake-on-LAN checks shown to the operator. |
-| `policy` | Autologon, Remote Desktop Users and interactive-logon policy state. |
+| `policy` | Autologon, Remote Desktop Users and interactive-logon policy state. Autologon diagnostics report whether the LSA secret exists and whether a plaintext Winlogon password value is present; they never include the credential. |
 | `sessions` | Current sessions and the typed active-session summary. |
 | `fmuExecutor` | FMU Executor availability, endpoint health, local process state and configured port. Secrets are represented only by boolean state. |
 | `lastForcedLogoff` | The latest forced-logoff record, when one exists. |

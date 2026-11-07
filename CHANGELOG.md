@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+- Store LABUSER autologon credentials in the Windows LSA secret store and remove the plaintext Winlogon password value.
+- Require separate Gateway source scopes for RDP and WinRM, disable matching generic inbound rules, and report whether the scoped firewall rules remain active.
+- Apply per-user shell, Task Manager, Control Panel, Run, and Explorer drive restrictions to LABUSER in the dedicated station profile.
+
 ## [3.6.0-preview.2] - 2026-10-09
 
 ### Added

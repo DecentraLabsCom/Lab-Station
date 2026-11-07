@@ -24,6 +24,11 @@ LS_RunSetupWizard() {
     }
     LS_WizardSaveProfile(mode)
     LS_LogInfo("Setup wizard profile selected: " . mode)
+    if (!LS_FirewallManager.ConfigureGatewayScopes()) {
+        LS_LogError("Setup wizard stopped because the Gateway firewall scopes were not configured")
+        MsgBox "The station requires explicit Gateway source IP addresses for RDP and WinRM before setup can continue.", "Lab Station Setup", "OK Iconx"
+        return false
+    }
     steps := mode = "server" ? LS_WizardServerSteps() : LS_WizardHybridSteps()
 
     for step in steps {
@@ -102,7 +107,7 @@ LS_WizardSaveProfile(mode) {
 
 LS_WizardServerSteps() {
     return [
-        Map("label", "Create/configure LABUSER + Remote Desktop Users + Autologon", "action", (*) => LS_WizardAccountServer()),
+        Map("label", "Create/configure LABUSER + scoped RDP + LSA-backed Autologon + RemoteApp restrictions", "action", (*) => LS_WizardAccountServer()),
         Map("label", "Remove legacy AppControl autostart; launch it from the Gateway Remote App connection", "action", (*) => LS_WizardClearLegacyAppControlAutostart()),
         Map("label", "Place AppControl in the remote-app launcher directory", "action", (*) => LS_WizardEnsureRemoteAppLauncher()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),
@@ -115,7 +120,7 @@ LS_WizardServerSteps() {
 
 LS_WizardHybridSteps() {
     return [
-        Map("label", "Create/update LABUSER + Remote Desktop Users (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
+        Map("label", "Create/update LABUSER + scoped RDP (no autologon)", "action", (*) => LS_WizardAccountHybrid()),
         Map("label", "Remove legacy AppControl autostart; launch it from the Gateway Remote App connection", "action", (*) => LS_WizardClearLegacyAppControlAutostart()),
         Map("label", "Place AppControl in the remote-app launcher directory", "action", (*) => LS_WizardEnsureRemoteAppLauncher()),
         Map("label", "Enable RemoteApp (fAllowUnlistedRemotePrograms)", "action", (*) => LS_RegistryManager.SetRemoteAppPolicy()),

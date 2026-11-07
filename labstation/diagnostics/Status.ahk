@@ -7,6 +7,7 @@
 #Include ..\core\Shell.ahk
 #Include ..\core\Json.ahk
 #Include ..\system\RegistryManager.ahk
+#Include ..\system\AutologonManager.ahk
 #Include ..\system\AccountManager.ahk
 #Include ..\system\WinRM.ahk
 #Include ..\service\ServiceState.ahk
@@ -26,7 +27,8 @@ class LS_Status {
         data["identity"]["agentVersion"] := LAB_STATION_VERSION
         data["identity"]["contractVersion"] := LAB_STATION_SCHEMA_VERSION
         data["remoteAppEnabled"] := this.CheckRemoteAppPolicy()
-        data["winrm"] := LS_WinRM.GetStatus()
+        data["firewall"] := LS_FirewallManager.GetStatus()
+        data["winrm"] := LS_WinRM.GetStatus(data["firewall"])
         data["legacyAppControlAutostart"] := this.CheckLegacyAppControlAutostart()
         data["wake"] := this.GetWakeInformation()
         data["power"] := this.GetPowerInformation()
@@ -64,6 +66,7 @@ class LS_Status {
         data["supportTier"] := "certified"
         data["platformSpecific"] := Map("windows", Map(
             "remoteAppEnabled", data["remoteAppEnabled"],
+            "firewall", data["firewall"],
             "winrm", data["winrm"],
             "legacyAppControlAutostart", data["legacyAppControlAutostart"],
             "wake", data["wake"],
@@ -122,6 +125,8 @@ class LS_Status {
             lines.Push("Issues: " . LS_StrJoin(data["summary"]["issues"], "; "))
         }
         lines.Push("RemoteApp: " . (data["remoteAppEnabled"] ? "OK" : "MISSING"))
+        lines.Push("RDP firewall scope: " . (data["firewall"]["rdpReady"] ? "OK" : "MISSING"))
+        lines.Push("WinRM firewall scope: " . (data["winrm"]["firewallEnabled"] ? "OK" : "MISSING"))
         lines.Push("WinRM: " . (data["winrm"]["ready"] ? "OK" : "MISSING"))
         lines.Push("Profile: " . data["stationProfile"])
         lines.Push(data["legacyAppControlAutostart"]
@@ -244,7 +249,14 @@ class LS_Status {
     }
 
     static GetAutologonState(targetUser) {
-        state := Map("enabled", false, "user", "", "passwordSet", false, "userMatches", false)
+        state := Map(
+            "enabled", false,
+            "user", "",
+            "passwordSet", false,
+            "secretStored", false,
+            "plaintextPasswordPresent", false,
+            "userMatches", false
+        )
         key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
         try {
             value := RegRead(key, "AutoAdminLogon")
@@ -259,12 +271,9 @@ class LS_Status {
         } catch {
             state["user"] := ""
         }
-        try {
-            password := RegRead(key, "DefaultPassword")
-            state["passwordSet"] := (password != "")
-        } catch {
-            state["passwordSet"] := false
-        }
+        state["secretStored"] := LS_AutologonManager.HasSecret()
+        state["passwordSet"] := state["secretStored"]
+        state["plaintextPasswordPresent"] := LS_AutologonManager.HasWinlogonPassword()
         return state
     }
 
@@ -687,6 +696,8 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         dedicated := profile != "hybrid"
         if (!data["identity"]["labUserExists"])
             issues.Push("Lab user not found")
+        if (!data["firewall"]["rdpReady"])
+            issues.Push("RDP firewall is not restricted to the configured Gateway sources")
         if (!data["remoteAppEnabled"])
             issues.Push("RemoteApp policy missing")
         if (!data["winrm"]["ready"])
@@ -698,8 +709,10 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("AutoAdminLogon disabled")
         if (dedicated && !autoLogon["userMatches"])
             issues.Push("Autologon user mismatch")
-        if (dedicated && !autoLogon["passwordSet"])
-            issues.Push("Autologon password not stored")
+        if (dedicated && !autoLogon["secretStored"])
+            issues.Push("Autologon LSA secret not stored")
+        if (dedicated && autoLogon["plaintextPasswordPresent"])
+            issues.Push("Plaintext Winlogon DefaultPassword value is present")
         rds := data["policy"]["remoteDesktopUsers"]
         if (!rds["labUserPresent"])
             issues.Push("Lab user missing from Remote Desktop Users")

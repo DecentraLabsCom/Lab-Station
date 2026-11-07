@@ -159,7 +159,10 @@ LS_HandleWinRMCommand(args) {
             text .= "HTTPS listener: " . (status.Has("httpsListener") && status["httpsListener"] ? "yes" : "no") . "`n"
             text .= "HTTPS port: " . (status.Has("httpsPort") && status["httpsPort"] ? "yes" : "no") . "`n"
             text .= "Certificate: " . (status.Has("certificateConfigured") && status["certificateConfigured"] ? "yes" : "no") . "`n"
-            text .= "Firewall enabled: " . (status.Has("firewallEnabled") && status["firewallEnabled"] ? "yes" : "no") . "`n"
+            text .= "Gateway firewall scope: " . (status.Has("firewallScopeConfigured") && status["firewallScopeConfigured"] ? "configured" : "missing") . "`n"
+            text .= "Scoped firewall rule: " . (status.Has("firewallScopedRuleReady") && status["firewallScopedRuleReady"] ? "ready" : "missing") . "`n"
+            text .= "WinRM HTTP/5985 blocked: " . (status.Has("firewallHttpBlocked") && status["firewallHttpBlocked"] ? "yes" : "no") . "`n"
+            text .= "Default inbound policy: " . (status.Has("firewallInboundDefaultBlocked") && status["firewallInboundDefaultBlocked"] ? "blocked" : "not verified") . "`n"
             text .= "Allow unencrypted: " . (status.Has("allowUnencrypted") && status["allowUnencrypted"] ? "yes" : "no") . "`n"
             text .= "Negotiate auth: " . (status.Has("negotiateAuth") && status["negotiateAuth"] ? "yes" : "no")
             LS_ShowMessage(text, "Lab Station - WinRM")

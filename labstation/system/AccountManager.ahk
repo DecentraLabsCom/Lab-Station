@@ -6,6 +6,8 @@
 #Include ..\core\Logger.ahk
 #Include ..\core\Admin.ahk
 #Include ..\core\Shell.ahk
+#Include AutologonManager.ahk
+#Include FirewallManager.ahk
 
 class LS_AccountManager {
     static DefaultUser := "LABUSER"
@@ -19,13 +21,19 @@ class LS_AccountManager {
         }
         localPass := password
         if (!this.EnsureAccount(user, &localPass)) {
-            return false
-        }
-        if (!this.ConfigureAutologon(user, localPass)) {
+            password := localPass
             return false
         }
         password := localPass
-        return this.ApplyLockdown(user)
+        if (!this.ApplyLockdown(user, false))
+            return false
+        if (!this.ConfigureAutologon(user, localPass))
+            return false
+        if (this.RefreshAutologonState(user))
+            return true
+        LS_LogError("AutoAdminLogon verification failed after applying the LABUSER lockdown")
+        LS_AutologonManager.Disable()
+        return false
     }
 
     static EnsureAccount(user, &password) {
@@ -36,6 +44,12 @@ class LS_AccountManager {
             user := this.DefaultUser
         }
         localPassword := password && password != "" ? password : this.GeneratePassword()
+        if (!LS_FirewallManager.ConfigureRdpFirewall()) {
+            LS_LogError("Configure a valid Gateway RDP firewall scope before enabling Remote Desktop")
+            return false
+        }
+        if (!LS_AutologonManager.Disable())
+            return false
         escapedUser := this.EscapeForPSSingleQuote(user)
         escapedPassword := this.EscapeForPSSingleQuote(localPassword)
         script := "
@@ -89,7 +103,6 @@ try {
     Remove-LocalGroupMember -Group (Get-LocalGroupNameBySid 'S-1-5-32-544') -Member `$localUser.SID.Value -ErrorAction SilentlyContinue
 } catch {}
 Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -ErrorAction Stop
-Enable-NetFirewallRule -Name 'RemoteDesktop-*' -ErrorAction SilentlyContinue | Out-Null
 if (-not (Get-LocalUser -Name `$User -ErrorAction Stop)) {
     throw ('Local user ' + `$User + ' was not created or could not be verified')
 }
@@ -121,33 +134,10 @@ exit 0
     }
 
     static ConfigureAutologon(user, password, domain := "") {
-        if (!LS_EnsureAdmin()) {
-            return false
-        }
-        if (!user || user = "") {
-            user := this.DefaultUser
-        }
-        if (!password || password = "") {
-            LS_LogError("Password required to configure Autologon")
-            return false
-        }
-        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-        try {
-            RegWrite("1", "REG_SZ", key, "AutoAdminLogon")
-            RegWrite(user, "REG_SZ", key, "DefaultUserName")
-            RegWrite(password, "REG_SZ", key, "DefaultPassword")
-            RegWrite(domain, "REG_SZ", key, "DefaultDomainName")
-            RegWrite("1", "REG_DWORD", key, "ForceAutoLogon")
-            RegWrite("0", "REG_DWORD", key, "DisableCAD")
-            LS_LogInfo("Autologon configured successfully")
-            return true
-        } catch as e {
-            LS_LogError("Error configuring Autologon: " . e.Message)
-            return false
-        }
+        return LS_AutologonManager.Configure(user, password, domain)
     }
 
-    static ApplyLockdown(user := "") {
+    static ApplyLockdown(user := "", verifyAutologon := true) {
         if (!LS_EnsureAdmin()) {
             return false
         }
@@ -157,7 +147,9 @@ exit 0
         ok := true
         ok := this.EnsureRemoteDesktopRestrictions(user) && ok
         ok := this.ConfigureDenyInteractiveLogon(user) && ok
-        ok := this.RefreshAutologonState(user) && ok
+        ok := this.ConfigureRemoteAppUserRestrictions(user) && ok
+        if (verifyAutologon)
+            ok := this.RefreshAutologonState(user) && ok
         if (ok) {
             LS_LogInfo("Lockdown applied")
         } else {
@@ -327,6 +319,88 @@ try {
         return true
     }
 
+    static ConfigureRemoteAppUserRestrictions(user) {
+        if (!LS_EnsureAdmin())
+            return false
+        escaped := this.EscapeForPSSingleQuote(user)
+        script := ""
+            . "`$ErrorActionPreference = 'Stop'`n"
+            . "`$User = '" . escaped . "'`n"
+            . "`$localUser = Get-LocalUser -Name `$User -ErrorAction Stop`n"
+            . "`$sid = `$localUser.SID.Value`n"
+            . "`$loadedHive = `$false`n"
+            . "`$mountName = 'LabStation_' + `$sid.Replace('-', '_')`n"
+            . "`$hiveRoot = 'Registry::HKEY_USERS\' + `$sid`n"
+            . "if (-not (Test-Path -LiteralPath `$hiveRoot)) {`n"
+            . "  `$profile = Get-CimInstance Win32_UserProfile -Filter ('SID=''' + `$sid + '''') -ErrorAction SilentlyContinue | Select-Object -First 1`n"
+            . "  if (-not `$profile) {`n"
+            . "    `$profileKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + `$sid`n"
+            . "    `$profileImage = (Get-ItemProperty -LiteralPath `$profileKey -Name ProfileImagePath -ErrorAction SilentlyContinue).ProfileImagePath`n"
+            . "    if (`$profileImage) { `$profile = [pscustomobject]@{ LocalPath = [Environment]::ExpandEnvironmentVariables(`$profileImage) } }`n"
+            . "  }`n"
+            . "  if (-not `$profile) {`n"
+            . "    Add-Type -TypeDefinition @'`n"
+            . "using System;`nusing System.Text;`nusing System.Runtime.InteropServices;`nusing System.Security.Principal;`n"
+            . "public static class LabStationUserProfile {`n"
+            . "  [DllImport(`"userenv.dll`", CharSet=CharSet.Unicode, SetLastError=true)]`n"
+            . "  private static extern int NativeCreateProfile(IntPtr sid, string userName, StringBuilder path, uint pathSize);`n"
+            . "  public static int CreateProfileFromString(string sidText, string userName, StringBuilder path, uint pathSize) {`n"
+            . "    var sid = new SecurityIdentifier(sidText);`n"
+            . "    var sidBytes = new byte[sid.BinaryLength];`n"
+            . "    sid.GetBinaryForm(sidBytes, 0);`n"
+            . "    var handle = GCHandle.Alloc(sidBytes, GCHandleType.Pinned);`n"
+            . "    try { return NativeCreateProfile(handle.AddrOfPinnedObject(), userName, path, pathSize); }`n"
+            . "    finally { handle.Free(); Array.Clear(sidBytes, 0, sidBytes.Length); }`n"
+            . "  }`n"
+            . "}`n'@`n"
+            . "    `$profilePath = New-Object System.Text.StringBuilder 260`n"
+            . "    `$result = [LabStationUserProfile]::CreateProfileFromString(`$sid, `$User, `$profilePath, [uint32]`$profilePath.Capacity)`n"
+            . "    if (`$result -ne 0) { throw ('CreateProfile failed with HRESULT 0x{0:X8}' -f `$result) }`n"
+            . "    `$profile = [pscustomobject]@{ LocalPath = `$profilePath.ToString() }`n"
+            . "  }`n"
+            . "  `$ntUser = Join-Path `$profile.LocalPath 'NTUSER.DAT'`n"
+            . "  if (-not (Test-Path -LiteralPath `$ntUser)) { throw ('User profile hive was not found: ' + `$ntUser) }`n"
+            . "  & reg.exe load ('HKU\' + `$mountName) `$ntUser | Out-Null`n"
+            . "  if (`$LASTEXITCODE -ne 0) { throw ('Unable to load the LABUSER registry hive, exit code ' + `$LASTEXITCODE) }`n"
+            . "  `$loadedHive = `$true`n"
+            . "  `$hiveRoot = 'Registry::HKEY_USERS\' + `$mountName`n"
+            . "}`n"
+            . "try {`n"
+            . "  `$explorerPath = Join-Path `$hiveRoot 'Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'`n"
+            . "  `$systemPath = Join-Path `$hiveRoot 'Software\Microsoft\Windows\CurrentVersion\Policies\System'`n"
+            . "  New-Item -Path `$explorerPath -Force | Out-Null`n"
+            . "  New-Item -Path `$systemPath -Force | Out-Null`n"
+            . "  New-ItemProperty -Path `$explorerPath -Name 'NoRun' -Value 1 -PropertyType DWord -Force | Out-Null`n"
+            . "  New-ItemProperty -Path `$explorerPath -Name 'NoControlPanel' -Value 1 -PropertyType DWord -Force | Out-Null`n"
+            . "  New-ItemProperty -Path `$explorerPath -Name 'NoDrives' -Value 67108863 -PropertyType DWord -Force | Out-Null`n"
+            . "  New-ItemProperty -Path `$explorerPath -Name 'NoViewOnDrive' -Value 67108863 -PropertyType DWord -Force | Out-Null`n"
+            . "  New-ItemProperty -Path `$explorerPath -Name 'DisallowRun' -Value 1 -PropertyType DWord -Force | Out-Null`n"
+            . "  `$disallowPath = Join-Path `$explorerPath 'DisallowRun'`n"
+            . "  New-Item -Path `$disallowPath -Force | Out-Null`n"
+            . "  `$blockedApps = @('cmd.exe','powershell.exe','powershell_ise.exe','pwsh.exe','wt.exe','WindowsTerminal.exe','regedit.exe','reg.exe','mmc.exe','taskmgr.exe','taskkill.exe')`n"
+            . "  for (`$index = 0; `$index -lt `$blockedApps.Count; `$index++) { New-ItemProperty -Path `$disallowPath -Name ([string](`$index + 1)) -Value `$blockedApps[`$index] -PropertyType String -Force | Out-Null }`n"
+            . "  New-ItemProperty -Path `$systemPath -Name 'DisableRegistryTools' -Value 1 -PropertyType DWord -Force | Out-Null`n"
+            . "  New-ItemProperty -Path `$systemPath -Name 'DisableTaskMgr' -Value 1 -PropertyType DWord -Force | Out-Null`n"
+            . "  Write-Output 'LABSTATION_REMOTEAPP_RESTRICTIONS_READY'`n"
+            . "} finally {`n"
+            . "  if (`$loadedHive) {`n"
+            . "    [GC]::Collect()`n"
+            . "    [GC]::WaitForPendingFinalizers()`n"
+            . "    & reg.exe unload ('HKU\' + `$mountName) | Out-Null`n"
+            . "    if (`$LASTEXITCODE -ne 0) { throw ('Unable to unload the LABUSER registry hive, exit code ' + `$LASTEXITCODE) }`n"
+            . "  }`n"
+            . "}`n"
+        capture := LS_RunPowerShellCapture(script, "Apply LABUSER RemoteApp shell restrictions", LAB_STATION_LONG_COMMAND_TIMEOUT_MS)
+        ready := capture["exitCode"] = 0 && InStr(capture["stdout"], "LABSTATION_REMOTEAPP_RESTRICTIONS_READY") > 0
+        if (ready) {
+            LS_LogInfo("RemoteApp shell restrictions applied to " . user)
+            return true
+        }
+        detail := LS_CaptureDetail(capture)
+        LS_LogError("Unable to apply RemoteApp shell restrictions" . (detail != "" ? ": " . detail : ""))
+        return false
+    }
+
     static BuildDenyInteractiveScript(user) {
         escaped := this.EscapeForPSSingleQuote(user)
         template := "
@@ -391,24 +465,7 @@ if (`$code -ne 0) { throw `"secedit failed with exit code `$code`" }
     }
 
     static RefreshAutologonState(user) {
-        password := this.GetStoredAutologonPassword()
-        if (password = "") {
-            LS_LogWarning("Autologon password not found; skipping refresh")
-            return false
-        }
-        domain := ""
-        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-        try domain := RegRead(key, "DefaultDomainName")
-        return this.ConfigureAutologon(user, password, domain)
-    }
-
-    static GetStoredAutologonPassword() {
-        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-        try {
-            return RegRead(key, "DefaultPassword")
-        } catch {
-            return ""
-        }
+        return LS_AutologonManager.IsEnabledForUser(user) && LS_AutologonManager.HasSecret()
     }
 
     static AccountExists(user) {

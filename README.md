@@ -46,8 +46,12 @@ Set-Location 'C:\LabStation\Lab Station'
 .\LabStation.exe setup
 ```
 
-The wizard guides profile selection and station configuration. For a source
-checkout or compiled development build, use
+The wizard guides profile selection and station configuration. Before it
+continues, it asks for the source addresses Windows sees for Guacamole/`guacd`
+RDP traffic and Lab Gateway WinRM traffic, then applies those firewall scopes.
+See [Windows security hardening](docs/windows-security-hardening.md) for how to
+choose the source addresses and for the dedicated-profile restrictions. For a
+source checkout or compiled development build, use
 [Development, build and verification](docs/development.md).
 
 Useful status checks from the installed directory:
@@ -91,6 +95,7 @@ test, and release instructions are in
 |---|---|
 | Shared station navigation | [Documentation contents](SUMMARY.md) |
 | WinRM, Gateway trust, and commands | [WinRM command contract](docs/winrm-command-contract.md) |
+| Windows firewall, autologon, and LABUSER restrictions | [Windows security hardening](docs/windows-security-hardening.md) |
 | Status, heartbeat, and schemas | [Status and heartbeat contract](docs/status-and-heartbeat.md), [status JSON schema](docs/status-json-schema.md), [heartbeat schema](docs/heartbeat-schema.md) |
 | Shared instructor workstations | [Hybrid operations](docs/hybrid-operations.md) |
 | RemoteApp launch behavior | [AppControl](remote-app/README.md) and [Windows configuration](remote-app/windows-configuration.md) |
