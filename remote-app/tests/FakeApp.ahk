@@ -30,6 +30,9 @@ title := opts.Has("title") ? opts["title"] : "Smoke App"
 color := opts.Has("color") ? opts["color"] : "0x1E1E1E"
 message := opts.Has("message") ? opts["message"] : "Smoke application placeholder"
 lifetimeSec := opts.Has("lifetime") && opts["lifetime"] != "" ? Integer(opts["lifetime"]) : 0
+extraWindowTitle := opts.Has("extra-title") ? opts["extra-title"] : ""
+extraWindowDelayMs := opts.Has("extra-delay") && opts["extra-delay"] != "" ? Integer(opts["extra-delay"]) : 1000
+helperWindowTitle := opts.Has("helper-title") ? opts["helper-title"] : ""
 
 ; Gui() uses AutoHotkey's stable runtime window class. The smoke test combines
 ; that class with each process ID when locating the windows.
@@ -44,9 +47,24 @@ fakeGui.AddButton("x+10 yp w120", "Stop")
 
 fakeGui.Show("w420 h260")
 
+if (helperWindowTitle != "") {
+    helperGui := Gui("+ToolWindow", helperWindowTitle)
+    helperGui.Show("w24 h24")
+}
+
+if (extraWindowTitle != "")
+    SetTimer(() => CreateExtraWindow(extraWindowTitle), -extraWindowDelayMs)
+
 if (lifetimeSec > 0) {
     SetTimer(() => ExitApp(), -lifetimeSec * 1000)
 }
 
 OnMessage(0x0010, (*) => ExitApp())
 return
+
+CreateExtraWindow(title) {
+    global FAKE_EXTRA_GUI
+    FAKE_EXTRA_GUI := Gui("+Resize", title)
+    FAKE_EXTRA_GUI.AddText("x20 y20 w260", title)
+    FAKE_EXTRA_GUI.Show("w320 h180")
+}

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.3] - 2026-11-07
+
+### Added
+- Replace the fixed dual-app Remote App mode with protected, manifest-driven workspaces for two to five applications, including a workspace editor and local launch/test flow.
+
+### Fixed
+- Track windows delegated to existing application processes and attach windows created after startup so browser windows remain inside their workspace tabs.
+- Hide application windows before cross-process reparenting to avoid startup stalls with applications such as PuTTY.
+
 ### Changed
 - Store LABUSER autologon credentials in the Windows LSA secret store and remove the plaintext Winlogon password value.
 - Require separate Gateway source scopes for RDP and WinRM, disable matching generic inbound rules, and report whether the scoped firewall rules remain active.

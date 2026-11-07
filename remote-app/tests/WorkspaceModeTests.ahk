@@ -122,6 +122,12 @@ RunCommandLineTests() {
         . Chr(34) . "--title" . Chr(34) . " "
         . Chr(34) . "Lab control room" . Chr(34)
     TestAssert(WorkspaceBuildCommandLine(app) = expected, "command-line builder quotes executable and spaced arguments")
+
+    currentPid := DllCall("GetCurrentProcessId", "UInt")
+    delegatedApp := Map("launchPid", currentPid, "processHandle", 0,
+        "preexistingPids", Map(currentPid, true))
+    TestAssert(!WorkspaceLaunchProcessIsRunning(delegatedApp),
+        "pre-existing single-instance process is not treated as owned by the workspace")
 }
 
 RunWorkspaceLifecycleSmokeTest() {
@@ -129,36 +135,65 @@ RunWorkspaceLifecycleSmokeTest() {
     global WORKSPACE_APPS, WORKSPACE_PANEL, WORKSPACE_TABS
 
     fakeAppPath := A_ScriptDir . "\FakeApp.ahk"
+    fakeLauncherPath := A_ScriptDir . "\FakeLauncher.ahk"
     if (!FileExist(fakeAppPath))
         throw Error("FakeApp.ahk was not found: " . fakeAppPath)
+    if (!FileExist(fakeLauncherPath))
+        throw Error("FakeLauncher.ahk was not found: " . fakeLauncherPath)
 
     apps := [
         TestAppJson("alpha", A_AhkPath, JsonArray([
             fakeAppPath, "--class", "AutoHotkeyGUI", "--title", "Workspace Smoke Alpha",
-            "--color", "0x2B5797", "--lifetime", "120"
+            "--color", "0x2B5797", "--extra-title", "Workspace Smoke Alpha Secondary",
+            "--extra-delay", "1000", "--helper-title", "Workspace Smoke Alpha Helper", "--lifetime", "120"
         ]), 15, "Smoke Alpha", "AutoHotkeyGUI", "Workspace Smoke Alpha"),
         TestAppJson("beta", A_AhkPath, JsonArray([
             fakeAppPath, "--class", "AutoHotkeyGUI", "--title", "Workspace Smoke Beta",
             "--color", "0x6441A5", "--lifetime", "120"
-        ]), 15, "Smoke Beta", "AutoHotkeyGUI", "Workspace Smoke Beta")
+        ]), 15, "Smoke Beta", "AutoHotkeyGUI", "Workspace Smoke Beta"),
+        TestAppJson("gamma", A_AhkPath, JsonArray([
+            fakeLauncherPath, fakeAppPath, "Workspace Smoke Gamma"
+        ]), 15, "Smoke Gamma", "AutoHotkeyGUI", "Workspace Smoke Gamma")
     ]
     WriteTestManifest("smoke", BuildManifestJson("smoke", apps))
 
     TestAssert(WorkspaceStart("smoke"), "workspace smoke starts")
-    TestAssert(WORKSPACE_APPS.Length = 2, "workspace stores both app records")
-    if (WORKSPACE_APPS.Length != 2)
+    TestAssert(WORKSPACE_APPS.Length = 3, "workspace stores all app records")
+    TestAssert(WORKSPACE_APPS[1]["hwnds"].Length = 1,
+        "startup embeds only the primary app window and ignores small helpers")
+    hostDpiContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", WORKSPACE_GUI.Hwnd, "Ptr")
+    panelDpiContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", WORKSPACE_PANEL.Hwnd, "Ptr")
+    TestAssert(DllCall("AreDpiAwarenessContextsEqual", "Ptr", hostDpiContext, "Ptr", panelDpiContext, "Int"),
+        "workspace host and panel use the same DPI context")
+    if (WORKSPACE_APPS.Length != 3)
         return
 
     for app in WORKSPACE_APPS {
         TestAssert(app["state"] = "running", "fake app reaches running state: " . app["id"])
-        TestAssert(ProcessExist(app["pid"]), "fake app process is supervised: " . app["id"])
+        TestAssert(WorkspaceProcessIsRunning(app), "fake app window or launcher is supervised: " . app["id"])
         TestAssert(DllCall("GetParent", "Ptr", app["hwnd"], "Ptr") = WORKSPACE_PANEL.Hwnd,
             "fake app is parented to workspace panel: " . app["id"])
+    }
+
+    TestAssert(WORKSPACE_APPS[3]["windowPid"] != WORKSPACE_APPS[3]["pid"],
+        "workspace adopts a window delegated to another process")
+    TestAssert(!WorkspaceLaunchProcessIsRunning(WORKSPACE_APPS[3]),
+        "delegated launcher can exit while its workspace window remains active")
+
+    Sleep(1300)
+    WorkspaceMonitor()
+    TestAssert(WORKSPACE_APPS[1]["hwnds"].Length = 2,
+        "workspace adopts a secondary application window created after startup")
+    if (WORKSPACE_APPS[1]["hwnds"].Length >= 2) {
+        TestAssert(DllCall("GetParent", "Ptr", WORKSPACE_APPS[1]["hwnds"][2], "Ptr") = WORKSPACE_PANEL.Hwnd,
+            "late secondary window is parented to workspace panel")
     }
 
     WorkspaceSelectTab(1)
     Sleep(50)
     TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"), "first tab shows its app")
+    if (WORKSPACE_APPS[1]["hwnds"].Length >= 2)
+        TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnds"][2], "Int"), "first tab shows its secondary window")
     TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[2]["hwnd"], "Int"), "first tab hides the other app")
 
     WORKSPACE_TABS.Value := 2
@@ -166,10 +201,14 @@ RunWorkspaceLifecycleSmokeTest() {
     Sleep(50)
     TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[2]["hwnd"], "Int"), "second tab shows its app")
     TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"), "second tab hides the other app")
+    if (WORKSPACE_APPS[1]["hwnds"].Length >= 2)
+        TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnds"][2], "Int"), "second tab hides the secondary window")
 
     TestAssert(ControllerCloseWorkspace("workspace smoke test"), "workspace close handler shuts down the apps")
-    for app in WORKSPACE_APPS
+    for app in WORKSPACE_APPS {
         TestAssert(!ProcessExist(app["pid"]), "workspace close stops fake app: " . app["id"])
+        TestAssert(!WorkspaceHasAttachedWindow(app), "workspace close removes all app windows: " . app["id"])
+    }
 
     if (IsObject(WORKSPACE_GUI))
         WORKSPACE_GUI.Destroy()
