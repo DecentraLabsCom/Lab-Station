@@ -15,6 +15,7 @@
 #Include core\Shell.ahk
 #Include core\Json.ahk
 #Include system\RegistryManager.ahk
+#Include system\RemoteAppWorkspaceStore.ahk
 #Include system\WakeOnLan.ahk
 #Include system\AccountManager.ahk
 #Include system\WinRM.ahk
@@ -60,7 +61,7 @@ LabStationMain(args) {
         case "setup":
             exitCode := LS_RunSetupWizard() ? 0 : 1
         case "remoteapp":
-            exitCode := LS_RegistryManager.SetRemoteAppPolicy() ? 0 : 2
+            exitCode := (LS_RegistryManager.SetRemoteAppPolicy() && LS_RemoteAppWorkspaceStore.Ensure()) ? 0 : 2
         case "wol":
             exitCode := LS_WakeOnLan.Configure() ? 0 : 2
         case "winrm":
@@ -117,7 +118,7 @@ LS_ShowHelp() {
     text := "Lab Station " . LAB_STATION_VERSION . "`n" .
         "Usage:" . "`n" .
         "  LabStation.exe setup                 # Interactive wizard" . "`n" .
-        "  LabStation.exe remoteapp            # Configure fAllowUnlistedRemotePrograms" . "`n" .
+        "  LabStation.exe remoteapp            # Configure RemoteApp and workspace storage" . "`n" .
         "  LabStation.exe wol                  # Configure Wake-on-LAN" . "`n" .
         "  LabStation.exe winrm [configure|status] # Configure or inspect WinRM" . "`n" .
         "  LabStation.exe status               # Quick summary" . "`n" .

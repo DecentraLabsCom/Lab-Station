@@ -1,9 +1,8 @@
 # ============================================================================
 # Lab Station - Build Script
 # ============================================================================
-# Compiles all executables: AppControl.exe, LabStation.exe, LabStationPanel.exe
-# AppControl is emitted at the project root as the wizard's migration source;
-# release packaging places it in remote-app\AppControl.exe.
+# Compiles AppControl.exe into its canonical remote-app directory, plus
+# LabStation.exe and LabStationPanel.exe at the project root.
 
 param(
     [switch]$Clean,
@@ -84,7 +83,7 @@ $jobs = @(
     @{
         Name = "AppControl"
         Source = "remote-app\AppControl.ahk"
-        Output = "AppControl.exe"
+        Output = "remote-app\AppControl.exe"
     },
     @{
         Name = "LabStation"

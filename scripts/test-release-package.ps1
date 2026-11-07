@@ -31,7 +31,9 @@ try {
     foreach ($name in $expectedExecutables) {
         Set-Content -LiteralPath (Join-Path $distPath $name) -Value "test-$name" -NoNewline
     }
-    Set-Content -LiteralPath (Join-Path $distPath 'AppControl.exe') -Value 'test-AppControl.exe' -NoNewline
+    $distRemoteApp = Join-Path $distPath 'remote-app'
+    New-Item -ItemType Directory -Path $distRemoteApp -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $distRemoteApp 'AppControl.exe') -Value 'test-AppControl.exe' -NoNewline
 
     $logoDir = Join-Path $distPath 'img'
     New-Item -ItemType Directory -Path $logoDir -Force | Out-Null

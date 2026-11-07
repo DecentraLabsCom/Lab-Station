@@ -200,13 +200,17 @@ jobs:
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\TelemetryTests.ahk
 
-      - name: Run DualAppMode smoke test
-        shell: powershell
-        run: .\scripts\run-ahk-test.ps1 remote-app\tests\SmokeTest_DualAppMode.ahk
-
       - name: Run argument parsing matrix
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 remote-app\tests\ArgumentParsingTests.ahk
+
+      - name: Run RemoteApp workspace mode tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 remote-app\tests\WorkspaceModeTests.ahk
+
+      - name: Run RemoteApp workspace store ACL tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\RemoteAppWorkspaceStoreAclTests.ahk
 
       - name: Upload smoke test log
         if: always()

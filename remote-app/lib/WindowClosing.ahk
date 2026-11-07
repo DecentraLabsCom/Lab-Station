@@ -3,6 +3,8 @@
 ; ============================================================================
 ; Functions for gracefully closing windows with multiple fallback methods
 ; ============================================================================
+#Include Config.ahk
+#Include Utils.ahk
 
 ; Universal graceful close for any desktop application with custom close buttons
 TryCustomGracefulClose(target, timeoutSec := 3) {
@@ -56,7 +58,7 @@ TryCustomGracefulClose(target, timeoutSec := 3) {
     return false
 }
 
-; Universal close cascade for any window (single app, dual app, or container)
+; Universal close cascade for a single application window
 CloseWindowCascade(target, closeWait := 2, isEmbedded := false) {
     global CUSTOM_CLOSE_METHOD
     
@@ -113,44 +115,7 @@ CloseWindowCascade(target, closeWait := 2, isEmbedded := false) {
     return true
 }
 
-; Main close window function - handles container detection for dual mode
+; Main close window function for the unchanged single-app mode
 ForceCloseWindow(targetWin, closeWait := 2) {
-    global CUSTOM_CLOSE_METHOD, DUAL_APP_MODE
-    
-    ; SPECIAL HANDLING: If closing container in dual mode, close embedded apps FIRST
-    if (DUAL_APP_MODE && WinExist(targetWin)) {
-        targetClass := WinGetClass(targetWin)
-        if (targetClass = "AutoHotkeyGUI") {
-            Log("Dual mode container close detected - closing embedded apps first", "DEBUG")
-            
-            global app1Hwnd, app2Hwnd
-            Log("App1Hwnd=" . app1Hwnd . ", App2Hwnd=" . app2Hwnd)
-            
-            ; Close App 1
-            if (app1Hwnd != 0) {
-                if (WinExist("ahk_id " . app1Hwnd)) {
-                    Log("Closing embedded App 1 (hwnd: " . app1Hwnd . ")")
-                    CloseWindowCascade("ahk_id " . app1Hwnd, closeWait, true)
-                } else {
-                    Log("WARNING: App 1 window (hwnd: " . app1Hwnd . ") does not exist - may have already closed")
-                }
-            }
-            
-            ; Close App 2
-            if (app2Hwnd != 0) {
-                if (WinExist("ahk_id " . app2Hwnd)) {
-                    Log("Closing embedded App 2 (hwnd: " . app2Hwnd . ")")
-                    CloseWindowCascade("ahk_id " . app2Hwnd, closeWait, true)
-                } else {
-                    Log("WARNING: App 2 window (hwnd: " . app2Hwnd . ") does not exist - may have already closed")
-                }
-            }
-            
-            Sleep(500)  ; Delay for resource cleanup
-            Log("Embedded apps closed - now closing container", "DEBUG")
-        }
-    }
-    
-    ; Close the window using standard cascade
     return CloseWindowCascade(targetWin, closeWait, false)
 }

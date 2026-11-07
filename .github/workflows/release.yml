@@ -215,7 +215,7 @@ jobs:
           }
 
           $scriptPath = (Resolve-Path 'remote-app/AppControl.ahk').Path
-          $outDir = Join-Path $PWD 'dist'
+          $outDir = Join-Path $PWD 'dist/remote-app'
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $outFile = Join-Path $outDir 'AppControl.exe'
           $iconPath = (Resolve-Path 'img/favicon.ico').Path
@@ -513,22 +513,22 @@ jobs:
           $inputDir = Join-Path $PWD 'signing-input'
           New-Item -ItemType Directory -Force -Path $inputDir | Out-Null
 
-          foreach ($name in @(
-            'AppControl.exe',
-            'LabStation.exe',
-            'LabStationPanel.exe',
-            'FMUExecutor.exe'
-          )) {
-            if ($name -eq 'FMUExecutor.exe') {
-              $source = Join-Path $PWD 'dist/fmu-executor-runtime/FMUExecutor/FMUExecutor.exe'
-            } else {
-              $source = Join-Path $PWD "dist/$name"
-            }
+          $signingFiles = @(
+            @{ Name = 'AppControl.exe'; Source = 'dist/remote-app/AppControl.exe'; Destination = 'AppControl.exe' },
+            @{ Name = 'LabStation.exe'; Source = 'dist/LabStation.exe'; Destination = 'LabStation.exe' },
+            @{ Name = 'LabStationPanel.exe'; Source = 'dist/LabStationPanel.exe'; Destination = 'LabStationPanel.exe' },
+            @{ Name = 'FMUExecutor.exe'; Source = 'dist/fmu-executor-runtime/FMUExecutor/FMUExecutor.exe'; Destination = 'FMUExecutor.exe' }
+          )
+
+          foreach ($file in $signingFiles) {
+            $source = Join-Path $PWD $file.Source
             if (-not (Test-Path $source)) {
               throw "Executable not found: $source"
             }
 
-            Copy-Item -Path $source -Destination (Join-Path $inputDir $name) -Force
+            $destination = Join-Path $inputDir $file.Destination
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -Path $source -Destination $destination -Force
           }
 
       - name: Validate SignPath configuration
@@ -562,13 +562,13 @@ jobs:
           $inputArtifact = Join-Path $PWD 'Lab-Station-signing-input.zip'
           $signedArtifact = Join-Path $PWD 'Lab-Station-signing-output.zip'
           $signedDir = Join-Path $PWD 'signed-artifact'
-          $files = Get-ChildItem -LiteralPath $inputDir -File
+          $files = Get-ChildItem -LiteralPath $inputDir -Recurse -File
 
           if ($files.Count -ne 4) {
             throw "Expected 4 executables in $inputDir, found $($files.Count)"
           }
 
-          Compress-Archive -Path $files.FullName -DestinationPath $inputArtifact -Force
+          Compress-Archive -Path (Join-Path $inputDir '*') -DestinationPath $inputArtifact -Force
           New-Item -ItemType Directory -Force -Path $signedDir | Out-Null
 
           Submit-SigningRequest `
@@ -607,6 +607,8 @@ jobs:
 
             if ($name -eq 'FMUExecutor.exe') {
               $destination = Join-Path $PWD 'dist/fmu-executor-runtime/FMUExecutor/FMUExecutor.exe'
+            } elseif ($name -eq 'AppControl.exe') {
+              $destination = Join-Path $PWD 'dist/remote-app/AppControl.exe'
             } else {
               $destination = Join-Path $PWD "dist/$name"
             }
@@ -668,7 +670,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: AppControl
-          path: dist/AppControl.exe
+          path: dist/remote-app/AppControl.exe
 
       - name: Upload LabStation executable artifact
         uses: actions/upload-artifact@v7

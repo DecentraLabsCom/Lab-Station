@@ -70,7 +70,7 @@ try {
         Copy-Item -LiteralPath $source -Destination (Join-Path $packageDirectory $name) -Force
     }
 
-    $appControlSource = Join-Path $distDirectory 'AppControl.exe'
+    $appControlSource = Join-Path $distDirectory 'remote-app\AppControl.exe'
     if (-not (Test-Path -LiteralPath $appControlSource -PathType Leaf)) {
         throw "Release executable not found: $appControlSource"
     }

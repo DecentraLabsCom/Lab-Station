@@ -139,68 +139,31 @@ overview.Push({
     )
 })
 overview.Push({
-    name: "DualSimple",
-    cli: '@dual "ClassOne" "C:\\Program Files\\App One.exe" "ClassTwo" app2.exe',
+    name: "WorkspaceInvocation",
+    args: ["@workspace=lab-control-room"],
     expect: Map(
-        "mode", "dual",
-        "windowClass", "ClassOne",
-        "windowClass2", "ClassTwo",
-        "appCommand", '"C:\\Program Files\\App One.exe"',
-        "appCommand2", "app2.exe",
-        "tab1Title", "Application 1",
-        "tab2Title", "Application 2"
+        "mode", "workspace",
+        "workspaceId", "lab-control-room"
     )
 })
 overview.Push({
-    name: "DualWithTabs",
-    cli: '@dual "Chrome_WidgetWin_1" "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --app=http://127.0.0.1:8000" "MozillaWindowClass" "\"C:\\Program Files\\Mozilla Firefox\\firefox.exe\" --private-window" @tab1="Web App" @tab2="Private Browser"',
-    expect: Map(
-        "mode", "dual",
-        "windowClass", "Chrome_WidgetWin_1",
-        "windowClass2", "MozillaWindowClass",
-        "appCommand", '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --app=http://127.0.0.1:8000',
-        "appCommand2", '"C:\\Program Files\\Mozilla Firefox\\firefox.exe" --private-window',
-        "tab1Title", "Web App",
-        "tab2Title", "Private Browser"
-    )
+    name: "WorkspaceRejectsPositionalArguments",
+    args: ["@workspace=lab-control-room", "unexpected.exe"],
+    expectFailure: true,
+    expectedExitCode: 2
 })
 overview.Push({
-    name: "DualQuotedTabTitles",
-    cli: '@dual "ClassOne" app1.exe "ClassTwo" app2.exe @tab1="Main \"Camera\"" @tab2="Viewer Suite"',
-    expect: Map(
-        "mode", "dual",
-        "windowClass", "ClassOne",
-        "windowClass2", "ClassTwo",
-        "appCommand", "app1.exe",
-        "appCommand2", "app2.exe",
-        "tab1Title", 'Main "Camera"',
-        "tab2Title", "Viewer Suite"
-    )
+    name: "WorkspaceRejectsDuplicateOption",
+    args: ["@workspace=first", "@workspace=second"],
+    expectFailure: true,
+    expectedExitCode: 2
 })
 overview.Push({
-    name: "DualGuacExtraArgs",
-    args: [
-        "@dual",
-        "CamClass",
-        "C:\\Program Files\\Camera\\cam.exe",
-        "ViewerClass",
-        "C:\\Program Files\\Viewer\\viewer.exe",
-        "--url=http://viewer.local",
-        "--mode=view",
-        '@tab1="Camera"',
-        '@tab2="Viewer"'
-    ],
-    expect: Map(
-        "mode", "dual",
-        "windowClass", "CamClass",
-        "windowClass2", "ViewerClass",
-        "appCommand", '"C:\\Program Files\\Camera\\cam.exe"',
-        "appCommand2", '"C:\\Program Files\\Viewer\\viewer.exe" --url=http://viewer.local --mode=view',
-        "tab1Title", "Camera",
-        "tab2Title", "Viewer"
-    )
+    name: "DualModeRemoved",
+    args: ["@dual", "ClassOne", "app1.exe", "ClassTwo", "app2.exe"],
+    expectFailure: true,
+    expectedExitCode: 2
 })
-
 Main()
 return
 
@@ -213,6 +176,10 @@ Main() {
     failLogFile := OUTPUT_DIR "\failures.log"
     if FileExist(failLogFile) {
         FileDelete(failLogFile)
+    }
+    progressLogFile := OUTPUT_DIR "\failures-progress.log"
+    if FileExist(progressLogFile) {
+        FileDelete(progressLogFile)
     }
 
     for scenario in overview {

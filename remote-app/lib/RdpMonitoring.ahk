@@ -3,6 +3,10 @@
 ; ============================================================================
 ; Functions for monitoring RDP session events and triggering application closure
 ; ============================================================================
+#Include Config.ahk
+#Include Utils.ahk
+#Include WindowClosing.ahk
+#Include CloseRequest.ahk
 
 ; Returns [EventRecordID, EventID] of the latest RDP events
 GetLatestRdpEventRecord(ids := [23, 24, 39, 40]) {
@@ -155,24 +159,22 @@ QueryLatestRdpEventRecordViaWevtutil(ids) {
 
 ; Check for new RDP session events (fallback polling)
 CheckSessionEvents(*) {
-    global lastId, CloseOnEventIds, target, containerHwnd, VERBOSE_LOGGING, DUAL_APP_MODE
+    global lastId, CloseOnEventIds, target, VERBOSE_LOGGING, WORKSPACE_MODE
 
     rec := GetLatestRdpEventRecord(CloseOnEventIds)
     current := rec[1], evId := rec[2]
     
     if (VERBOSE_LOGGING) {
-        modeStr := DUAL_APP_MODE ? " (Container)" : ""
+        modeStr := WORKSPACE_MODE ? " (Workspace)" : ""
         Log("Event check" . modeStr . " - Current RecordId: " . current . ", Last RecordId: " . lastId . ", EventId: " . evId)
     }
 
     if (current > 0 && current != lastId && evId > 0) {
         lastId := current
         
-        if (DUAL_APP_MODE) {
-            Log("NEW EVENT DETECTED (Container)! Closing due to event ID: " . evId)
-            containerTarget := "ahk_id " . containerHwnd
-            Log("Closing container: " . containerTarget . " (containerHwnd=" . containerHwnd . ")")
-            ForceCloseWindow(containerTarget)
+        if (WORKSPACE_MODE) {
+            Log("NEW EVENT DETECTED (Workspace)! Closing due to event ID: " . evId)
+            ControllerCloseWorkspace("RDP event " . evId)
         } else {
             Log("NEW EVENT DETECTED! Closing due to event ID: " . evId . " (RecordId " . current . ")")
             ForceCloseWindow(target)
@@ -192,18 +194,16 @@ OnSessionChange(wParam, lParam, msg, hwnd) {
     static WTS_SESSION_LOCK := 0x7
     static WTS_SESSION_UNLOCK := 0x8
 
-    global target, DUAL_APP_MODE
+    global target, WORKSPACE_MODE
 
     if (wParam = WTS_SESSION_DISCONNECT
      || wParam = WTS_SESSION_REMOTE_DISCONNECT
      || wParam = WTS_SESSION_LOGOFF
      || wParam = WTS_SESSION_LOCK) 
     {
-        if (DUAL_APP_MODE) {
-            Log("WM_WTSSESSION_CHANGE (Container): early close on wParam=" . wParam)
-            containerTarget := "ahk_id " . hwnd
-            Log("Closing container: " . containerTarget . " (hwnd=" . hwnd . ")")
-            ForceCloseWindow(containerTarget)
+        if (WORKSPACE_MODE) {
+            Log("WM_WTSSESSION_CHANGE (Workspace): early close on wParam=" . wParam)
+            ControllerCloseWorkspace("RDP session change " . wParam)
         } else {
             Log("WM_WTSSESSION_CHANGE: early close on wParam=" . wParam . " (pre-disconnect)")
             ForceCloseWindow(target)
@@ -215,13 +215,11 @@ OnSessionChange(wParam, lParam, msg, hwnd) {
 
 ; Query end session handler (WM_QUERYENDSESSION - logoff/shutdown)
 OnQueryEndSession(wParam, lParam, msg, hwnd) {
-    global target, DUAL_APP_MODE
+    global target, WORKSPACE_MODE
     
-    if (DUAL_APP_MODE) {
-        Log("WM_QUERYENDSESSION (Container): attempting early close", "DEBUG")
-        containerTarget := "ahk_id " . hwnd
-        Log("Closing container: " . containerTarget . " (hwnd=" . hwnd . ")")
-        ForceCloseWindow(containerTarget)
+    if (WORKSPACE_MODE) {
+        Log("WM_QUERYENDSESSION (Workspace): attempting early close", "DEBUG")
+        ControllerCloseWorkspace("Windows session ending")
     } else {
         Log("WM_QUERYENDSESSION received: attempting early close", "DEBUG")
         ForceCloseWindow(target)

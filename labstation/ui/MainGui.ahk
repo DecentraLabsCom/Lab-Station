@@ -32,6 +32,7 @@ LS_StartMainGui() {
 }
 
 LS_BuildGui() {
+    global LAB_STATION_VERSION
     myGui := Gui("-Resize -MaximizeBox", "Lab Station Control Panel")
     myGui.BackColor := "0F1419"
     myGui.SetFont("s10", "Segoe UI")
@@ -124,7 +125,7 @@ LS_BuildGui() {
 
     ; Footer
     myGui.SetFont("s8 c6B7280")
-    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v3.5.8")
+    myGui.AddText("x24 y360 w686 Center", "DecentraLabs © 2025 · Lab Station v" . LAB_STATION_VERSION)
     myGui.RefreshButton.Focus()
 
     myGui.OnEvent("Close", LS_GuiClose_Handler)

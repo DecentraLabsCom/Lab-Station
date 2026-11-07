@@ -3,6 +3,7 @@
 ; ============================================================================
 #Requires AutoHotkey v2.0
 #Include ..\connectors\Connectors.ahk
+#Include WorkspaceEditor.ahk
 
 LS_ShowConnectorsPanel(*) {
     global LS_CONNECTORS_PANEL
@@ -16,8 +17,8 @@ LS_ShowConnectorsPanel(*) {
         }
     }
     LS_CONNECTORS_PANEL := LS_BuildConnectorsPanel()
-    LS_CONNECTORS_PANEL.Show()
     LS_ConnectorsPanelSelect("fmi")
+    LS_CONNECTORS_PANEL.Show()
 }
 
 LS_BuildConnectorsPanel() {
@@ -62,16 +63,27 @@ LS_BuildConnectorsPanel() {
     panel.GatewayConfig := panel.AddEdit("x230 y300 w440 h78 +Wrap ReadOnly -TabStop cD1FAE5 Background111827 +Border")
 
     panel.SetFont("s9 cFFFFFF")
-    panel.StartButton := panel.AddButton("x230 y394 w82 h30", "Start")
-    panel.StartButton.OnEvent("Click", LS_ConnectorsPanelStart_Handler)
-    panel.StopButton := panel.AddButton("x320 y394 w82 h30", "Stop")
-    panel.StopButton.OnEvent("Click", LS_ConnectorsPanelStop_Handler)
-    panel.RestartButton := panel.AddButton("x410 y394 w82 h30", "Restart")
-    panel.RestartButton.OnEvent("Click", LS_ConnectorsPanelRestart_Handler)
-    panel.OpenFolderButton := panel.AddButton("x500 y394 w82 h30", "Folder")
-    panel.OpenFolderButton.OnEvent("Click", LS_ConnectorsPanelOpenFolder_Handler)
-    panel.CopyConfigButton := panel.AddButton("x590 y394 w80 h30", "Copy")
-    panel.CopyConfigButton.OnEvent("Click", LS_ConnectorsPanelCopyConfig_Handler)
+    panel.ActionButtons := Map()
+    panel.ActionButtonWidths := Map(
+        "start", 72,
+        "stop", 72,
+        "restart", 82,
+        "open-folder", 82,
+        "copy-config", 80,
+        "workspace-editor", 142
+    )
+    panel.ActionButtons["start"] := panel.AddButton("x230 y394 w72 h30 Hidden", "Start")
+    panel.ActionButtons["start"].OnEvent("Click", LS_ConnectorsPanelStart_Handler)
+    panel.ActionButtons["stop"] := panel.AddButton("x310 y394 w72 h30 Hidden", "Stop")
+    panel.ActionButtons["stop"].OnEvent("Click", LS_ConnectorsPanelStop_Handler)
+    panel.ActionButtons["restart"] := panel.AddButton("x390 y394 w82 h30 Hidden", "Restart")
+    panel.ActionButtons["restart"].OnEvent("Click", LS_ConnectorsPanelRestart_Handler)
+    panel.ActionButtons["open-folder"] := panel.AddButton("x480 y394 w82 h30 Hidden", "Folder")
+    panel.ActionButtons["open-folder"].OnEvent("Click", LS_ConnectorsPanelOpenFolder_Handler)
+    panel.ActionButtons["copy-config"] := panel.AddButton("x570 y394 w80 h30 Hidden", "Copy")
+    panel.ActionButtons["copy-config"].OnEvent("Click", LS_ConnectorsPanelCopyConfig_Handler)
+    panel.ActionButtons["workspace-editor"] := panel.AddButton("x230 y394 w142 h30 Hidden", "Workspace editor")
+    panel.ActionButtons["workspace-editor"].OnEvent("Click", LS_ConnectorsPanelWorkspaceEditor_Handler)
 
     panel.SetFont("s8 c6B7280")
     panel.AddText("x24 y440 w646 Center", "Connector configuration is local; public routing remains owned by Lab Gateway.")
@@ -102,17 +114,50 @@ LS_ConnectorsPanelRender(panel, connector) {
     panel.ConnectorDetails.Value := connector["summary"] . "`r`n`r`n" . LS_StrJoin(connector["details"], "`r`n")
     panel.GatewayConfig.Value := connector["gatewayConfig"] != "" ? connector["gatewayConfig"] : "No Gateway environment required yet."
 
-    actions := LS_ConnectorsPanelActionMap(connector)
-    panel.StartButton.Enabled := actions.Has("start")
-    panel.StopButton.Enabled := actions.Has("stop") && connector["state"] = "running"
-    panel.RestartButton.Enabled := actions.Has("restart")
-    panel.OpenFolderButton.Enabled := actions.Has("open-folder")
-    panel.CopyConfigButton.Enabled := actions.Has("copy-config")
+    LS_ConnectorsPanelRenderActions(panel, connector)
 
     for id, btn in panel.ConnectorButtons {
         btn.Text := (id = connector["id"] ? "> " : "") . LS_ConnectorRegistry.Get(id)["label"]
         if (LS_ConnectorRegistry.Get(id)["planned"])
             btn.Text .= " (planned)"
+    }
+}
+
+LS_ConnectorsPanelRenderActions(panel, connector) {
+    actions := LS_ConnectorsPanelActionMap(connector)
+    visibleActions := []
+    state := connector["state"]
+
+    if (actions.Has("start") && state = "stopped")
+        visibleActions.Push("start")
+    if (actions.Has("stop") && state = "running")
+        visibleActions.Push("stop")
+    if (actions.Has("restart") && state = "running")
+        visibleActions.Push("restart")
+    if (actions.Has("open-folder"))
+        visibleActions.Push("open-folder")
+    if (actions.Has("copy-config") && connector["gatewayConfig"] != "")
+        visibleActions.Push("copy-config")
+    if (actions.Has("workspace-editor"))
+        visibleActions.Push("workspace-editor")
+
+    for action, button in panel.ActionButtons
+        button.Visible := false
+
+    totalWidth := 0
+    for action in visibleActions
+        totalWidth += panel.ActionButtonWidths[action]
+    if (visibleActions.Length > 1)
+        totalWidth += (visibleActions.Length - 1) * 8
+
+    x := 230 + Max(0, Floor((440 - totalWidth) / 2))
+    for action in visibleActions {
+        button := panel.ActionButtons[action]
+        width := panel.ActionButtonWidths[action]
+        button.Move(x, 394, width, 30)
+        button.Visible := true
+        button.Enabled := true
+        x += width + 8
     }
 }
 
@@ -188,6 +233,10 @@ LS_ConnectorsPanelOpenFolder_Handler(ctrl, info) {
 LS_ConnectorsPanelCopyConfig_Handler(ctrl, info) {
     ok := LS_ConnectorRegistry.CopyGatewayConfig(LS_ConnectorsPanelCurrentId(ctrl))
     MsgBox (ok ? "Gateway configuration copied." : "No Gateway configuration available."), "Lab Station Connectors", (ok ? "OK Iconi" : "OK Iconx")
+}
+
+LS_ConnectorsPanelWorkspaceEditor_Handler(ctrl, info) {
+    LS_ShowWorkspaceEditor()
 }
 
 LS_ConnectorsPanelClose_Handler(guiObj) {

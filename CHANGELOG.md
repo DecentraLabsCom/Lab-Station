@@ -6,6 +6,9 @@
 - Store LABUSER autologon credentials in the Windows LSA secret store and remove the plaintext Winlogon password value.
 - Require separate Gateway source scopes for RDP and WinRM, disable matching generic inbound rules, and report whether the scoped firewall rules remain active.
 - Apply per-user shell, Task Manager, Control Panel, Run, and Explorer drive restrictions to LABUSER in the dedicated station profile.
+- Replace the two-application RemoteApp container with a protected, manifest-driven workspace for up to five applications; preserve the existing single-application launch mode.
+- Grant standard lab users read access to saved workspace manifests while keeping workspace editing administrative.
+- Align the Lab Station UI and reported agent version with the 3.6.0 executable metadata.
 
 ## [3.6.0-preview.2] - 2026-10-09
 

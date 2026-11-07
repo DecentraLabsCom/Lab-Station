@@ -29,17 +29,19 @@ global BROWSER_KIOSK_FLAGS := Map(
     "firefox.exe", "-kiosk -private-window"
 )
 
-; Global variables (initialized here to avoid errors in #HotIf)
-global app1Hwnd := 0
-global app2Hwnd := 0
-global appPid1 := 0
-global appPid2 := 0
-global containerHwnd := 0
-global appContainerHwnd := 0
-global containerTabHeight := 35
-global app1IsUWPApp := false
-global app2IsUWPApp := false
-global DUAL_APP_MODE := false
+; Workspace state (initialized here to avoid errors in #HotIf)
+global WORKSPACE_MODE := false
+global WORKSPACE_TEST_MODE := false
+global WORKSPACE_ID := ""
+global WORKSPACE_GUI := 0
+global WORKSPACE_PANEL := 0
+global WORKSPACE_TABS := 0
+global WORKSPACE_STATUS_TEXT := 0
+global WORKSPACE_APPS := []
+global WORKSPACE_TAB_HEIGHT := 42
+global WORKSPACE_SHUTTING_DOWN := false
+global WORKSPACE_MONITOR_INTERVAL_MS := 1000
+global WORKSPACE_CLOSE_HANDLER := 0
 global CUSTOM_CLOSE_METHOD := "none"
 global target := ""  ; Target window for single mode
 global lastId := 0   ; Last RDP event ID processed

@@ -1,8 +1,8 @@
 ﻿; ============================================================================
 ; AppControl - Lab Application Controller for RDP Disconnect Handling
 ; ============================================================================
-; Manages single or dual applications with automatic closure on RDP disconnect
-; Supports custom close methods and embedded app containers
+; Manages one application or a manifest-driven workspace with automatic closure
+; on RDP disconnect or a Lab Station release request.
 ; ============================================================================
 
 #SingleInstance Force
@@ -22,14 +22,16 @@ try {
 ; LOAD MODULES
 ; ============================================================================
 #Include lib\Config.ahk
+#Include ..\labstation\core\Json.ahk
+#Include lib\WorkspaceConfig.ahk
 #Include lib\Utils.ahk
 #Include lib\WindowClosing.ahk
 #Include lib\CloseRequest.ahk
 #Include lib\RdpMonitoring.ahk
 #Include lib\SingleAppMode.ahk
-#Include lib\DualAppMode.ahk
+#Include lib\WorkspaceMode.ahk
 
-global APP_VERSION := "2.5.0"
+global APP_VERSION := "3.0.0"
 Log("AppControl v" . APP_VERSION . " starting")
 
 ; ============================================================================
@@ -43,11 +45,10 @@ Log("AppControl v" . APP_VERSION . " starting")
 ; (Note: Browser auto-kiosk will add --kiosk --incognito automatically)
 ; AppControl.exe "Notepad++" "\"C:\Program Files (x86)\Notepad++\notepad++.exe\" test.txt" @test
 ;
-; Dual mode example (CMD/Batch syntax):
-; AppControl.exe @dual "MozillaWindowClass" "\"C:\Program Files\Mozilla Firefox\firefox.exe\"" "Notepad++" "\"C:\Program Files (x86)\Notepad++\notepad++.exe\"" @tab1="Firefox" @tab2="Notepad++"
-; (Note: Browser auto-kiosk is disabled in dual mode)
+; Workspace mode example: AppControl.exe @workspace=lab-control-room
 
-if (A_Args.Length < 2) {
+isWorkspaceInvocation := A_Args.Length = 1 && SubStr(StrLower(A_Args[1]), 1, 11) = "@workspace="
+if (A_Args.Length < 2 && !isWorkspaceInvocation) {
     infoHeader := Format("AppControl v{1}`n", APP_VERSION)
     MsgBox infoHeader . "Use: AppControl.exe [window_ahk_class] [C:\path\to\app.exe] [@options]"
     . "`n`nSingle Application Mode:"
@@ -56,14 +57,12 @@ if (A_Args.Length < 2) {
     . "`n- AppControl.exe `"Notepad++`" `\`"notepad++.exe\`" test.txt --myParam`" @test"
     . "`n- AppControl.exe `"MyAppClass`" `"myapp.exe`" @close-button=`"Button2`""
     . "`n- AppControl.exe `"LVDChild`" `"myVI.exe`" @close-coords=`"330,484`" @test"
-    . "`n`nDual Application Mode (Tabbed Container):"
-    . "`n- AppControl.exe @dual `"Class1`" `"App1.exe`" `"Class2`" `"App2.exe`""
-    . "`n- AppControl.exe @dual `"Class1`" `\`"App1.exe\`" --param1 value1`" `"Class2`" `\`"App2.exe\`" --param2 value2`" @tab1=`"Camera`" @tab2=`"Viewer`""
-    . "`n- Both apps shown in tabs within a single container window"
+    . "`n`nWorkspace Mode (2 to 5 applications):"
+    . "`n- AppControl.exe @workspace=lab-control-room"
+    . "`n- Administrators define each workspace in its protected JSON manifest."
     . "`n`nOptions (use @ prefix to avoid conflicts with app parameters):"
-    . "`n  @dual                    Enable dual app mode (tabbed container)"
-    . "`n  @tab1=`"Title`"           Custom title for first tab (dual mode only)"
-    . "`n  @tab2=`"Title`"           Custom title for second tab (dual mode only)"
+    . "`n  @workspace=<id>          Open the administrator-configured workspace (maximum 5 apps)"
+    . "`n  @workspace-test          Show a closable local workspace test window"
     . "`n  @close-button=`"ClassNN`" Custom close button control (e.g., Button2)"
     . "`n  @close-coords=`"X,Y`"     Custom close coordinates in CLIENT space"
     . "`n  @test                    Test custom close method after 5 seconds"
@@ -110,13 +109,11 @@ HasOuterQuotes(value) {
     return StrLen(value) >= 2 && SubStr(value, 1, 1) = quote && SubStr(value, -1) = quote
 }
 
-; Parse optional parameters
-DUAL_APP_MODE := false
-tab1Title := "Application 1"  ; Default title
-tab2Title := "Application 2"  ; Default title
-positionalArgs := []  ; Non-option arguments
+; Parse AppControl options. Normal single-app parsing below remains unchanged.
+workspaceId := ""
+workspaceRequested := false
+positionalArgs := []
 
-; Global variables for custom close (accessed by Utils.ahk and WindowClosing.ahk)
 global customCloseControl := ""
 global customCloseX := 0
 global customCloseY := 0
@@ -124,7 +121,6 @@ global TEST_MODE := false
 global CUSTOM_CLOSE_METHOD := "none"
 global ARGS_DUMP_PATH := ""
 
-; Log all received arguments for debugging
 Log("==== RECEIVED ARGUMENTS ====")
 Log("Total arguments: " . A_Args.Length)
 for index, arg in A_Args {
@@ -132,47 +128,44 @@ for index, arg in A_Args {
 }
 Log("============================")
 
-; First pass: extract options (prefixed with @) and collect positional arguments
 for index, arg in A_Args {
     if (SubStr(arg, 1, 1) = "@") {
-        ; This is a AppControl option (prefixed with @)
         argLower := StrLower(arg)
-        
         if (argLower = "@dual") {
-            DUAL_APP_MODE := true
-            Log("@dual flag detected - Dual app mode enabled")
+            Log("The @dual mode has been replaced by manifest-driven @workspace mode", "ERROR")
+            if !SILENT_ERRORS
+                MsgBox "The @dual mode has been removed. Configure an admin-managed workspace and use @workspace=<id>.", "AppControl", "OK Iconx"
+            ExitApp(2)
+        } else if (SubStr(argLower, 1, 11) = "@workspace=") {
+            if (workspaceRequested) {
+                Log("Only one @workspace option is allowed", "ERROR")
+                ExitApp(2)
+            }
+            workspaceRequested := true
+            workspaceId := StripOuterQuotes(SubStr(arg, 12))
+            Log("Workspace selected: " . workspaceId, "INFO")
+        } else if (argLower = "@workspace-test") {
+            if (WORKSPACE_TEST_MODE) {
+                Log("Only one @workspace-test option is allowed", "ERROR")
+                ExitApp(2)
+            }
+            WORKSPACE_TEST_MODE := true
+            Log("Local workspace test mode enabled", "INFO")
         } else if (argLower = "@test") {
             TEST_MODE := true
-            Log("@test flag detected - Test mode enabled")
-        } else if (SubStr(argLower, 1, 6) = "@tab1=") {
-            tab1Title := SubStr(arg, 7)
-            quote := Chr(34)
-            if (SubStr(tab1Title, 1, 1) = quote && SubStr(tab1Title, -1) = quote) {
-                tab1Title := SubStr(tab1Title, 2, StrLen(tab1Title) - 2)
-            }
-            Log("Custom tab 1 title: " . tab1Title)
-        } else if (SubStr(argLower, 1, 6) = "@tab2=") {
-            tab2Title := SubStr(arg, 7)
-            quote := Chr(34)
-            if (SubStr(tab2Title, 1, 1) = quote && SubStr(tab2Title, -1) = quote) {
-                tab2Title := SubStr(tab2Title, 2, StrLen(tab2Title) - 2)
-            }
-            Log("Custom tab 2 title: " . tab2Title)
+            Log("@test flag detected", "DEBUG")
         } else if (SubStr(argLower, 1, 14) = "@close-button=") {
             customCloseControl := SubStr(arg, 15)
             quote := Chr(34)
-            if (SubStr(customCloseControl, 1, 1) = quote && SubStr(customCloseControl, -1) = quote) {
+            if (SubStr(customCloseControl, 1, 1) = quote && SubStr(customCloseControl, -1) = quote)
                 customCloseControl := SubStr(customCloseControl, 2, StrLen(customCloseControl) - 2)
-            }
             CUSTOM_CLOSE_METHOD := "control"
             Log("Custom close button: " . customCloseControl)
         } else if (SubStr(argLower, 1, 14) = "@close-coords=") {
             coordsStr := SubStr(arg, 15)
             quote := Chr(34)
-            if (SubStr(coordsStr, 1, 1) = quote && SubStr(coordsStr, -1) = quote) {
+            if (SubStr(coordsStr, 1, 1) = quote && SubStr(coordsStr, -1) = quote)
                 coordsStr := SubStr(coordsStr, 2, StrLen(coordsStr) - 2)
-            }
-            ; Parse X,Y coordinates
             coords := StrSplit(coordsStr, ",")
             if (coords.Length = 2) {
                 customCloseX := Integer(coords[1])
@@ -180,124 +173,57 @@ for index, arg in A_Args {
                 CUSTOM_CLOSE_METHOD := "coordinates"
                 Log("Custom close coordinates: " . customCloseX . "," . customCloseY)
             } else {
-                if !SILENT_ERRORS {
+                if !SILENT_ERRORS
                     MsgBox("Error: @close-coords must be in format X,Y (e.g., @close-coords=`"330,484`")", "Invalid Coordinates", 16)
-                }
                 ExitApp(1)
             }
         } else if (SubStr(argLower, 1, 11) = "@dump-args=") {
             ARGS_DUMP_PATH := StripOuterQuotes(SubStr(arg, 12))
             if (ARGS_DUMP_PATH = "") {
-                MsgBox("Error: @dump-args requires a valid file path", "Invalid @dump-args", 16)
+                Log("@dump-args requires a file path", "ERROR")
                 ExitApp(1)
             }
-            Log("Argument dump will be written to: " . ARGS_DUMP_PATH)
+            Log("Argument dump requested", "DEBUG")
         } else {
-            Log("WARNING: Unknown option: " . arg . " - ignoring")
+            Log("WARNING: Unknown option: " . arg . " - ignoring", "WARNING")
         }
     } else {
-        ; This is a positional argument (window class, app command, or app parameters)
         positionalArgs.Push(arg)
     }
 }
 
-; Validate custom close parameters
 if (customCloseControl != "" && (customCloseX > 0 || customCloseY > 0)) {
-    if !SILENT_ERRORS {
+    if !SILENT_ERRORS
         MsgBox("Error: Cannot use both @close-button and @close-coords at the same time", "Invalid Parameters", 16)
-    }
     ExitApp(1)
 }
 
-; Parse arguments based on mode
+if (WORKSPACE_TEST_MODE && !workspaceRequested) {
+    Log("@workspace-test requires @workspace=<id>", "ERROR")
+    if !SILENT_ERRORS
+        MsgBox "@workspace-test can only be used with @workspace=<id>.", "AppControl", "OK Iconx"
+    ExitApp(2)
+}
+
 ControllerRegisterPresence()
 
-if (DUAL_APP_MODE) {
-    ; Dual app mode: class1 command1 class2 command2
-    if (positionalArgs.Length < 4) {
-        MsgBox "Error: Dual mode requires 4 arguments: class1 command1 class2 command2"
-        ExitApp
+if (workspaceRequested) {
+    if (positionalArgs.Length != 0 || CUSTOM_CLOSE_METHOD != "none" || TEST_MODE) {
+        Log("Workspace mode accepts @workspace, optional @workspace-test, and optional @dump-args", "ERROR")
+        ExitApp(2)
     }
-    
-    windowClass := positionalArgs[1]
-    appInput := positionalArgs[2]
-    appWasQuoted := HasOuterQuotes(appInput)
-    appCommand := StripOuterQuotes(appInput)
-    windowClass2 := positionalArgs[3]
-    appInput2 := positionalArgs[4]
-    appWasQuoted2 := HasOuterQuotes(appInput2)
-    appCommand2 := StripOuterQuotes(appInput2)
-    quote := Chr(34)
-    
-    ; Reconstruct commands if there are additional arguments beyond the basic 4
-    ; This handles cases where Guacamole might split application parameters
-    if (positionalArgs.Length > 4) {
-        Log("Additional arguments in dual mode - may need reconstruction")
-
-        ; Wrap executables before appending any extra parameters so spaces stay intact
-        if (SubStr(appCommand, 1, 1) != quote) {
-            appCommand := quote . appCommand . quote
-            Log("Wrapped app1 executable path for reconstruction")
-        }
-        if (SubStr(appCommand2, 1, 1) != quote) {
-            appCommand2 := quote . appCommand2 . quote
-            Log("Wrapped app2 executable path for reconstruction")
-        }
-        
-        ; Collect extra arguments - they could belong to either app
-        ; Strategy: Assume extra args belong to app2 if we can't determine otherwise
-        Loop positionalArgs.Length - 4 {
-            argIndex := 4 + A_Index
-            appCommand2 .= " " . positionalArgs[argIndex]
-            Log("Added argument to App2 [" . argIndex . "]: " . positionalArgs[argIndex])
-        }
-        
-        Log("Reconstructed App2 command: " . appCommand2)
-    }
-
-    ; Ensure simple paths with spaces stay quoted when no extra parameters were provided
-    if (InStr(appCommand, " ") && SubStr(appCommand, 1, 1) != quote) {
-        appCommand := quote . appCommand . quote
-        Log("Auto-quoted App1 executable path (dual mode): " . appCommand)
-    } else if (!InStr(appCommand, " ") && appWasQuoted && SubStr(appCommand, 1, 1) != quote) {
-        appCommand := quote . appCommand . quote
-        Log("Preserved App1 quotes (dual mode)")
-    }
-    if (InStr(appCommand2, " ") && SubStr(appCommand2, 1, 1) != quote) {
-        appCommand2 := quote . appCommand2 . quote
-        Log("Auto-quoted App2 executable path (dual mode): " . appCommand2)
-    } else if (!InStr(appCommand2, " ") && appWasQuoted2 && SubStr(appCommand2, 1, 1) != quote) {
-        appCommand2 := quote . appCommand2 . quote
-        Log("Preserved App2 quotes (dual mode)")
-    }
-    
-    ; NOTE: Browser kiosk mode is NOT applied in dual mode
-    ; Kiosk mode would prevent apps from being embedded in the tab container
-    
-    ; Extract executable paths for validation and logging
-    appPath := IsFullCommand(appCommand) ? ExtractExecutablePath(appCommand) : appCommand
-    appPath2 := IsFullCommand(appCommand2) ? ExtractExecutablePath(appCommand2) : appCommand2
-    
-    Log("App 1: Class=" . windowClass . ", Command=" . appCommand . ", Tab Title=" . tab1Title)
-    Log("App 2: Class=" . windowClass2 . ", Command=" . appCommand2 . ", Tab Title=" . tab2Title)
-    Log("DUAL MODE: Browser kiosk auto-enhancement is disabled (apps must be embeddable)", "INFO")
-
     if (ARGS_DUMP_PATH != "") {
-        dump := Map()
-        dump["windowClass"] := windowClass
-        dump["windowClass2"] := windowClass2
-        dump["appCommand"] := appCommand
-        dump["appCommand2"] := appCommand2
-        dump["tab1Title"] := tab1Title
-        dump["tab2Title"] := tab2Title
-        DumpParsedArgs("dual", dump)
-        ExitApp
+        DumpParsedArgs("workspace", Map("workspaceId", workspaceId, "testMode", WORKSPACE_TEST_MODE ? "true" : "false"))
+        ExitApp(0)
     }
-    
-    ; Launch dual app container with custom tab titles
-    CreateDualAppContainer(windowClass, appCommand, windowClass2, appCommand2, tab1Title, tab2Title)
-    return  ; Container handles everything from here
-    
+    try WorkspaceStart(workspaceId, WORKSPACE_TEST_MODE)
+    catch as e {
+        Log("Unable to start workspace '" . workspaceId . "': " . e.Message, "ERROR")
+        if !SILENT_ERRORS
+            MsgBox "Unable to start workspace '" . workspaceId . "'. Check the AppControl log for details.", "AppControl", "OK Iconx"
+        ExitApp(1)
+    }
+    return
 } else {
     ; Single app mode
     if (positionalArgs.Length < 2) {
@@ -392,9 +318,8 @@ if (DUAL_APP_MODE) {
 !F4::return
 #HotIf
 
-; Block Alt+F4 on both embedded applications (dual app mode)
-; Check if app1Hwnd is set (non-zero) to ensure we're in dual mode
-#HotIf (app1Hwnd != 0) && (WinActive("ahk_id " . app1Hwnd) || WinActive("ahk_id " . app2Hwnd))
+; Block Alt+F4 on application windows hosted by the workspace.
+#HotIf WorkspaceHasActiveWindow() && !WorkspaceTestMode()
 !F4::return
 #HotIf
 

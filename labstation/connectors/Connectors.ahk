@@ -76,7 +76,7 @@ class LS_ConnectorRegistry {
             "planned", false,
             "details", details,
             "gatewayConfig", "",
-            "actions", ["open-folder"]
+            "actions", ["open-folder", "workspace-editor"]
         )
     }
 

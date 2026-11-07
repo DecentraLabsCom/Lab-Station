@@ -6,6 +6,9 @@
 ; without force-killing the controller or relying on a particular desktop
 ; session/window handle.
 ; ============================================================================
+#Include Config.ahk
+#Include Utils.ahk
+#Include WindowClosing.ahk
 
 ControllerRegisterPresence() {
     global CONTROLLER_CLOSE_PRESENCE_TOKEN, CONTROLLER_DATA_DIR, CONTROLLER_PRESENCE_FILE
@@ -42,7 +45,7 @@ ControllerSetupCloseRequestMonitoring() {
 ControllerCheckCloseRequest(*) {
     global CONTROLLER_CLOSE_REQUEST_FILE, CONTROLLER_CLOSE_REQUEST_START_TICK
     global CONTROLLER_CLOSE_REQUEST_LAST_TOKEN, CONTROLLER_CLOSE_REQUEST_HANDLED
-    global DUAL_APP_MODE, containerHwnd, target
+    global WORKSPACE_MODE, target
 
     if (CONTROLLER_CLOSE_REQUEST_HANDLED || !FileExist(CONTROLLER_CLOSE_REQUEST_FILE))
         return
@@ -65,16 +68,14 @@ ControllerCheckCloseRequest(*) {
     CONTROLLER_CLOSE_REQUEST_HANDLED := true
     Log("Cooperative controller close requested", "INFO")
 
-    closeTarget := DUAL_APP_MODE
-        ? (containerHwnd ? "ahk_id " . containerHwnd : "")
-        : target
     success := false
-    if (closeTarget != "") {
-        try {
-            success := ForceCloseWindow(closeTarget, 3)
-        } catch as e {
-            Log("Controller close failed: " . e.Message, "ERROR")
-        }
+    try {
+        if (WORKSPACE_MODE)
+            success := ControllerCloseWorkspace("Lab Station release request")
+        else if (target != "")
+            success := ForceCloseWindow(target, 3)
+    } catch as e {
+        Log("Controller close failed: " . e.Message, "ERROR")
     }
 
     ControllerWriteCloseResult(token, success)
@@ -89,6 +90,13 @@ ControllerCheckCloseRequest(*) {
     Log("Controlled lab application close did not complete; controller remains active", "ERROR")
 }
 
+ControllerCloseWorkspace(reason) {
+    global WORKSPACE_CLOSE_HANDLER
+    if (!IsObject(WORKSPACE_CLOSE_HANDLER))
+        throw Error("Workspace close handler is not initialized")
+    return WORKSPACE_CLOSE_HANDLER.Call(reason)
+}
+
 ControllerWriteCloseResult(token, success) {
     global CONTROLLER_CLOSE_RESULT_FILE
     status := success ? "ok" : "failed"
@@ -99,7 +107,8 @@ ControllerWriteCloseResult(token, success) {
 ControllerWriteAtomic(path, content) {
     tempPath := path . ".tmp-" . A_TickCount
     try {
-        FileDelete(tempPath)
+        if (FileExist(tempPath))
+            FileDelete(tempPath)
         FileAppend(content, tempPath, "UTF-8")
         FileMove(tempPath, path, 1)
         return true
