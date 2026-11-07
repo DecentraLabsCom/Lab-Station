@@ -17,9 +17,16 @@ from pathlib import Path
 if getattr(sys, "frozen", False):
     # The executable is in fmu-executor/runtime; keep mutable FMU files beside
     # that runtime, outside PyInstaller's _internal directory.
+    runtime_directory = Path(sys.executable).resolve().parent
     executor_root = Path(sys.executable).resolve().parent.parent
 else:
+    runtime_directory = Path(__file__).resolve().parent
     executor_root = Path(__file__).resolve().parent
+
+# Multiprocessing workers inherit this directory in their spawn preparation
+# data. The isolated worker can read the runtime directory, but not an
+# arbitrary caller directory such as the service account's TEMP folder.
+os.chdir(runtime_directory)
 
 os.environ.setdefault("FMU_ROOT", str(executor_root / "fmu-data"))
 os.environ.setdefault("FMU_EXECUTOR_TEMP", str(executor_root / "fmu-data" / ".tmp"))
