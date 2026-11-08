@@ -21,7 +21,10 @@ DirCreate(APP_WORKSPACE_CONFIG_ROOT)
 DirCreate(CONTROLLER_DATA_DIR)
 
 RunWorkspaceModeTests()
-ExitApp(TEST_FAILURES ? 1 : 0)
+FileAppend("[WorkspaceModeTests] exit status " . TEST_FAILURES . "`n", "*")
+if (TEST_FAILURES > 0)
+    ExitApp(1)
+ExitApp(0)
 
 RunWorkspaceModeTests() {
     global TEST_FAILURES, TEST_ASSERTIONS, TEST_ROOT, WORKSPACE_MODE, WORKSPACE_SHUTTING_DOWN, WORKSPACE_GUI
@@ -45,7 +48,9 @@ RunWorkspaceModeTests() {
             DirDelete(TEST_ROOT, true)
     }
 
-    OutputDebug(Format("[WorkspaceModeTests] {1} assertions, {2} failures", TEST_ASSERTIONS, TEST_FAILURES))
+    summary := Format("[WorkspaceModeTests] {1} assertions, {2} failures", TEST_ASSERTIONS, TEST_FAILURES)
+    OutputDebug(summary)
+    FileAppend(summary . "`n", "*")
 }
 
 RunManifestValidationTests() {
@@ -61,6 +66,17 @@ RunManifestValidationTests() {
     TestAssert(loaded[1]["id"] = "alpha", "valid manifest preserves app order")
     TestAssert(loaded[1]["startupTimeoutSeconds"] = 30, "valid manifest applies its startup timeout")
     TestAssert(loaded[1]["workingDirectory"] != "", "missing working directory defaults to executable directory")
+    TestAssert(loaded[1]["windowExecutable"] = A_AhkPath,
+        "window executable defaults to the launched executable")
+
+    launcherApps := [TestAppJson("launcher", A_WinDir . "\System32\cmd.exe", "[]", 30,
+        "Launcher", "", "", A_AhkPath), TestAppJson("other", A_AhkPath)]
+    WriteTestManifest("separate-window-executable", BuildManifestJson("separate-window-executable", launcherApps))
+    loadedLauncher := WorkspaceLoadManifest("separate-window-executable")
+    TestAssert(loadedLauncher[1]["executable"] = A_WinDir . "\System32\cmd.exe",
+        "manifest keeps the launcher executable")
+    TestAssert(loadedLauncher[1]["windowExecutable"] = A_AhkPath,
+        "manifest accepts a separate target window executable")
 
     maxApps := []
     Loop 5
@@ -102,6 +118,12 @@ RunManifestValidationTests() {
     WriteTestManifest("missing-exe", BuildManifestJson("missing-exe", missingExeApps))
     TestExpectError("missing-exe", "existing .exe file", "nonexistent executable is rejected")
 
+    missingWindowExeApps := [TestAppJson("missing-window-exe", A_AhkPath, "[]", 30,
+        "Missing window executable", "AutoHotkeyGUI", "", TEST_ROOT . "\missing-window.exe"),
+        TestAppJson("other", A_AhkPath)]
+    WriteTestManifest("missing-window-exe", BuildManifestJson("missing-window-exe", missingWindowExeApps))
+    TestExpectError("missing-window-exe", "windowExecutable", "nonexistent window executable is rejected")
+
     invalidArgsApps := [TestAppJson("bad-args", A_AhkPath, JsonQuote("not-an-array")), TestAppJson("other", A_AhkPath)]
     WriteTestManifest("invalid-args", BuildManifestJson("invalid-args", invalidArgsApps))
     TestExpectError("invalid-args", "arguments must be an array", "non-array arguments are rejected")
@@ -136,16 +158,23 @@ RunWorkspaceLifecycleSmokeTest() {
 
     fakeAppPath := A_ScriptDir . "\FakeApp.ahk"
     fakeLauncherPath := A_ScriptDir . "\FakeLauncher.ahk"
+    delayedLauncherPath := A_ScriptDir . "\FakeLauncher.ps1"
     if (!FileExist(fakeAppPath))
         throw Error("FakeApp.ahk was not found: " . fakeAppPath)
     if (!FileExist(fakeLauncherPath))
         throw Error("FakeLauncher.ahk was not found: " . fakeLauncherPath)
+    if (!FileExist(delayedLauncherPath))
+        throw Error("FakeLauncher.ps1 was not found: " . delayedLauncherPath)
+    minimizedMarker := A_Temp . Chr(92) . "Workspace Smoke Alpha Minimized.txt"
+    if (FileExist(minimizedMarker))
+        FileDelete(minimizedMarker)
 
     apps := [
         TestAppJson("alpha", A_AhkPath, JsonArray([
             fakeAppPath, "--class", "AutoHotkeyGUI", "--title", "Workspace Smoke Alpha",
             "--color", "0x2B5797", "--extra-title", "Workspace Smoke Alpha Secondary",
-            "--extra-delay", "1000", "--helper-title", "Workspace Smoke Alpha Helper", "--lifetime", "120"
+            "--extra-delay", "8500", "--helper-title", "Workspace Smoke Alpha Helper",
+            "--minimized", "true", "--minimized-marker", minimizedMarker, "--lifetime", "120"
         ]), 15, "Smoke Alpha", "AutoHotkeyGUI", "Workspace Smoke Alpha"),
         TestAppJson("beta", A_AhkPath, JsonArray([
             fakeAppPath, "--class", "AutoHotkeyGUI", "--title", "Workspace Smoke Beta",
@@ -153,19 +182,32 @@ RunWorkspaceLifecycleSmokeTest() {
         ]), 15, "Smoke Beta", "AutoHotkeyGUI", "Workspace Smoke Beta"),
         TestAppJson("gamma", A_AhkPath, JsonArray([
             fakeLauncherPath, fakeAppPath, "Workspace Smoke Gamma"
-        ]), 15, "Smoke Gamma", "AutoHotkeyGUI", "Workspace Smoke Gamma")
+        ]), 15, "Smoke Gamma", "AutoHotkeyGUI", "Workspace Smoke Gamma"),
+        TestAppJson("delta", A_WinDir . "\System32\WindowsPowerShell\v1.0\powershell.exe", JsonArray([
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", delayedLauncherPath,
+            A_AhkPath, fakeAppPath, "Workspace Launcher Splash", "Workspace Smoke Delta", "7000"
+        ]), 20, "Smoke Delta", "AutoHotkeyGUI", "Workspace Smoke Delta", A_AhkPath)
     ]
     WriteTestManifest("smoke", BuildManifestJson("smoke", apps))
 
     TestAssert(WorkspaceStart("smoke"), "workspace smoke starts")
-    TestAssert(WORKSPACE_APPS.Length = 3, "workspace stores all app records")
-    TestAssert(WORKSPACE_APPS[1]["hwnds"].Length = 1,
-        "startup embeds only the primary app window and ignores small helpers")
+    TestAssert(WORKSPACE_APPS.Length = 4, "workspace stores all app records")
+    TestAssert(FileExist(minimizedMarker) && FileRead(minimizedMarker, "UTF-8") = "minimized",
+        "smoke app confirms it launched minimized")
+    TestAssert(!DllCall("IsIconic", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
+        "initial workspace tab restores its minimized main window")
+    TestAssert(WORKSPACE_APPS[1]["hwnds"].Length >= 1, "workspace embeds the primary app window")
+    hasSmallHelper := false
+    for hwnd in WORKSPACE_APPS[1]["hwnds"] {
+        if InStr(WinGetTitle("ahk_id " . hwnd), "Workspace Smoke Alpha Helper")
+            hasSmallHelper := true
+    }
+    TestAssert(!hasSmallHelper, "startup ignores small helper windows")
     hostDpiContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", WORKSPACE_GUI.Hwnd, "Ptr")
     panelDpiContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", WORKSPACE_PANEL.Hwnd, "Ptr")
     TestAssert(DllCall("AreDpiAwarenessContextsEqual", "Ptr", hostDpiContext, "Ptr", panelDpiContext, "Int"),
         "workspace host and panel use the same DPI context")
-    if (WORKSPACE_APPS.Length != 3)
+    if (WORKSPACE_APPS.Length != 4)
         return
 
     for app in WORKSPACE_APPS {
@@ -179,9 +221,23 @@ RunWorkspaceLifecycleSmokeTest() {
         "workspace adopts a window delegated to another process")
     TestAssert(!WorkspaceLaunchProcessIsRunning(WORKSPACE_APPS[3]),
         "delegated launcher can exit while its workspace window remains active")
+    TestAssert(WORKSPACE_APPS[4]["windowPid"] != WORKSPACE_APPS[4]["pid"],
+        "delayed launcher target is adopted from its own process")
+    TestAssert(WORKSPACE_APPS[4]["windowExecutable"] = A_AhkPath,
+        "workspace matches the configured target executable")
+    TestAssert(!WorkspaceLaunchProcessIsRunning(WORKSPACE_APPS[4]),
+        "delayed target remains usable after its launcher exits")
+    deltaTitle := WinGetTitle("ahk_id " . WORKSPACE_APPS[4]["hwnd"])
+    TestAssert(InStr(deltaTitle, "Workspace Smoke Delta") && !InStr(deltaTitle, "Splash"),
+        "startup ignores the launcher's splash and waits for the main window")
+    TestAssert(WORKSPACE_APPS[4]["hwnds"].Length = 1,
+        "transient splash is not attached as a workspace application window")
 
-    Sleep(1300)
-    WorkspaceMonitor()
+    lateWindowDeadline := A_TickCount + 5000
+    while (WORKSPACE_APPS[1]["hwnds"].Length < 2 && A_TickCount < lateWindowDeadline) {
+        Sleep(100)
+        WorkspaceMonitor()
+    }
     TestAssert(WORKSPACE_APPS[1]["hwnds"].Length = 2,
         "workspace adopts a secondary application window created after startup")
     if (WORKSPACE_APPS[1]["hwnds"].Length >= 2) {
@@ -195,6 +251,14 @@ RunWorkspaceLifecycleSmokeTest() {
     if (WORKSPACE_APPS[1]["hwnds"].Length >= 2)
         TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnds"][2], "Int"), "first tab shows its secondary window")
     TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[2]["hwnd"], "Int"), "first tab hides the other app")
+
+    DllCall("ShowWindow", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int", 6) ; SW_MINIMIZE
+    TestAssert(DllCall("IsIconic", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
+        "smoke app can enter the minimized state")
+    WorkspaceSelectTab(1)
+    Sleep(50)
+    TestAssert(!DllCall("IsIconic", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
+        "selecting a tab restores its minimized main window")
 
     WORKSPACE_TABS.Value := 2
     WorkspaceSelectTab(2)
@@ -212,9 +276,11 @@ RunWorkspaceLifecycleSmokeTest() {
 
     if (IsObject(WORKSPACE_GUI))
         WORKSPACE_GUI.Destroy()
+    if (FileExist(minimizedMarker))
+        FileDelete(minimizedMarker)
 }
 
-TestAppJson(id, executable, argumentsJson := "[]", timeout := 10, title := "", windowClass := "AutoHotkeyGUI", titleContains := "") {
+TestAppJson(id, executable, argumentsJson := "[]", timeout := 10, title := "", windowClass := "AutoHotkeyGUI", titleContains := "", windowExecutable := "") {
     if (title = "")
         title := id
     appJson := "{" . JsonQuote("id") . ":" . JsonQuote(id)
@@ -222,6 +288,8 @@ TestAppJson(id, executable, argumentsJson := "[]", timeout := 10, title := "", w
         . "," . JsonQuote("executable") . ":" . JsonQuote(executable)
         . "," . JsonQuote("arguments") . ":" . argumentsJson
         . "," . JsonQuote("windowClass") . ":" . JsonQuote(windowClass)
+    if (windowExecutable != "")
+        appJson .= "," . JsonQuote("windowExecutable") . ":" . JsonQuote(windowExecutable)
     if (titleContains != "")
         appJson .= "," . JsonQuote("windowTitleContains") . ":" . JsonQuote(titleContains)
     return appJson . "," . JsonQuote("startupTimeoutSeconds") . ":" . timeout . "}"
@@ -280,5 +348,7 @@ TestAssert(condition, description) {
 TestFail(description, message) {
     global TEST_FAILURES
     TEST_FAILURES += 1
-    OutputDebug(Format("[WorkspaceModeTests] FAIL: {1}: {2}", description, message))
+    failure := Format("[WorkspaceModeTests] FAIL: {1}: {2}", description, message)
+    OutputDebug(failure)
+    FileAppend(failure . "`n", "*")
 }

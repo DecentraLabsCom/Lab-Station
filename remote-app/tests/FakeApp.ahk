@@ -33,10 +33,13 @@ lifetimeSec := opts.Has("lifetime") && opts["lifetime"] != "" ? Integer(opts["li
 extraWindowTitle := opts.Has("extra-title") ? opts["extra-title"] : ""
 extraWindowDelayMs := opts.Has("extra-delay") && opts["extra-delay"] != "" ? Integer(opts["extra-delay"]) : 1000
 helperWindowTitle := opts.Has("helper-title") ? opts["helper-title"] : ""
+minimizedMarker := opts.Has("minimized-marker") ? opts["minimized-marker"] : ""
 
 ; Gui() uses AutoHotkey's stable runtime window class. The smoke test combines
 ; that class with each process ID when locating the windows.
 windowOptions := "+Resize -MaximizeBox +OwnDialogs"
+if (opts.Has("toolwindow") && opts["toolwindow"] = "true")
+    windowOptions .= " +ToolWindow"
 
 fakeGui := Gui(windowOptions, title)
 fakeGui.BackColor := color
@@ -46,6 +49,12 @@ fakeGui.AddButton("xm y+20 w120", "Idle")
 fakeGui.AddButton("x+10 yp w120", "Stop")
 
 fakeGui.Show("w420 h260")
+
+if (opts.Has("minimized") && opts["minimized"] = "true") {
+    DllCall("ShowWindow", "Ptr", fakeGui.Hwnd, "Int", 6) ; SW_MINIMIZE
+    if (minimizedMarker != "")
+        FileAppend(DllCall("IsIconic", "Ptr", fakeGui.Hwnd, "Int") ? "minimized" : "visible", minimizedMarker, "UTF-8")
+}
 
 if (helperWindowTitle != "") {
     helperGui := Gui("+ToolWindow", helperWindowTitle)

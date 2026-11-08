@@ -16,6 +16,7 @@
 #Include core\Json.ahk
 #Include system\RegistryManager.ahk
 #Include system\RemoteAppWorkspaceStore.ahk
+#Include system\AppControlManager.ahk
 #Include system\WakeOnLan.ahk
 #Include system\AccountManager.ahk
 #Include system\WinRM.ahk
@@ -172,30 +173,6 @@ LS_HandleWinRMCommand(args) {
             LS_ShowMessage("Usage: LabStation.exe winrm [configure|status]", "Lab Station", "OK Iconi")
             return 2
     }
-}
-
-LS_LaunchAppControl(args) {
-    controllerExe := LAB_STATION_REMOTE_APP_DIR "\AppControl.exe"
-    controllerScript := LAB_STATION_REMOTE_APP_DIR "\AppControl.ahk"
-    if (FileExist(controllerExe)) {
-        Run Format('"{1}" {2}', controllerExe, LS_BuildCliFromArgs(args))
-        return true
-    }
-    if (!FileExist(controllerScript)) {
-        LS_ShowMessage("AppControl was not found next to Lab Station.", "Lab Station", "OK Iconx")
-        LS_LogError("AppControl.* not available")
-        return false
-    }
-    Run Format('"{1}" "{2}" {3}', A_AhkPath, controllerScript, LS_BuildCliFromArgs(args))
-    return true
-}
-
-LS_BuildCliFromArgs(args) {
-    cli := ""
-    for arg in args {
-        cli .= (cli = "" ? "" : " ") . LS_EscapeCliArgument(arg)
-    }
-    return cli
 }
 
 LS_RunDiagnosticsCommand(args) {

@@ -66,6 +66,7 @@ Example `lab-control-room.json`:
       "id": "viewer",
       "title": "Results",
       "executable": "C:\\LabApps\\ResultsViewer.exe",
+      "windowExecutable": "C:\\LabApps\\ResultsViewer\\Viewer.exe",
       "windowClass": "ResultsViewerWindow",
       "windowTitleContains": "Results"
     }
@@ -73,15 +74,24 @@ Example `lab-control-room.json`:
 }
 ```
 
-Each application must create a visible top-level window in the launched process
-before its startup timeout. AppControl selects the main window automatically
-when there is one candidate. If startup creates multiple top-level windows,
-set `windowTitleContains` or `windowClass` to select the main one. Executables
-and working directories must exist. Use trusted,
+`executable` is the program AppControl launches. If that launcher starts a
+different executable that owns the real application window, set
+`windowExecutable` to that executable's full path. It defaults to `executable`.
+AppControl waits for a visible primary window from `windowExecutable` before it
+starts the workspace monitor. Startup splashes, owned popups, standard Windows
+dialogs, and tool windows cannot satisfy that wait. When several main-like
+windows appear, set `windowTitleContains` or `windowClass` to select the intended
+one. After the main window attaches, its owned popups and tool windows are
+tracked as auxiliary windows even when their class or title differs. They keep
+their native size and owner relationship, and are shown or hidden with their
+application's tab. They are not re-parented or stretched across the workspace.
+If a main window starts minimized, AppControl uses its restored bounds to detect
+it and restores it to the workspace size when its tab is selected.
+Executables and working directories must exist. Use trusted,
 administrator-managed application directories. The workspace host supports
 regular Win32 desktop windows; UWP windows are rejected. Applications with
-incompatible DPI-awareness settings or windows that cannot be re-parented fail
-startup and AppControl closes the applications it already launched.
+incompatible DPI-awareness settings or main windows that cannot be re-parented
+fail startup and AppControl closes the applications it already launched.
 
 ## Options
 

@@ -2,6 +2,10 @@
 ; Lab Station - Remote App workspace manifest editor
 ; ============================================================================
 #Requires AutoHotkey v2.0
+#Include ..\core\Admin.ahk
+#Include ..\core\Json.ahk
+#Include ..\system\RemoteAppWorkspaceStore.ahk
+#Include ..\system\AppControlManager.ahk
 
 global LS_WORKSPACE_EDITOR_GUI := 0
 
@@ -185,10 +189,12 @@ LS_WorkspaceEditorNormalizeApp(source, index) {
     }
 
     workingDirectory := source.Has("workingDirectory") ? source["workingDirectory"] : ""
+    windowExecutable := source.Has("windowExecutable") ? source["windowExecutable"] : ""
     windowClass := source.Has("windowClass") ? source["windowClass"] : ""
     titleContains := source.Has("windowTitleContains") ? source["windowTitleContains"] : ""
     timeout := source.Has("startupTimeoutSeconds") ? source["startupTimeoutSeconds"] : 30
-    if (Type(workingDirectory) != "String" || Type(windowClass) != "String" || Type(titleContains) != "String")
+    if (Type(workingDirectory) != "String" || Type(windowExecutable) != "String"
+        || Type(windowClass) != "String" || Type(titleContains) != "String")
         throw Error("Application " . index . " has invalid optional field types")
     try timeout := Integer(timeout)
     catch
@@ -200,6 +206,7 @@ LS_WorkspaceEditorNormalizeApp(source, index) {
         "id", source.Has("id") && Type(source["id"]) = "String" ? source["id"] : "",
         "title", source["title"],
         "executable", source["executable"],
+        "windowExecutable", windowExecutable,
         "arguments", arguments,
         "workingDirectory", workingDirectory,
         "windowClass", windowClass,
@@ -213,6 +220,10 @@ LS_WorkspaceEditorRefreshApps(editor) {
     for app in editor.Apps {
         SplitPath(app["executable"], &fileName)
         windowLabel := app["windowClass"] != "" ? app["windowClass"] : "Automatic"
+        if (app["windowExecutable"] != "") {
+            SplitPath(app["windowExecutable"], &windowFileName)
+            windowLabel := windowFileName . " / " . windowLabel
+        }
         if (app["windowTitleContains"] != "")
             windowLabel .= " / " . app["windowTitleContains"]
         editor.AppList.Add(, app["title"], fileName, windowLabel)
@@ -270,7 +281,7 @@ LS_WorkspaceEditorMoveApp(editor, direction) {
 LS_WorkspaceEditorShowAppDialog(editor, index := 0) {
     seed := index ? editor.Apps[index] : Map(
         "title", "", "executable", "", "arguments", [], "workingDirectory", "",
-        "windowClass", "", "windowTitleContains", "", "startupTimeoutSeconds", 30, "id", ""
+        "windowExecutable", "", "windowClass", "", "windowTitleContains", "", "startupTimeoutSeconds", 30, "id", ""
     )
     dialog := Gui("+Owner" . editor.Hwnd . " +ToolWindow", index ? "Edit application" : "Add application")
     dialog.BackColor := "0F1419"
@@ -302,24 +313,30 @@ LS_WorkspaceEditorShowAppDialog(editor, index := 0) {
     dialog.BrowseFolderButton.OnEvent("Click", LS_WorkspaceEditorBrowseFolder_Handler)
 
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.AddText("x20 y184 w595 h31", "AppControl detects the single main window opened by this application automatically.")
+    dialog.AddText("x20 y184 w595 h31", "AppControl waits for the main window. Configure Advanced matching if a launcher starts another program.")
     dialog.SetFont("s8 c374151", "Segoe UI")
     dialog.AdvancedButton := dialog.AddButton("x20 y222 w150 h26", "Advanced matching...")
     dialog.AdvancedButton.OnEvent("Click", LS_WorkspaceEditorAdvanced_Handler)
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.WindowClassLabel := dialog.AddText("x20 y267 w115 Hidden", "Window class")
+    dialog.WindowExecutableLabel := dialog.AddText("x20 y267 w115 Hidden", "Window executable")
     dialog.SetFont("s8 c374151", "Segoe UI")
-    dialog.WindowClassEdit := dialog.AddEdit("x140 y264 w475 Hidden", seed["windowClass"])
+    dialog.WindowExecutableEdit := dialog.AddEdit("x140 y264 w390 Hidden", seed["windowExecutable"])
+    dialog.BrowseWindowExeButton := dialog.AddButton("x538 y263 w77 h25 Hidden", "Browse...")
+    dialog.BrowseWindowExeButton.OnEvent("Click", LS_WorkspaceEditorBrowseWindowExe_Handler)
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.TitleFilterLabel := dialog.AddText("x20 y302 w115 Hidden", "Title contains")
+    dialog.WindowClassLabel := dialog.AddText("x20 y302 w115 Hidden", "Window class")
     dialog.SetFont("s8 c374151", "Segoe UI")
-    dialog.TitleFilterEdit := dialog.AddEdit("x140 y299 w475 Hidden", seed["windowTitleContains"])
+    dialog.WindowClassEdit := dialog.AddEdit("x140 y299 w475 Hidden", seed["windowClass"])
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.TimeoutLabel := dialog.AddText("x20 y337 w115 Hidden", "Wait (seconds)")
+    dialog.TitleFilterLabel := dialog.AddText("x20 y337 w115 Hidden", "Title contains")
     dialog.SetFont("s8 c374151", "Segoe UI")
-    dialog.TimeoutEdit := dialog.AddEdit("x140 y334 w80 Hidden", seed["startupTimeoutSeconds"])
+    dialog.TitleFilterEdit := dialog.AddEdit("x140 y334 w475 Hidden", seed["windowTitleContains"])
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.AdvancedHelpText := dialog.AddText("x20 y375 w595 Hidden", "Use these only when AppControl finds more than one main window or startup is slow.")
+    dialog.TimeoutLabel := dialog.AddText("x20 y372 w115 Hidden", "Wait (seconds)")
+    dialog.SetFont("s8 c374151", "Segoe UI")
+    dialog.TimeoutEdit := dialog.AddEdit("x140 y369 w80 Hidden", seed["startupTimeoutSeconds"])
+    dialog.SetFont("s8 c9CA3AF", "Segoe UI")
+    dialog.AdvancedHelpText := dialog.AddText("x20 y407 w595 h38 Hidden", "Set Window executable when a launcher starts a separate program. Class and title filters select that program's main window.")
 
     dialog.SetFont("s9 c374151", "Segoe UI")
     dialog.SaveButton := dialog.AddButton("x453 y222 w78 h30 Default", "Apply")
@@ -341,6 +358,16 @@ LS_WorkspaceEditorBrowseExe_Handler(ctrl, info) {
         dialog.ExecutableEdit.Value := path
 }
 
+LS_WorkspaceEditorBrowseWindowExe_Handler(ctrl, info) {
+    dialog := ctrl.Gui
+    initialPath := dialog.WindowExecutableEdit.Value
+    if (initialPath = "")
+        initialPath := dialog.ExecutableEdit.Value
+    path := FileSelect("1", initialPath, "Select the executable that owns the main window", "Programs (*.exe)")
+    if (path != "")
+        dialog.WindowExecutableEdit.Value := path
+}
+
 LS_WorkspaceEditorBrowseFolder_Handler(ctrl, info) {
     dialog := ctrl.Gui
     initialFolder := dialog.WorkingDirectoryEdit.Value
@@ -357,13 +384,14 @@ LS_WorkspaceEditorAdvanced_Handler(ctrl, info) {
     dialog := ctrl.Gui
     dialog.AdvancedVisible := !dialog.AdvancedVisible
     visible := dialog.AdvancedVisible
-    for control in [dialog.WindowClassLabel, dialog.WindowClassEdit, dialog.TitleFilterLabel,
+    for control in [dialog.WindowExecutableLabel, dialog.WindowExecutableEdit, dialog.BrowseWindowExeButton,
+        dialog.WindowClassLabel, dialog.WindowClassEdit, dialog.TitleFilterLabel,
         dialog.TitleFilterEdit, dialog.TimeoutLabel, dialog.TimeoutEdit, dialog.AdvancedHelpText]
         control.Visible := visible
     dialog.AdvancedButton.Text := visible ? "Hide advanced options" : "Advanced matching..."
-    dialog.SaveButton.Move(, visible ? 414 : 222)
-    dialog.CancelButton.Move(, visible ? 414 : 222)
-    dialog.Show(visible ? "h470" : "h260")
+    dialog.SaveButton.Move(, visible ? 449 : 222)
+    dialog.CancelButton.Move(, visible ? 449 : 222)
+    dialog.Show(visible ? "h510" : "h260")
 }
 
 LS_WorkspaceEditorAppSave_Handler(ctrl, info) {
@@ -387,6 +415,7 @@ LS_WorkspaceEditorReadApp(dialog) {
     executable := Trim(dialog.ExecutableEdit.Value)
     argumentsText := dialog.ArgumentsEdit.Value
     workingDirectory := Trim(dialog.WorkingDirectoryEdit.Value)
+    windowExecutable := Trim(dialog.WindowExecutableEdit.Value)
     windowClass := Trim(dialog.WindowClassEdit.Value)
     titleContains := Trim(dialog.TitleFilterEdit.Value)
     timeoutText := Trim(dialog.TimeoutEdit.Value)
@@ -403,6 +432,19 @@ LS_WorkspaceEditorReadApp(dialog) {
     if (StrLower(extension) != "exe") {
         MsgBox "Choose an .exe application.", "Application settings", "OK Iconx"
         return 0
+    }
+    if (windowExecutable != "") {
+        windowExecutableAttributes := FileExist(windowExecutable)
+        if (!RegExMatch(windowExecutable, "i)^(?:[A-Z]:\\|\\\\)") || !windowExecutableAttributes
+            || InStr(windowExecutableAttributes, "D")) {
+            MsgBox "Window executable must be an existing .exe path.", "Application settings", "OK Iconx"
+            return 0
+        }
+        SplitPath(windowExecutable, , , &windowExtension)
+        if (StrLower(windowExtension) != "exe" || StrLen(windowExecutable) > 1024) {
+            MsgBox "Window executable must be an .exe path of at most 1024 characters.", "Application settings", "OK Iconx"
+            return 0
+        }
     }
     if (workingDirectory != "" && (!RegExMatch(workingDirectory, "i)^(?:[A-Z]:\\|\\\\)") || !DirExist(workingDirectory))) {
         MsgBox "The working folder must be an existing absolute folder.", "Application settings", "OK Iconx"
@@ -449,6 +491,7 @@ LS_WorkspaceEditorReadApp(dialog) {
         "id", "",
         "title", title,
         "executable", executable,
+        "windowExecutable", windowExecutable,
         "arguments", arguments,
         "workingDirectory", workingDirectory,
         "windowClass", windowClass,
@@ -591,7 +634,7 @@ LS_WorkspaceEditorSave(editor) {
     apps := []
     for index, source in editor.Apps {
         appId := "app-" . index
-        apps.Push(Map(
+        appManifest := Map(
             "id", appId,
             "title", source["title"],
             "executable", source["executable"],
@@ -600,7 +643,10 @@ LS_WorkspaceEditorSave(editor) {
             "windowClass", source["windowClass"],
             "windowTitleContains", source["windowTitleContains"],
             "startupTimeoutSeconds", source["startupTimeoutSeconds"]
-        ))
+        )
+        if (source["windowExecutable"] != "")
+            appManifest["windowExecutable"] := source["windowExecutable"]
+        apps.Push(appManifest)
     }
     manifest := Map("schemaVersion", 1, "workspaceId", workspaceId, "apps", apps)
     targetPath := APP_WORKSPACE_CONFIG_ROOT . "\" . workspaceId . ".json"
@@ -640,6 +686,19 @@ LS_WorkspaceEditorValidateApps(apps) {
         SplitPath(executable, , , &extension)
         if (StrLower(extension) != "exe" || StrLen(executable) > 1024)
             throw Error("Application '" . title . "' must use an .exe path of at most 1024 characters")
+
+        if (app.Has("windowExecutable") && Type(app["windowExecutable"]) != "String")
+            throw Error("Application '" . title . "' has an invalid window executable path")
+        windowExecutable := app.Has("windowExecutable") ? Trim(app["windowExecutable"]) : ""
+        if (windowExecutable != "") {
+            windowAttributes := FileExist(windowExecutable)
+            if (!RegExMatch(windowExecutable, "i)^(?:[A-Z]:\\|\\\\)") || !windowAttributes
+                || InStr(windowAttributes, "D"))
+                throw Error("Application '" . title . "' has an invalid window executable path")
+            SplitPath(windowExecutable, , , &windowExtension)
+            if (StrLower(windowExtension) != "exe" || StrLen(windowExecutable) > 1024)
+                throw Error("Application '" . title . "' must use a .exe window path of at most 1024 characters")
+        }
 
         workingDirectory := ""
         if (app.Has("workingDirectory")) {

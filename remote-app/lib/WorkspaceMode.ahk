@@ -52,6 +52,10 @@ WorkspaceStart(workspaceId, testMode := false) {
         for app in apps
             WorkspaceLaunchApp(app)
 
+        ; Catch popups that were created while the other applications started.
+        for app in apps
+            WorkspaceAdoptNewWindows(app, false)
+
         WorkspaceResize()
         WORKSPACE_TABS.Value := 1
         WorkspaceSelectTab(1)
@@ -124,6 +128,14 @@ WorkspaceValidateApp(source, appIndex) {
     if (StrLower(extension) != "exe" || !FileExist(executable))
         throw Error("Application '" . id . "' must reference an existing .exe file")
 
+    windowExecutable := source.Has("windowExecutable") ? source["windowExecutable"] : executable
+    if (Type(windowExecutable) != "String" || StrLen(windowExecutable) > 1024
+        || !RegExMatch(windowExecutable, "i)^(?:[A-Z]:\\|\\\\)"))
+        throw Error("Application '" . id . "' windowExecutable must be an absolute Windows path")
+    SplitPath(windowExecutable, , , &windowExtension)
+    if (StrLower(windowExtension) != "exe" || !FileExist(windowExecutable))
+        throw Error("Application '" . id . "' windowExecutable must reference an existing .exe file")
+
     windowClass := source.Has("windowClass") ? source["windowClass"] : ""
     if (Type(windowClass) != "String" || StrLen(windowClass) > 128)
         throw Error("Application '" . id . "' windowClass must be a string of at most 128 characters")
@@ -163,6 +175,7 @@ WorkspaceValidateApp(source, appIndex) {
         "id", id,
         "title", title,
         "executable", executable,
+        "windowExecutable", windowExecutable,
         "arguments", arguments,
         "workingDirectory", workingDirectory,
         "windowClass", windowClass,
@@ -175,6 +188,7 @@ WorkspaceValidateApp(source, appIndex) {
         "hwnd", 0,
         "hwnds", [],
         "trackedWindows", Map(),
+        "windowRoles", Map(),
         "preexistingWindows", Map(),
         "preexistingPids", Map(),
         "windowPids", Map(),
@@ -218,6 +232,7 @@ WorkspaceLaunchApp(app) {
     windows := WorkspaceWaitForWindows(app)
     for hwnd in windows
         WorkspaceAttachWindow(hwnd, app)
+    WorkspaceAdoptNewWindows(app, false)
     app["state"] := "running"
 }
 
@@ -267,26 +282,32 @@ WorkspaceWaitForWindows(app) {
     launchTick := A_TickCount
     delegationGraceMs := 1500
     while (A_TickCount <= deadline) {
-        ownCandidates := WorkspaceFindMatchingWindows(app, true)
+        ; A launcher may expose a visible splash or helper window before its
+        ; actual application window. Startup is complete only when a main
+        ; window matches the configured target, so auxiliaries cannot satisfy
+        ; this wait even though they are tracked after the main window attaches.
+        ownCandidates := WorkspaceFindMatchingWindows(app, true, false)
         if (ownCandidates.Length > 0) {
-            ; Embed one usable main window during startup. Additional windows
-            ; are attached by the monitor after the workspace is responsive.
-            selected := WorkspaceSelectPrimaryWindow(ownCandidates)
+            ; Prefer a primary app window over startup dialogs and popups.
+            ; Remaining windows are attached after the primary candidate.
+            selected := WorkspaceSelectPrimaryWindow(ownCandidates, app)
             WorkspaceLogTestCandidate(app, selected)
             return [selected]
         }
 
         if (!WorkspaceLaunchProcessIsRunning(app) || A_TickCount - launchTick >= delegationGraceMs) {
-            delegatedCandidates := WorkspaceFindMatchingWindows(app)
+            delegatedCandidates := WorkspaceFindMatchingWindows(app, false, false)
             if (delegatedCandidates.Length > 0) {
-                selected := WorkspaceSelectPrimaryWindow(delegatedCandidates)
+                selected := WorkspaceSelectPrimaryWindow(delegatedCandidates, app)
                 WorkspaceLogTestCandidate(app, selected)
                 return [selected]
             }
         }
         Sleep(100)
     }
-    matchDescription := app["windowClass"] != "" ? "class '" . app["windowClass"] . "'" : "its executable"
+    matchDescription := app["windowClass"] != "" ? "class '" . app["windowClass"] . "'"
+        : (app["windowTitleContains"] != "" ? "a title containing '" . app["windowTitleContains"] . "'"
+            : "a main window from " . app["windowExecutable"])
     throw Error("Application '" . app["id"] . "' did not create a new visible window matching "
         . matchDescription . " within " . app["startupTimeoutSeconds"] . " seconds")
 }
@@ -294,7 +315,7 @@ WorkspaceWaitForWindows(app) {
 WorkspaceLogTestCandidate(app, hwnd) {
     if (WorkspaceTestMode()) {
         className := WinGetClass("ahk_id " . hwnd)
-        dims := GetWindowDimensions(hwnd)
+        dims := WorkspaceGetCandidateWindowDimensions(hwnd)
         sizeText := dims ? dims.w . "x" . dims.h : "unavailable"
         Log("Workspace test selected '" . app["id"] . "' HWND " . hwnd
             . " from PID " . WorkspaceGetWindowProcessId(hwnd) . ", class=" . className
@@ -302,22 +323,45 @@ WorkspaceLogTestCandidate(app, hwnd) {
     }
 }
 
-WorkspaceSelectPrimaryWindow(hwnds) {
+WorkspaceSelectPrimaryWindow(hwnds, app) {
     selected := hwnds[1]
-    selectedDims := GetWindowDimensions(selected)
+    selectedRole := WorkspaceWindowRole(selected, app)
+    selectedDims := WorkspaceGetCandidateWindowDimensions(selected)
     selectedArea := selectedDims ? selectedDims.w * selectedDims.h : 0
     for hwnd in hwnds {
-        dims := GetWindowDimensions(hwnd)
+        role := WorkspaceWindowRole(hwnd, app)
+        dims := WorkspaceGetCandidateWindowDimensions(hwnd)
         area := dims ? dims.w * dims.h : 0
-        if (area > selectedArea) {
+        if ((selectedRole = "auxiliary" && role = "main") || (selectedRole = role && area > selectedArea)) {
             selected := hwnd
+            selectedRole := role
             selectedArea := area
         }
     }
     return selected
 }
 
-WorkspaceFindMatchingWindows(app, launchPidOnly := false) {
+WorkspaceGetCandidateWindowDimensions(hwnd) {
+    if (!DllCall("IsIconic", "Ptr", hwnd, "Int"))
+        return GetWindowDimensions(hwnd)
+
+    ; A minimized window's current rectangle is its icon-sized minimized area.
+    ; Use the restored rectangle from WINDOWPLACEMENT so real application
+    ; windows still pass the usable-size filter while splash/helper windows do not.
+    placement := Buffer(44, 0) ; sizeof(WINDOWPLACEMENT)
+    NumPut("UInt", placement.Size, placement, 0)
+    if (DllCall("GetWindowPlacement", "Ptr", hwnd, "Ptr", placement, "Int")) {
+        left := NumGet(placement, 28, "Int")
+        top := NumGet(placement, 32, "Int")
+        right := NumGet(placement, 36, "Int")
+        bottom := NumGet(placement, 40, "Int")
+        if (right > left && bottom > top)
+            return {x: left, y: top, w: right - left, h: bottom - top}
+    }
+    return GetWindowDimensions(hwnd)
+}
+
+WorkspaceFindMatchingWindows(app, launchPidOnly := false, includeAuxiliary := true) {
     wins := []
     try wins := launchPidOnly && app["launchPid"]
         ? WinGetList("ahk_pid " . app["launchPid"])
@@ -327,10 +371,10 @@ WorkspaceFindMatchingWindows(app, launchPidOnly := false) {
 
     matches := []
     for hwnd in wins {
-        if (!WorkspaceWindowMatchesApp(app, hwnd))
+        if (!WorkspaceWindowMatchesApp(app, hwnd, includeAuxiliary))
             continue
         className := WinGetClass("ahk_id " . hwnd)
-        dims := GetWindowDimensions(hwnd)
+        dims := WorkspaceGetCandidateWindowDimensions(hwnd)
         sizeText := dims ? dims.w . "x" . dims.h : "unavailable"
         Log("Workspace main-window candidate '" . app["id"] . "' -> HWND " . hwnd . " (" . sizeText . ")", "DEBUG")
         if (IsUWPApp(hwnd, className))
@@ -347,8 +391,13 @@ WorkspaceSnapshotExistingWindows(app) {
         return existingWindows
 
     for hwnd in windows {
-        if (WorkspaceWindowUsesExecutable(hwnd, app["executable"])) {
+        if (WorkspaceWindowUsesExecutable(hwnd, app["windowExecutable"])) {
             existingWindows[hwnd] := true
+            pid := WorkspaceGetWindowProcessId(hwnd)
+            if (pid)
+                app["preexistingPids"][pid] := true
+        }
+        if (WorkspaceWindowUsesExecutable(hwnd, app["executable"])) {
             pid := WorkspaceGetWindowProcessId(hwnd)
             if (pid)
                 app["preexistingPids"][pid] := true
@@ -357,7 +406,7 @@ WorkspaceSnapshotExistingWindows(app) {
     return existingWindows
 }
 
-WorkspaceWindowMatchesApp(app, hwnd) {
+WorkspaceWindowMatchesApp(app, hwnd, includeAuxiliary := true) {
     if (!hwnd || !DllCall("IsWindowVisible", "Ptr", hwnd, "UInt"))
         return false
     if (DllCall("GetAncestor", "Ptr", hwnd, "UInt", 2, "Ptr") != hwnd) ; GA_ROOT
@@ -368,22 +417,25 @@ WorkspaceWindowMatchesApp(app, hwnd) {
     try className := WinGetClass("ahk_id " . hwnd)
     catch
         return false
-    if (app["windowClass"] != "" && className != app["windowClass"])
+    isAuxiliary := WorkspaceWindowIsAuxiliary(hwnd, app)
+    if (isAuxiliary && !includeAuxiliary)
+        return false
+    if (app["windowClass"] != "" && className != app["windowClass"] && !isAuxiliary)
         return false
     if (app["windowTitleContains"] != "") {
         try title := WinGetTitle("ahk_id " . hwnd)
         catch
             return false
-        if (!InStr(StrLower(title), StrLower(app["windowTitleContains"])))
+        if (!InStr(StrLower(title), StrLower(app["windowTitleContains"])) && !isAuxiliary)
             return false
     }
 
     ; Reject splash screens and hidden timing/helper windows that may carry
     ; WS_VISIBLE while having no usable application surface.
-    dims := GetWindowDimensions(hwnd)
+    dims := WorkspaceGetCandidateWindowDimensions(hwnd)
     if (!dims || dims.w < 100 || dims.h < 100)
         return false
-    if (!WorkspaceWindowUsesExecutable(hwnd, app["executable"]))
+    if (!WorkspaceWindowUsesExecutable(hwnd, app["windowExecutable"]))
         return false
 
     if (IsUWPApp(hwnd, className))
@@ -427,21 +479,135 @@ WorkspaceAttachWindow(hwnd, app, showAfterAttach := false) {
     if (!pid)
         throw Error("Could not identify the process that owns application '" . app["id"] . "' window " . hwnd)
 
-    ; Hide the external window before changing its native style/parent. This is
-    ; required by applications such as PuTTY while their first frame is shown.
-    DllCall("ShowWindow", "Ptr", hwnd, "Int", 0)
-    Log("Embedding application '" . app["id"] . "' window " . hwnd, "DEBUG")
-    WorkspaceEmbedWindow(hwnd, WORKSPACE_PANEL.Hwnd, app)
+    role := WorkspaceWindowRole(hwnd, app)
+    originalState := WorkspaceCaptureWindowState(hwnd)
+    try {
+        ; Hide the external window before changing its native style/parent. This
+        ; is required by applications such as PuTTY while their first frame is shown.
+        DllCall("ShowWindow", "Ptr", hwnd, "Int", 0)
+        if (role = "auxiliary") {
+            ; Keep the app's owner relationship intact. It controls modal behavior
+            ; and Windows keeps an owned popup above its owner.
+            Log("Tracking auxiliary popup '" . app["id"] . "' HWND " . hwnd . " without resizing or reparenting it", "DEBUG")
+        } else {
+            Log("Embedding application '" . app["id"] . "' window " . hwnd, "DEBUG")
+            WorkspaceEmbedWindow(hwnd, WORKSPACE_PANEL.Hwnd, app)
+        }
+    } catch as attachError {
+        try WorkspaceRestoreOriginalWindowState(hwnd, originalState)
+        catch as rollbackError
+            throw Error("Could not attach window for '" . app["id"] . "': " . attachError.Message
+                . ". Rollback also failed: " . rollbackError.Message)
+        throw attachError
+    }
+
     app["trackedWindows"][hwnd] := true
     app["hwnds"].Push(hwnd)
+    app["windowRoles"][hwnd] := role
     app["windowPids"][pid] := true
-    if (!app["hwnd"]) {
+    if (role = "main" && !app["hwnd"]) {
         app["hwnd"] := hwnd
         app["windowPid"] := pid
     }
-    DllCall("ShowWindow", "Ptr", hwnd, "Int", showAfterAttach ? 5 : 0)
-    Log("Attached application '" . app["id"] . "' window " . hwnd . " from PID " . pid, "INFO")
+    if (showAfterAttach && role = "main")
+        WorkspaceRestoreHostedWindow(hwnd)
+    else
+        DllCall("ShowWindow", "Ptr", hwnd, "Int", showAfterAttach ? 5 : 0)
+    Log("Attached " . role . " window for '" . app["id"] . "' HWND " . hwnd . " from PID " . pid, "INFO")
     return true
+}
+
+WorkspaceWindowRole(hwnd, app) {
+    return WorkspaceWindowIsAuxiliary(hwnd, app) ? "auxiliary" : "main"
+}
+
+WorkspaceWindowIsAuxiliary(hwnd, app) {
+    owner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr") ; GW_OWNER
+    if (owner && ((IsObject(WORKSPACE_GUI) && owner = WORKSPACE_GUI.Hwnd) || app["trackedWindows"].Has(owner)
+        || (!app["preexistingWindows"].Has(owner) && WorkspaceWindowUsesExecutable(owner, app["windowExecutable"]))))
+        return true
+
+    getStyleApi := A_PtrSize = 8 ? "GetWindowLongPtrW" : "GetWindowLongW"
+    exStyle := DllCall(getStyleApi, "Ptr", hwnd, "Int", -20, "Ptr") ; GWL_EXSTYLE
+    if (exStyle & 0x00000080) ; WS_EX_TOOLWINDOW
+        return true
+    try className := WinGetClass("ahk_id " . hwnd)
+    catch
+        return false
+    if (className = "#32770")
+        return true
+    return false
+}
+
+WorkspaceCaptureWindowState(hwnd) {
+    getStyleApi := A_PtrSize = 8 ? "GetWindowLongPtrW" : "GetWindowLongW"
+    rect := Buffer(16, 0)
+    if (!DllCall("GetWindowRect", "Ptr", hwnd, "Ptr", rect, "Int"))
+        throw Error("Could not read the original position of window " . hwnd)
+
+    return Map(
+        "parent", WorkspaceGetWindowParent(hwnd),
+        "owner", DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr"), ; GW_OWNER
+        "style", DllCall(getStyleApi, "Ptr", hwnd, "Int", -16, "Ptr"), ; GWL_STYLE
+        "exStyle", DllCall(getStyleApi, "Ptr", hwnd, "Int", -20, "Ptr"), ; GWL_EXSTYLE
+        "x", NumGet(rect, 0, "Int"),
+        "y", NumGet(rect, 4, "Int"),
+        "width", NumGet(rect, 8, "Int") - NumGet(rect, 0, "Int"),
+        "height", NumGet(rect, 12, "Int") - NumGet(rect, 4, "Int"),
+        "visible", DllCall("IsWindowVisible", "Ptr", hwnd, "Int"),
+        "minimized", DllCall("IsIconic", "Ptr", hwnd, "Int"),
+        "maximized", DllCall("IsZoomed", "Ptr", hwnd, "Int")
+    )
+}
+
+WorkspaceRestoreOriginalWindowState(hwnd, state) {
+    if (!hwnd || !WinExist("ahk_id " . hwnd))
+        return
+
+    DllCall("ShowWindow", "Ptr", hwnd, "Int", 0)
+    currentParent := WorkspaceGetWindowParent(hwnd)
+    if (currentParent != state["parent"]) {
+        DllCall("SetLastError", "UInt", 0)
+        DllCall("SetParent", "Ptr", hwnd, "Ptr", state["parent"], "Ptr")
+        parentError := DllCall("GetLastError", "UInt")
+        if (parentError)
+            throw Error("Could not restore the original window parent (Win32 " . parentError . ")")
+    }
+
+    WorkspaceSetWindowLongValue(hwnd, -16, state["style"], "style") ; GWL_STYLE
+    WorkspaceSetWindowLongValue(hwnd, -20, state["exStyle"], "extended style") ; GWL_EXSTYLE
+    currentOwner := DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr") ; GW_OWNER
+    if (currentOwner != state["owner"])
+        WorkspaceSetWindowLongValue(hwnd, -8, state["owner"], "owner") ; GWLP_HWNDPARENT
+    if (WorkspaceGetWindowParent(hwnd) != state["parent"])
+        throw Error("The original window parent was not restored")
+    if (!DllCall("SetWindowPos", "Ptr", hwnd, "Ptr", 0, "Int", state["x"], "Int", state["y"],
+        "Int", state["width"], "Int", state["height"], "UInt", 0x0034, "Int")) ; SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+        throw Error("Could not restore the original window position and frame")
+
+    if (state["visible"]) {
+        showCommand := state["minimized"] ? 6 : (state["maximized"] ? 3 : 5)
+        DllCall("ShowWindow", "Ptr", hwnd, "Int", showCommand)
+    } else {
+        DllCall("ShowWindow", "Ptr", hwnd, "Int", 0)
+    }
+}
+
+WorkspaceGetWindowParent(hwnd) {
+    parent := DllCall("GetAncestor", "Ptr", hwnd, "UInt", 1, "Ptr") ; GA_PARENT, excludes owner
+    if (parent = DllCall("GetDesktopWindow", "Ptr"))
+        return 0
+    return parent
+}
+
+WorkspaceSetWindowLongValue(hwnd, index, value, description) {
+    setStyleApi := A_PtrSize = 8 ? "SetWindowLongPtrW" : "SetWindowLongW"
+    DllCall("SetLastError", "UInt", 0)
+    previousValue := DllCall(setStyleApi, "Ptr", hwnd, "Int", index, "Ptr", value, "Ptr")
+    styleError := DllCall("GetLastError", "UInt")
+    if (!previousValue && styleError != 0)
+        throw Error("Could not restore window " . description . " (Win32 " . styleError . ")")
+    return previousValue
 }
 
 WorkspaceAppIsSelected(app) {
@@ -455,7 +621,13 @@ WorkspaceAppIsSelected(app) {
     return false
 }
 
-WorkspaceAdoptNewWindows(app) {
+WorkspaceRestoreHostedWindow(hwnd) {
+    ; Normalize the hosted main window's state before fitting it to the tab area.
+    ; SW_RESTORE also shows an initially minimized window.
+    DllCall("ShowWindow", "Ptr", hwnd, "Int", 9)
+}
+
+WorkspaceAdoptNewWindows(app, showSelectedWindows := true) {
     added := false
     for hwnd in WorkspaceFindMatchingWindows(app) {
         if (WorkspaceWindowTrackedByOtherApp(hwnd, app))
@@ -465,7 +637,7 @@ WorkspaceAdoptNewWindows(app) {
             if (WorkspaceLaunchProcessIsRunning(app) || WorkspaceCountMatchingAppsForWindow(hwnd) > 1)
                 continue
         }
-        if (WorkspaceAttachWindow(hwnd, app, WorkspaceAppIsSelected(app)))
+        if (WorkspaceAttachWindow(hwnd, app, showSelectedWindows && WorkspaceAppIsSelected(app)))
             added := true
     }
     return added
@@ -501,20 +673,16 @@ WorkspaceEmbedWindow(hwnd, parentHwnd, app) {
             . "). Windows resets the child process DPI awareness for cross-process SetParent", "WARNING")
     }
 
-    originalStyle := WorkspaceApplyEmbeddedWindowStyle(hwnd, app)
+    WorkspaceApplyEmbeddedWindowStyle(hwnd, app)
 
     DllCall("SetLastError", "UInt", 0)
     Log("Setting workspace parent for '" . app["id"] . "' window " . hwnd, "DEBUG")
     previousParent := DllCall("SetParent", "Ptr", hwnd, "Ptr", parentHwnd, "Ptr")
     parentError := DllCall("GetLastError", "UInt")
-    if (!previousParent && parentError != 0) {
-        try WorkspaceRestoreWindowStyle(hwnd, originalStyle)
-        catch as restoreError
-            Log("Could not restore the original style for '" . app["id"] . "': " . restoreError.Message, "ERROR")
+    if (!previousParent && parentError != 0)
         throw Error("Could not embed application '" . app["id"] . "' (Win32 " . parentError . ")")
-    }
 
-    if (DllCall("GetParent", "Ptr", hwnd, "Ptr") != parentHwnd)
+    if (WorkspaceGetWindowParent(hwnd) != parentHwnd)
         throw Error("Windows did not attach application '" . app["id"] . "' to the workspace panel")
 
     Log("Workspace parent set for '" . app["id"] . "' window " . hwnd, "DEBUG")
@@ -545,17 +713,6 @@ WorkspaceApplyEmbeddedWindowStyle(hwnd, app, forceFrameRefresh := false) {
         throw Error("Could not refresh the embedded window frame for application '" . app["id"] . "'")
 
     return style
-}
-
-WorkspaceRestoreWindowStyle(hwnd, style) {
-    setStyleApi := A_PtrSize = 8 ? "SetWindowLongPtrW" : "SetWindowLongW"
-    DllCall("SetLastError", "UInt", 0)
-    previousStyle := DllCall(setStyleApi, "Ptr", hwnd, "Int", -16, "Ptr", style, "Ptr")
-    styleError := DllCall("GetLastError", "UInt")
-    if (!previousStyle && styleError != 0)
-        throw Error("Win32 " . styleError)
-    if (!DllCall("SetWindowPos", "Ptr", hwnd, "Ptr", 0, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x0027, "Int")) ; SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE
-        throw Error("Could not refresh the restored window frame")
 }
 
 WorkspaceWindowHasNativeFrame(hwnd) {
@@ -595,14 +752,49 @@ WorkspaceSelectTab(index) {
     selected := WORKSPACE_APPS[index]
     for appIndex, app in WORKSPACE_APPS {
         for hwnd in app["hwnds"] {
-            if (hwnd && WinExist("ahk_id " . hwnd))
-                DllCall("ShowWindow", "Ptr", hwnd, "Int", appIndex = index ? 5 : 0)
+            if (!hwnd || !WinExist("ahk_id " . hwnd))
+                continue
+            role := app["windowRoles"].Has(hwnd) ? app["windowRoles"][hwnd] : "main"
+            if (role = "auxiliary")
+                DllCall("ShowWindow", "Ptr", hwnd, "Int", 0)
+            else if (appIndex = index)
+                WorkspaceRestoreHostedWindow(hwnd)
+            else
+                DllCall("ShowWindow", "Ptr", hwnd, "Int", 0)
         }
     }
-    if (selected["state"] = "running" && selected["hwnd"] && WinExist("ahk_id " . selected["hwnd"])) {
-        WORKSPACE_STATUS_TEXT.Visible := false
-        try WinActivate("ahk_id " . selected["hwnd"])
-        return
+    WorkspaceResize()
+    ; Show popups only after their app's primary window has been restored.
+    for hwnd in selected["hwnds"] {
+        if (selected["windowRoles"].Has(hwnd) && selected["windowRoles"][hwnd] = "auxiliary"
+            && WinExist("ahk_id " . hwnd))
+            DllCall("ShowWindow", "Ptr", hwnd, "Int", 5)
+    }
+    if (selected["state"] = "running") {
+        focusHwnd := selected["hwnd"]
+        if (!focusHwnd || !WinExist("ahk_id " . focusHwnd)) {
+            for hwnd in selected["hwnds"] {
+                if (selected["windowRoles"].Has(hwnd) && selected["windowRoles"][hwnd] = "auxiliary"
+                    && WinExist("ahk_id " . hwnd)) {
+                    focusHwnd := hwnd
+                    break
+                }
+            }
+        }
+        if (focusHwnd && WinExist("ahk_id " . focusHwnd)) {
+            WORKSPACE_STATUS_TEXT.Visible := false
+            if (!DllCall("IsWindowEnabled", "Ptr", focusHwnd, "Int")) {
+                for hwnd in selected["hwnds"] {
+                    if (selected["windowRoles"].Has(hwnd) && selected["windowRoles"][hwnd] = "auxiliary"
+                        && WinExist("ahk_id " . hwnd) && DllCall("IsWindowEnabled", "Ptr", hwnd, "Int")) {
+                        focusHwnd := hwnd
+                        break
+                    }
+                }
+            }
+            try WinActivate("ahk_id " . focusHwnd)
+            return
+        }
     }
 
     WORKSPACE_STATUS_TEXT.Text := "Application '" . selected["title"] . "' is no longer running. Reconnect to restart the workspace."
@@ -621,7 +813,8 @@ WorkspaceResize() {
 
     for app in WORKSPACE_APPS {
         for hwnd in app["hwnds"] {
-            if (hwnd && WinExist("ahk_id " . hwnd))
+            if (hwnd && WinExist("ahk_id " . hwnd) && app["windowRoles"].Has(hwnd)
+                && app["windowRoles"][hwnd] = "main")
                 DllCall("MoveWindow", "Ptr", hwnd, "Int", 0, "Int", 0, "Int", clientWidth, "Int", panelHeight, "Int", 1, "Int")
         }
     }
@@ -640,6 +833,8 @@ WorkspaceMonitor(*) {
             adopted := WorkspaceAdoptNewWindows(app)
             WorkspacePruneAttachedWindows(app)
             for hwnd in app["hwnds"] {
+                if (!app["windowRoles"].Has(hwnd) || app["windowRoles"][hwnd] != "main")
+                    continue
                 ; Applications may restore their native title bar after startup.
                 ; Keep every hosted top-level window borderless for its lifetime.
                 if (WorkspaceWindowHasNativeFrame(hwnd)) {
@@ -717,22 +912,29 @@ WorkspaceHasAttachedWindow(app) {
 WorkspacePruneAttachedWindows(app) {
     hwnds := []
     trackedWindows := Map()
+    windowRoles := Map()
     windowPids := Map()
+    primaryHwnd := 0
     for hwnd in app["hwnds"] {
-        if (!hwnd || !WinExist("ahk_id " . hwnd) || !WorkspaceWindowUsesExecutable(hwnd, app["executable"]))
+        if (!hwnd || !WinExist("ahk_id " . hwnd) || !WorkspaceWindowUsesExecutable(hwnd, app["windowExecutable"]))
             continue
         pid := WorkspaceGetWindowProcessId(hwnd)
         if (!pid)
             continue
         hwnds.Push(hwnd)
         trackedWindows[hwnd] := true
+        role := app["windowRoles"].Has(hwnd) ? app["windowRoles"][hwnd] : "main"
+        windowRoles[hwnd] := role
+        if (role = "main" && !primaryHwnd)
+            primaryHwnd := hwnd
         windowPids[pid] := true
     }
     app["hwnds"] := hwnds
     app["trackedWindows"] := trackedWindows
+    app["windowRoles"] := windowRoles
     app["windowPids"] := windowPids
-    app["hwnd"] := hwnds.Length ? hwnds[1] : 0
-    app["windowPid"] := hwnds.Length ? WorkspaceGetWindowProcessId(hwnds[1]) : 0
+    app["hwnd"] := primaryHwnd
+    app["windowPid"] := primaryHwnd ? WorkspaceGetWindowProcessId(primaryHwnd) : 0
 }
 
 WorkspaceCloseAll(reason := "workspace close") {
@@ -748,7 +950,8 @@ WorkspaceCloseAll(reason := "workspace close") {
     Loop WORKSPACE_APPS.Length {
         index := WORKSPACE_APPS.Length - A_Index + 1
         app := WORKSPACE_APPS[index]
-        for hwnd in app["hwnds"] {
+        Loop app["hwnds"].Length {
+            hwnd := app["hwnds"][app["hwnds"].Length - A_Index + 1]
             if (hwnd && WinExist("ahk_id " . hwnd))
                 PostMessage(0x0010, 0, 0, , "ahk_id " . hwnd) ; WM_CLOSE
         }
