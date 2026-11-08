@@ -34,7 +34,9 @@ RunWorkspaceModeTests() {
         RunCommandLineTests()
         RunWorkspaceLifecycleSmokeTest()
     } catch as e {
-        TestFail("Unhandled exception", e.Message)
+        detail := e.Message
+        try detail .= " (" . e.File . ":" . e.Line . ")"
+        TestFail("Unhandled exception", detail)
     } finally {
         if (WORKSPACE_MODE && !WORKSPACE_SHUTTING_DOWN) {
             try ControllerCloseWorkspace("workspace test cleanup")
@@ -169,16 +171,18 @@ RunWorkspaceLifecycleSmokeTest() {
     if (FileExist(minimizedMarker))
         FileDelete(minimizedMarker)
 
+    hostingBehaviorBefore := DllCall("GetThreadDpiHostingBehavior", "Int")
     apps := [
         TestAppJson("alpha", A_AhkPath, JsonArray([
             fakeAppPath, "--class", "AutoHotkeyGUI", "--title", "Workspace Smoke Alpha",
             "--color", "0x2B5797", "--extra-title", "Workspace Smoke Alpha Secondary",
             "--extra-delay", "8500", "--helper-title", "Workspace Smoke Alpha Helper",
+            "--owned-dialog-title", "Workspace Smoke Alpha Modal", "--owned-dialog-modal", "true",
             "--minimized", "true", "--minimized-marker", minimizedMarker, "--lifetime", "120"
         ]), 15, "Smoke Alpha", "AutoHotkeyGUI", "Workspace Smoke Alpha"),
         TestAppJson("beta", A_AhkPath, JsonArray([
             fakeAppPath, "--class", "AutoHotkeyGUI", "--title", "Workspace Smoke Beta",
-            "--color", "0x6441A5", "--lifetime", "120"
+            "--color", "0x6441A5", "--dpi-unaware", "true", "--lifetime", "120"
         ]), 15, "Smoke Beta", "AutoHotkeyGUI", "Workspace Smoke Beta"),
         TestAppJson("gamma", A_AhkPath, JsonArray([
             fakeLauncherPath, fakeAppPath, "Workspace Smoke Gamma"
@@ -199,10 +203,30 @@ RunWorkspaceLifecycleSmokeTest() {
     TestAssert(WORKSPACE_APPS[1]["hwnds"].Length >= 1, "workspace embeds the primary app window")
     hasSmallHelper := false
     for hwnd in WORKSPACE_APPS[1]["hwnds"] {
-        if InStr(WinGetTitle("ahk_id " . hwnd), "Workspace Smoke Alpha Helper")
+        title := WorkspaceTestGetWindowTitle(hwnd)
+        if InStr(title, "Workspace Smoke Alpha Helper")
             hasSmallHelper := true
     }
     TestAssert(!hasSmallHelper, "startup ignores small helper windows")
+    modalDialogHwnd := 0
+    for hwnd in WORKSPACE_APPS[1]["hwnds"] {
+        if (WorkspaceTestGetWindowTitle(hwnd) = "Workspace Smoke Alpha Modal")
+            modalDialogHwnd := hwnd
+    }
+    TestAssert(modalDialogHwnd && DllCall("IsWindow", "Ptr", modalDialogHwnd, "Int"),
+        "tracked modal dialog HWND remains valid")
+    TestAssert(modalDialogHwnd != 0, "workspace tracks an owned modal dialog created after its main window")
+    if (modalDialogHwnd) {
+        TestAssert(WORKSPACE_APPS[1]["windowRoles"][modalDialogHwnd] = "auxiliary",
+            "owned modal dialog is classified as auxiliary")
+        modalOwnerHwnd := DllCall("GetWindow", "Ptr", modalDialogHwnd, "UInt", 4, "Ptr")
+        modalOwnerTitle := WorkspaceTestGetWindowTitle(modalOwnerHwnd)
+        TestAssert(modalOwnerHwnd = WORKSPACE_GUI.Hwnd,
+            "owned popup remains owned by the workspace host after its app is reparented (actual=" . modalOwnerHwnd
+                . ", title='" . modalOwnerTitle . "', expected=" . WORKSPACE_GUI.Hwnd . ")")
+        TestAssert(!DllCall("IsWindowEnabled", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
+            "modal popup disables its hosted app window")
+    }
     hostDpiContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", WORKSPACE_GUI.Hwnd, "Ptr")
     panelDpiContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", WORKSPACE_PANEL.Hwnd, "Ptr")
     TestAssert(DllCall("AreDpiAwarenessContextsEqual", "Ptr", hostDpiContext, "Ptr", panelDpiContext, "Int"),
@@ -216,6 +240,16 @@ RunWorkspaceLifecycleSmokeTest() {
         TestAssert(DllCall("GetParent", "Ptr", app["hwnd"], "Ptr") = WORKSPACE_PANEL.Hwnd,
             "fake app is parented to workspace panel: " . app["id"])
     }
+
+    mixedHostingBehavior := DllCall("GetWindowDpiHostingBehavior", "Ptr", WORKSPACE_PANEL.Hwnd, "Int")
+    TestAssert(mixedHostingBehavior = 1, "workspace panel is created with mixed DPI hosting enabled")
+    TestAssert(DllCall("GetThreadDpiHostingBehavior", "Int") = hostingBehaviorBefore,
+        "workspace creation restores the previous thread DPI hosting behavior")
+    betaDpiContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", WORKSPACE_APPS[2]["hwnd"], "Ptr")
+    betaDpiAwareness := DllCall("GetAwarenessFromDpiAwarenessContext", "Ptr", betaDpiContext, "Int")
+    TestAssert(betaDpiAwareness = 0, "embedding preserves an unaware child app DPI context")
+    TestAssert(DllCall("GetDpiForWindow", "Ptr", WORKSPACE_APPS[2]["hwnd"], "UInt") = 96,
+        "embedding preserves the DPI scale reported by an unaware child app")
 
     TestAssert(WORKSPACE_APPS[3]["windowPid"] != WORKSPACE_APPS[3]["pid"],
         "workspace adopts a window delegated to another process")
@@ -233,23 +267,35 @@ RunWorkspaceLifecycleSmokeTest() {
     TestAssert(WORKSPACE_APPS[4]["hwnds"].Length = 1,
         "transient splash is not attached as a workspace application window")
 
+    secondaryHwnd := 0
     lateWindowDeadline := A_TickCount + 5000
-    while (WORKSPACE_APPS[1]["hwnds"].Length < 2 && A_TickCount < lateWindowDeadline) {
+    while (!secondaryHwnd && A_TickCount < lateWindowDeadline) {
         Sleep(100)
         WorkspaceMonitor()
+        for hwnd in WORKSPACE_APPS[1]["hwnds"] {
+            if (InStr(WorkspaceTestGetWindowTitle(hwnd), "Workspace Smoke Alpha Secondary"))
+                secondaryHwnd := hwnd
+        }
     }
-    TestAssert(WORKSPACE_APPS[1]["hwnds"].Length = 2,
-        "workspace adopts a secondary application window created after startup")
-    if (WORKSPACE_APPS[1]["hwnds"].Length >= 2) {
-        TestAssert(DllCall("GetParent", "Ptr", WORKSPACE_APPS[1]["hwnds"][2], "Ptr") = WORKSPACE_PANEL.Hwnd,
+    TestAssert(secondaryHwnd != 0, "workspace adopts a secondary application window created after startup")
+    if (secondaryHwnd)
+        TestAssert(DllCall("GetParent", "Ptr", secondaryHwnd, "Ptr") = WORKSPACE_PANEL.Hwnd,
             "late secondary window is parented to workspace panel")
-    }
 
     WorkspaceSelectTab(1)
     Sleep(50)
     TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"), "first tab shows its app")
-    if (WORKSPACE_APPS[1]["hwnds"].Length >= 2)
-        TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnds"][2], "Int"), "first tab shows its secondary window")
+    if (modalDialogHwnd) {
+        TestAssert(DllCall("IsWindowVisible", "Ptr", modalDialogHwnd, "Int"),
+            "selected app shows its owned modal dialog (valid="
+                . DllCall("IsWindow", "Ptr", modalDialogHwnd, "Int") . ")")
+        alphaThreadState := WorkspaceGetGuiThreadState(WORKSPACE_APPS[1]["hwnd"])
+        TestAssert(alphaThreadState["focus"]
+            && WorkspaceGetWindowProcessId(alphaThreadState["focus"]) = WORKSPACE_APPS[1]["windowPid"],
+            "tab selection delivers keyboard focus to the app with a disabled main window")
+    }
+    if (secondaryHwnd)
+        TestAssert(DllCall("IsWindowVisible", "Ptr", secondaryHwnd, "Int"), "first tab shows its secondary window")
     TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[2]["hwnd"], "Int"), "first tab hides the other app")
 
     DllCall("ShowWindow", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int", 6) ; SW_MINIMIZE
@@ -263,10 +309,45 @@ RunWorkspaceLifecycleSmokeTest() {
     WORKSPACE_TABS.Value := 2
     WorkspaceSelectTab(2)
     Sleep(50)
+    if (modalDialogHwnd) {
+        TestAssert(WORKSPACE_TABS.Value = 1,
+            "tab change is rejected while the selected app has a modal dialog")
+        TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
+            "modal tab change keeps the owning app visible")
+        TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[2]["hwnd"], "Int"),
+            "modal tab change does not reveal another app")
+        TestAssert(DllCall("IsWindowVisible", "Ptr", modalDialogHwnd, "Int"),
+            "modal tab change keeps the dialog visible")
+        TestAssert(!DllCall("IsWindowEnabled", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
+            "modal tab change does not strand the disabled app behind another tab")
+        ControlClick("Continue", "ahk_id " . modalDialogHwnd)
+        modalClosedDeadline := A_TickCount + 3000
+        while (DllCall("IsWindow", "Ptr", modalDialogHwnd, "Int") && A_TickCount < modalClosedDeadline)
+            Sleep(25)
+        TestAssert(!DllCall("IsWindow", "Ptr", modalDialogHwnd, "Int"),
+            "closing the modal dialog destroys its auxiliary window")
+        TestAssert(DllCall("IsWindowEnabled", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
+            "closing the modal dialog re-enables the owning app")
+        WORKSPACE_TABS.Value := 2
+        WorkspaceSelectTab(2)
+        Sleep(50)
+    }
     TestAssert(DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[2]["hwnd"], "Int"), "second tab shows its app")
     TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"), "second tab hides the other app")
-    if (WORKSPACE_APPS[1]["hwnds"].Length >= 2)
-        TestAssert(!DllCall("IsWindowVisible", "Ptr", WORKSPACE_APPS[1]["hwnds"][2], "Int"), "second tab hides the secondary window")
+    betaThreadState := WorkspaceGetGuiThreadState(WORKSPACE_APPS[2]["hwnd"])
+    TestAssert(betaThreadState["focus"]
+        && WorkspaceGetWindowProcessId(betaThreadState["focus"]) = WORKSPACE_APPS[2]["windowPid"],
+        "switching tabs moves keyboard focus to the selected app process")
+    if (secondaryHwnd)
+        TestAssert(!DllCall("IsWindowVisible", "Ptr", secondaryHwnd, "Int"), "second tab hides the secondary window")
+
+    WORKSPACE_TABS.Value := 1
+    WorkspaceSelectTab(1)
+    Sleep(50)
+    alphaThreadState := WorkspaceGetGuiThreadState(WORKSPACE_APPS[1]["hwnd"])
+    TestAssert(alphaThreadState["focus"]
+        && WorkspaceGetWindowProcessId(alphaThreadState["focus"]) = WORKSPACE_APPS[1]["windowPid"],
+        "returning to an app restores keyboard focus to its process")
 
     TestAssert(ControllerCloseWorkspace("workspace smoke test"), "workspace close handler shuts down the apps")
     for app in WORKSPACE_APPS {
@@ -278,6 +359,15 @@ RunWorkspaceLifecycleSmokeTest() {
         WORKSPACE_GUI.Destroy()
     if (FileExist(minimizedMarker))
         FileDelete(minimizedMarker)
+}
+
+WorkspaceTestGetWindowTitle(hwnd) {
+    if (!DllCall("IsWindow", "Ptr", hwnd, "Int"))
+        return ""
+    length := DllCall("GetWindowTextLengthW", "Ptr", hwnd, "Int")
+    titleBuffer := Buffer((length + 1) * 2, 0)
+    DllCall("GetWindowTextW", "Ptr", hwnd, "Ptr", titleBuffer, "Int", length + 1, "Int")
+    return StrGet(titleBuffer, "UTF-16")
 }
 
 TestAppJson(id, executable, argumentsJson := "[]", timeout := 10, title := "", windowClass := "AutoHotkeyGUI", titleContains := "", windowExecutable := "") {

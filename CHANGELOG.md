@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.5] - 2026-11-08
+
+### Fixed
+- Keep modal dialogs and their owning application visible until the dialog closes, preventing a tab change from leaving an app disabled behind another tab.
+- Restore keyboard focus to the selected embedded application when switching workspace tabs.
+
+### Changed
+- Enable mixed-DPI hosting for the workspace content panel and report DPI-awareness changes observed after embedding application windows.
+
 ## [3.6.0-preview.4] - 2026-11-08
 
 ### Added

@@ -13,6 +13,7 @@ WorkspaceStart(workspaceId, testMode := false) {
     global WORKSPACE_MODE, WORKSPACE_ID, WORKSPACE_GUI, WORKSPACE_PANEL
     global WORKSPACE_TABS, WORKSPACE_STATUS_TEXT, WORKSPACE_APPS
     global WORKSPACE_TAB_HEIGHT, WORKSPACE_SHUTTING_DOWN, WORKSPACE_CLOSE_HANDLER, WORKSPACE_TEST_MODE
+    global WORKSPACE_ACTIVE_TAB, WORKSPACE_TAB_CHANGE_GUARD
 
     apps := WorkspaceLoadManifest(workspaceId)
     WORKSPACE_MODE := true
@@ -21,6 +22,8 @@ WorkspaceStart(workspaceId, testMode := false) {
     WORKSPACE_APPS := apps
     WORKSPACE_SHUTTING_DOWN := false
     WORKSPACE_CLOSE_HANDLER := WorkspaceCloseAll
+    WORKSPACE_ACTIVE_TAB := 1
+    WORKSPACE_TAB_CHANGE_GUARD := false
 
     try {
         if (testMode)
@@ -33,7 +36,7 @@ WorkspaceStart(workspaceId, testMode := false) {
         WORKSPACE_GUI.Show("Maximize")
 
         WORKSPACE_TABS := WORKSPACE_GUI.AddTab3("x0 y0 w800 h" . WORKSPACE_TAB_HEIGHT, WorkspaceTabTitles(apps))
-        WORKSPACE_PANEL := Gui("+Parent" . WORKSPACE_GUI.Hwnd . " -Caption -Border -DPIScale", "WorkspaceContent")
+        WORKSPACE_PANEL := WorkspaceCreateMixedDpiPanel(WORKSPACE_GUI.Hwnd)
         if (!WorkspaceAddClipChildren(WORKSPACE_PANEL.Hwnd))
             throw Error("Could not configure the workspace application panel")
         WORKSPACE_PANEL.Show("NoActivate")
@@ -70,6 +73,49 @@ WorkspaceStart(workspaceId, testMode := false) {
         }
         throw e
     }
+}
+
+WorkspaceCreateMixedDpiPanel(parentHwnd) {
+    options := "+Parent" . parentHwnd . " -Caption -Border -DPIScale"
+    previousBehavior := -1
+    try previousBehavior := DllCall("SetThreadDpiHostingBehavior", "Int", 1, "Int")
+    catch as e {
+        Log("Mixed DPI hosting is unavailable; creating the workspace panel with default DPI hosting: "
+            . e.Message, "WARNING")
+        return Gui(options, "WorkspaceContent")
+    }
+
+    if (previousBehavior = -1) {
+        Log("Windows rejected mixed DPI hosting; creating the workspace panel with default DPI hosting", "WARNING")
+        return Gui(options, "WorkspaceContent")
+    }
+
+    panel := 0
+    creationError := ""
+    restoreError := ""
+    ; The behavior is attached permanently to windows created while it is
+    ; active, so keep the override scoped to this one panel HWND.
+    try panel := Gui(options, "WorkspaceContent")
+    catch as e
+        creationError := e.Message
+
+    try {
+        restoredBehavior := DllCall("SetThreadDpiHostingBehavior", "Int", previousBehavior, "Int")
+        if (restoredBehavior = -1)
+            restoreError := "Windows rejected restoration of the previous DPI hosting behavior"
+    } catch as e {
+        restoreError := e.Message
+    }
+
+    if (restoreError != "") {
+        message := "Could not restore the thread DPI hosting behavior: " . restoreError
+        if (creationError != "")
+            message .= ". Workspace panel creation also failed: " . creationError
+        throw Error(message)
+    }
+    if (creationError != "")
+        throw Error("Could not create the workspace panel: " . creationError)
+    return panel
 }
 
 WorkspaceLoadManifest(workspaceId) {
@@ -665,12 +711,17 @@ WorkspaceCountMatchingAppsForWindow(hwnd) {
 WorkspaceEmbedWindow(hwnd, parentHwnd, app) {
     hostContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", parentHwnd, "Ptr")
     appContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", hwnd, "Ptr")
-    if (!DllCall("AreDpiAwarenessContextsEqual", "Ptr", hostContext, "Ptr", appContext, "Int")) {
+    contextsDiffer := !DllCall("AreDpiAwarenessContextsEqual", "Ptr", hostContext, "Ptr", appContext, "Int")
+    mixedDpiHosting := WorkspaceWindowHasMixedDpiHosting(parentHwnd)
+    if (contextsDiffer) {
         hostAwareness := DllCall("GetAwarenessFromDpiAwarenessContext", "Ptr", hostContext, "Int")
         appAwareness := DllCall("GetAwarenessFromDpiAwarenessContext", "Ptr", appContext, "Int")
+        hostingNote := mixedDpiHosting
+            ? "the workspace panel supports mixed DPI hosting"
+            : "the workspace panel uses default DPI hosting"
         Log("Embedding application '" . app["id"] . "' across DPI awareness contexts (host="
             . WorkspaceDpiAwarenessName(hostAwareness) . ", app=" . WorkspaceDpiAwarenessName(appAwareness)
-            . "). Windows resets the child process DPI awareness for cross-process SetParent", "WARNING")
+            . "; " . hostingNote . ")", mixedDpiHosting ? "DEBUG" : "WARNING")
     }
 
     WorkspaceApplyEmbeddedWindowStyle(hwnd, app)
@@ -685,10 +736,24 @@ WorkspaceEmbedWindow(hwnd, parentHwnd, app) {
     if (WorkspaceGetWindowParent(hwnd) != parentHwnd)
         throw Error("Windows did not attach application '" . app["id"] . "' to the workspace panel")
 
+    attachedContext := DllCall("GetWindowDpiAwarenessContext", "Ptr", hwnd, "Ptr")
+    if (!DllCall("AreDpiAwarenessContextsEqual", "Ptr", appContext, "Ptr", attachedContext, "Int")) {
+        attachedAwareness := DllCall("GetAwarenessFromDpiAwarenessContext", "Ptr", attachedContext, "Int")
+        Log("Windows changed application '" . app["id"] . "' DPI awareness during cross-process SetParent ("
+            . WorkspaceDpiAwarenessName(DllCall("GetAwarenessFromDpiAwarenessContext", "Ptr", appContext, "Int"))
+            . " -> " . WorkspaceDpiAwarenessName(attachedAwareness) . ")", "WARNING")
+    }
+
     Log("Workspace parent set for '" . app["id"] . "' window " . hwnd, "DEBUG")
     ; Reapply after reparenting: some applications rebuild their non-client frame
     ; while processing the parent change.
     WorkspaceApplyEmbeddedWindowStyle(hwnd, app, true)
+}
+
+WorkspaceWindowHasMixedDpiHosting(hwnd) {
+    try return DllCall("GetWindowDpiHostingBehavior", "Ptr", hwnd, "Int") = 1
+    catch
+        return false
 }
 
 WorkspaceApplyEmbeddedWindowStyle(hwnd, app, forceFrameRefresh := false) {
@@ -745,18 +810,51 @@ WorkspaceAddClipChildren(hwnd) {
 }
 
 WorkspaceSelectTab(index) {
-    global WORKSPACE_APPS, WORKSPACE_STATUS_TEXT, WORKSPACE_PANEL
+    global WORKSPACE_APPS, WORKSPACE_STATUS_TEXT, WORKSPACE_PANEL, WORKSPACE_TABS
+    global WORKSPACE_ACTIVE_TAB, WORKSPACE_TAB_CHANGE_GUARD
+    if (WORKSPACE_TAB_CHANGE_GUARD)
+        return
     if (index < 1 || index > WORKSPACE_APPS.Length)
         return
+
+    ; A modal owned popup disables its app's main window. Keep that app and the
+    ; popup visible until the user closes it; hiding only the popup would strand
+    ; the disabled main window behind another tab.
+    if (index != WORKSPACE_ACTIVE_TAB && WORKSPACE_ACTIVE_TAB >= 1
+        && WORKSPACE_ACTIVE_TAB <= WORKSPACE_APPS.Length) {
+        activeApp := WORKSPACE_APPS[WORKSPACE_ACTIVE_TAB]
+        modalHwnd := WorkspaceGetBlockingModalWindow(activeApp)
+        if (modalHwnd) {
+            WORKSPACE_TAB_CHANGE_GUARD := true
+            try {
+                WORKSPACE_TABS.Value := WORKSPACE_ACTIVE_TAB
+            } finally {
+                WORKSPACE_TAB_CHANGE_GUARD := false
+            }
+            dialogTitle := ""
+            if (modalHwnd > 0) {
+                try dialogTitle := WinGetTitle("ahk_id " . modalHwnd)
+                WorkspaceFocusHostedWindow(modalHwnd)
+            } else
+                dialogTitle := "an untracked modal window"
+            Log("Blocked workspace tab change while modal dialog '" . dialogTitle
+                . "' is open for '" . activeApp["id"] . "'", "WARNING")
+            return
+        }
+    }
+
+    WORKSPACE_ACTIVE_TAB := index
 
     selected := WORKSPACE_APPS[index]
     for appIndex, app in WORKSPACE_APPS {
         for hwnd in app["hwnds"] {
-            if (!hwnd || !WinExist("ahk_id " . hwnd))
+            if (!hwnd || !DllCall("IsWindow", "Ptr", hwnd, "Int"))
                 continue
             role := app["windowRoles"].Has(hwnd) ? app["windowRoles"][hwnd] : "main"
-            if (role = "auxiliary")
+            if (role = "auxiliary" && appIndex != index)
                 DllCall("ShowWindow", "Ptr", hwnd, "Int", 0)
+            else if (role = "auxiliary")
+                continue
             else if (appIndex = index)
                 WorkspaceRestoreHostedWindow(hwnd)
             else
@@ -767,8 +865,11 @@ WorkspaceSelectTab(index) {
     ; Show popups only after their app's primary window has been restored.
     for hwnd in selected["hwnds"] {
         if (selected["windowRoles"].Has(hwnd) && selected["windowRoles"][hwnd] = "auxiliary"
-            && WinExist("ahk_id " . hwnd))
+            && DllCall("IsWindow", "Ptr", hwnd, "Int")) {
             DllCall("ShowWindow", "Ptr", hwnd, "Int", 5)
+            if (!DllCall("IsWindowVisible", "Ptr", hwnd, "Int"))
+                Log("Could not show auxiliary window " . hwnd . " for workspace app '" . selected["id"] . "'", "WARNING")
+        }
     }
     if (selected["state"] = "running") {
         focusHwnd := selected["hwnd"]
@@ -792,13 +893,89 @@ WorkspaceSelectTab(index) {
                     }
                 }
             }
-            try WinActivate("ahk_id " . focusHwnd)
+            if (!WorkspaceFocusHostedWindow(focusHwnd))
+                try WinActivate("ahk_id " . focusHwnd)
             return
         }
     }
 
     WORKSPACE_STATUS_TEXT.Text := "Application '" . selected["title"] . "' is no longer running. Reconnect to restart the workspace."
     WORKSPACE_STATUS_TEXT.Visible := true
+}
+
+WorkspaceGetBlockingModalWindow(app) {
+    if (!app["hwnd"] || !DllCall("IsWindow", "Ptr", app["hwnd"], "Int")
+        || DllCall("IsWindowEnabled", "Ptr", app["hwnd"], "Int"))
+        return 0
+
+    for hwnd in app["hwnds"] {
+        if (!app["windowRoles"].Has(hwnd) || app["windowRoles"][hwnd] != "auxiliary"
+            || !DllCall("IsWindow", "Ptr", hwnd, "Int")
+            || !DllCall("IsWindowVisible", "Ptr", hwnd, "Int")
+            || !DllCall("IsWindowEnabled", "Ptr", hwnd, "Int"))
+            continue
+        return hwnd
+    }
+    ; A disabled main window is sufficient evidence that the app is in a modal
+    ; state, even if its dialog has not been discovered or tracked yet.
+    return -1
+}
+
+WorkspaceFocusHostedWindow(hwnd) {
+    global WORKSPACE_GUI
+    if (!hwnd || !DllCall("IsWindow", "Ptr", hwnd, "Int")
+        || !DllCall("IsWindowEnabled", "Ptr", hwnd, "Int"))
+        return false
+
+    targetPid := 0
+    targetThreadId := DllCall("GetWindowThreadProcessId", "Ptr", hwnd, "UInt*", &targetPid, "UInt")
+    currentThreadId := DllCall("GetCurrentThreadId", "UInt")
+    if (!targetThreadId || !currentThreadId)
+        return false
+
+    attached := false
+    if (targetThreadId != currentThreadId) {
+        attached := DllCall("AttachThreadInput", "UInt", currentThreadId, "UInt", targetThreadId, "Int", 1, "Int")
+        if (!attached) {
+            Log("Could not attach input queues to focus workspace HWND " . hwnd, "WARNING")
+            return false
+        }
+    }
+
+    try {
+        rootHwnd := DllCall("GetAncestor", "Ptr", hwnd, "UInt", 2, "Ptr") ; GA_ROOT
+        foregroundHwnd := rootHwnd = hwnd ? hwnd : (IsObject(WORKSPACE_GUI) ? WORKSPACE_GUI.Hwnd : rootHwnd)
+        if (foregroundHwnd)
+            DllCall("SetForegroundWindow", "Ptr", foregroundHwnd, "Int")
+        DllCall("SetActiveWindow", "Ptr", hwnd, "Ptr")
+        DllCall("SetFocus", "Ptr", hwnd, "Ptr")
+    } finally {
+        if (attached)
+            DllCall("AttachThreadInput", "UInt", currentThreadId, "UInt", targetThreadId, "Int", 0, "Int")
+    }
+
+    threadState := WorkspaceGetGuiThreadState(hwnd)
+    focusedPid := threadState["focus"] ? WorkspaceGetWindowProcessId(threadState["focus"]) : 0
+    if (focusedPid != targetPid) {
+        Log("Keyboard focus did not move to workspace app PID " . targetPid . " (focus HWND "
+            . threadState["focus"] . ")", "WARNING")
+        return false
+    }
+    return true
+}
+
+WorkspaceGetGuiThreadState(hwnd) {
+    pid := 0
+    threadId := DllCall("GetWindowThreadProcessId", "Ptr", hwnd, "UInt*", &pid, "UInt")
+    if (!threadId)
+        return Map("active", 0, "focus", 0, "thread", 0, "pid", pid)
+
+    threadInfo := Buffer(A_PtrSize = 8 ? 72 : 48, 0) ; GUITHREADINFO
+    NumPut("UInt", threadInfo.Size, threadInfo, 0)
+    if (!DllCall("GetGUIThreadInfo", "UInt", threadId, "Ptr", threadInfo, "Int"))
+        return Map("active", 0, "focus", 0, "thread", threadId, "pid", pid)
+    return Map("active", NumGet(threadInfo, 8, "Ptr"),
+        "focus", NumGet(threadInfo, 8 + A_PtrSize, "Ptr"), "thread", threadId, "pid", pid)
 }
 
 WorkspaceResize() {
