@@ -164,7 +164,7 @@ WorkspaceValidateApp(source, appIndex) {
         SplitPath(executable, , &workingDirectory)
     }
 
-    startupTimeout := source.Has("startupTimeoutSeconds") ? source["startupTimeoutSeconds"] : 30
+    startupTimeout := source.Has("startupTimeoutSeconds") ? source["startupTimeoutSeconds"] : 60
     if (!IsNumber(startupTimeout) || Floor(startupTimeout) != startupTimeout)
         throw Error("Application '" . id . "' startupTimeoutSeconds must be an integer")
     startupTimeout := Integer(startupTimeout)

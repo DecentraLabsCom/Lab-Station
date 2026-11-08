@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.4] - 2026-11-08
+
+### Added
+- Allow workspace manifests and the editor to identify the executable that owns the real application window when a launcher starts a separate process.
+
+### Fixed
+- Ignore launcher splash/helper windows while waiting for the main window, track application popups, and restore minimized main windows when selecting a workspace tab.
+
+### Changed
+- Set the default per-application workspace startup timeout to 60 seconds. The wait ends as soon as the matching window appears.
+
 ## [3.6.0-preview.3] - 2026-11-07
 
 ### Added

@@ -81,7 +81,9 @@ AppControl waits for a visible primary window from `windowExecutable` before it
 starts the workspace monitor. Startup splashes, owned popups, standard Windows
 dialogs, and tool windows cannot satisfy that wait. When several main-like
 windows appear, set `windowTitleContains` or `windowClass` to select the intended
-one. After the main window attaches, its owned popups and tool windows are
+one. `startupTimeoutSeconds` defaults to 60 seconds when omitted. This is a
+maximum: AppControl continues as soon as the matching window appears. After the
+main window attaches, its owned popups and tool windows are
 tracked as auxiliary windows even when their class or title differs. They keep
 their native size and owner relationship, and are shown or hidden with their
 application's tab. They are not re-parented or stretched across the workspace.

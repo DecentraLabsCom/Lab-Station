@@ -192,7 +192,7 @@ LS_WorkspaceEditorNormalizeApp(source, index) {
     windowExecutable := source.Has("windowExecutable") ? source["windowExecutable"] : ""
     windowClass := source.Has("windowClass") ? source["windowClass"] : ""
     titleContains := source.Has("windowTitleContains") ? source["windowTitleContains"] : ""
-    timeout := source.Has("startupTimeoutSeconds") ? source["startupTimeoutSeconds"] : 30
+    timeout := source.Has("startupTimeoutSeconds") ? source["startupTimeoutSeconds"] : 60
     if (Type(workingDirectory) != "String" || Type(windowExecutable) != "String"
         || Type(windowClass) != "String" || Type(titleContains) != "String")
         throw Error("Application " . index . " has invalid optional field types")
@@ -281,7 +281,7 @@ LS_WorkspaceEditorMoveApp(editor, direction) {
 LS_WorkspaceEditorShowAppDialog(editor, index := 0) {
     seed := index ? editor.Apps[index] : Map(
         "title", "", "executable", "", "arguments", [], "workingDirectory", "",
-        "windowExecutable", "", "windowClass", "", "windowTitleContains", "", "startupTimeoutSeconds", 30, "id", ""
+        "windowExecutable", "", "windowClass", "", "windowTitleContains", "", "startupTimeoutSeconds", 60, "id", ""
     )
     dialog := Gui("+Owner" . editor.Hwnd . " +ToolWindow", index ? "Edit application" : "Add application")
     dialog.BackColor := "0F1419"
@@ -332,11 +332,11 @@ LS_WorkspaceEditorShowAppDialog(editor, index := 0) {
     dialog.SetFont("s8 c374151", "Segoe UI")
     dialog.TitleFilterEdit := dialog.AddEdit("x140 y334 w475 Hidden", seed["windowTitleContains"])
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.TimeoutLabel := dialog.AddText("x20 y372 w115 Hidden", "Wait (seconds)")
+    dialog.TimeoutLabel := dialog.AddText("x20 y372 w115 Hidden", "Wait up to (seconds)")
     dialog.SetFont("s8 c374151", "Segoe UI")
     dialog.TimeoutEdit := dialog.AddEdit("x140 y369 w80 Hidden", seed["startupTimeoutSeconds"])
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.AdvancedHelpText := dialog.AddText("x20 y407 w595 h38 Hidden", "Set Window executable when a launcher starts a separate program. Class and title filters select that program's main window.")
+    dialog.AdvancedHelpText := dialog.AddText("x20 y407 w595 h38 Hidden", "Set Window executable when a launcher starts a separate program. Class and title filters select its main window. The wait is a maximum; startup continues as soon as the matching window appears.")
 
     dialog.SetFont("s9 c374151", "Segoe UI")
     dialog.SaveButton := dialog.AddButton("x453 y222 w78 h30 Default", "Apply")
@@ -733,7 +733,7 @@ LS_WorkspaceEditorValidateApps(apps) {
                 throw Error("Application '" . title . "' has an invalid parameter")
         }
 
-        timeout := app.Has("startupTimeoutSeconds") ? app["startupTimeoutSeconds"] : 30
+        timeout := app.Has("startupTimeoutSeconds") ? app["startupTimeoutSeconds"] : 60
         try timeout := Integer(timeout)
         catch
             throw Error("Application '" . title . "' startup wait must be an integer")
