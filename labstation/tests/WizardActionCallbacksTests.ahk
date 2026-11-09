@@ -55,14 +55,14 @@ errors := []
 
 try {
     serverSteps := LS_WizardServerSteps()
-    CheckSteps("server", serverSteps, 8, &errors)
+    CheckSteps("server", serverSteps, 9, &errors)
 } catch as e {
     errors.Push("server: exception while building steps - " . e.Message)
 }
 
 try {
     hybridSteps := LS_WizardHybridSteps()
-    CheckSteps("hybrid", hybridSteps, 8, &errors)
+    CheckSteps("hybrid", hybridSteps, 9, &errors)
     if (IsSet(serverSteps) && serverSteps.Length >= 2 && hybridSteps.Length >= 2
         && serverSteps[2]["label"] != hybridSteps[2]["label"]) {
         errors.Push("wizard: dedicated and hybrid profiles must share the Remote App AppControl launch policy")
@@ -361,11 +361,12 @@ if (!registryFallbackNic["wolReady"]) {
 statusFixture := Map(
     "stationProfile", "hybrid",
     "identity", Map("labUserExists", true),
+    "firewall", Map("rdpReady", true),
     "remoteAppEnabled", true,
     "winrm", Map("ready", true),
     "legacyAppControlAutostart", false,
     "policy", Map(
-        "autoLogon", Map("enabled", false, "userMatches", false, "passwordSet", false),
+        "autoLogon", Map("enabled", false, "userMatches", false, "secretStored", false, "plaintextPasswordPresent", false),
         "remoteDesktopUsers", Map("labUserPresent", true, "otherMembers", []),
         "denyInteractive", Map("configured", false, "labUserDenied", false)
     ),

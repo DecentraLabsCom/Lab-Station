@@ -236,7 +236,8 @@ RunWorkspaceLifecycleSmokeTest() {
 
     for app in WORKSPACE_APPS {
         TestAssert(app["state"] = "running", "fake app reaches running state: " . app["id"])
-        TestAssert(WorkspaceProcessIsRunning(app), "fake app window or launcher is supervised: " . app["id"])
+        TestAssert(WorkspaceHasAttachedWindow(app) || WorkspaceLaunchProcessIsRunning(app),
+            "fake app window or launcher is supervised: " . app["id"])
         TestAssert(DllCall("GetParent", "Ptr", app["hwnd"], "Ptr") = WORKSPACE_PANEL.Hwnd,
             "fake app is parented to workspace panel: " . app["id"])
     }

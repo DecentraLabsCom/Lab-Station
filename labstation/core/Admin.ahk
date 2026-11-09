@@ -17,24 +17,6 @@ LS_EnsureAdmin(prompt := true) {
     return false
 }
 
-LS_RelaunchAsAdmin() {
-    if (A_IsAdmin) {
-        return true
-    }
-    params := '"' . A_ScriptFullPath . '"'
-    for arg in A_Args {
-        params .= " " . LS_EscapeCliArgument(arg)
-    }
-    try {
-        Run Format('*RunAs "{1}" {2}', A_AhkPath, params)
-        ExitApp
-    } catch as e {
-        LS_LogError("Cannot relaunch as admin: " . e.Message)
-        return false
-    }
-    return true
-}
-
 LS_EscapeCliArgument(value) {
     quote := Chr(34)
     if (value = "") {

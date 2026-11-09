@@ -10,28 +10,9 @@
 ;@Ahk2Exe-SetFileVersion 3.6.0
 ;@Ahk2Exe-SetProductVersion 3.6.0
 
-; Embed logo for compiled builds so the GUI can find it.
-TryExtractLogo() {
-    if (!A_IsCompiled)
-        return
-    targetDir := A_ScriptDir "\img"
-    target := targetDir "\DecentraLabs.png"
-    try DirCreate(targetDir)
-    if (FileExist(target))
-        return
-    ; Note: FileInstall disabled - logo distributed separately in img/ folder
-    ; The GUI will find it at runtime via the distributed img/DecentraLabs.png
-    ; try {
-    ;     FileInstall "img\DecentraLabs.png", target, true
-    ; }
-}
-
 TryLaunch() {
     exePath := A_ScriptDir "\LabStation.exe"
     scriptPath := A_ScriptDir "\labstation\LabStation.ahk"
-
-    ; Ensure the logo is available for the GUI
-    TryExtractLogo()
 
     ; Prefer compiled LabStation next to this launcher
     if (FileExist(exePath)) {

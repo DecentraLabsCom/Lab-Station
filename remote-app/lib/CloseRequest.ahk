@@ -124,7 +124,3 @@ ControllerRequestTick(token) {
         return match[1] + 0
     return 0
 }
-
-ControllerCloseResultMatches(resultText, token, status) {
-    return Trim(resultText) = token . "|" . status
-}

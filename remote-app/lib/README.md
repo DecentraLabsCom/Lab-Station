@@ -11,7 +11,7 @@ remote-app/
 ├── AppControl.ahk          # Entry point and argument parser
 └── lib/
     ├── Config.ahk          # Constants, timing, browser flags, data paths
-    ├── Utils.ahk           # Logging, polling, sizing and window discovery
+    ├── Utils.ahk           # Logging, polling, window dimensions and browser flags
     ├── WindowClosing.ahk   # Cooperative and fallback close strategies
     ├── CloseRequest.ahk    # Lab Station close-handshake protocol
     ├── RdpMonitoring.ahk   # WTS notifications and event-log fallback
@@ -29,7 +29,7 @@ configuration initialization.
 | --- | --- |
 | `Config.ahk` | Defaults for polling, startup, activation, browser enhancement, RDP events, and the cooperative close files. |
 | `WorkspaceConfig.ahk` | Maximum workspace app count and the protected ProgramData manifest root. |
-| `Utils.ahk` | Common logging, wait loops, executable parsing, window discovery, sizing, and browser command enhancement. |
+| `Utils.ahk` | Common logging, wait loops, executable parsing, window dimensions, and browser command enhancement. |
 | `WindowClosing.ahk` | Standard close cascade plus custom ClassNN and client-coordinate strategies. |
 | `CloseRequest.ahk` | Presence marker and request/result handshake used by `release-session` and `prepare-session`. |
 | `RdpMonitoring.ahk` | WTS session notifications first; event-log polling as fallback. |

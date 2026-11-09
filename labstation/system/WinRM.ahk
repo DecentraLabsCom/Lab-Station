@@ -11,7 +11,6 @@
 
 class LS_WinRM {
     static DefaultGatewayUser := "LabGatewaySvc"
-    static HttpsPort := 5986
 
     static Configure(user := "", &password := "") {
         if (!LS_EnsureAdmin()) {

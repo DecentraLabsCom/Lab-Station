@@ -7,8 +7,6 @@
 #Include ..\core\Admin.ahk
 #Include ..\diagnostics\Status.ahk
 #Include ..\service\Telemetry.ahk
-#Include ..\service\SessionManager.ahk
-#Include ..\service\SessionGuard.ahk
 #Include ..\system\ServiceManager.ahk
 #Include ConnectorsPanel.ahk
 
@@ -328,39 +326,6 @@ LS_GuiRunSetup() {
     LS_GuiPublishStatus()
 }
 
-LS_GuiRunGuard() {
-    if (!LS_GuiEnsureAdmin())
-        return
-    success := LS_SessionGuard.Run(Map("grace", 90))
-    icon := success ? "OK Iconi" : "OK Iconx"
-    MsgBox (success ? "Session guard finished" : "Session guard reported warnings"), "Lab Station", icon
-    LS_GuiPublishStatus()
-    if (IsSet(LS_GUI) && LS_GUI)
-        LS_GuiRefreshStatus(LS_GUI)
-}
-
-LS_GuiRunPrepare() {
-    if (!LS_GuiEnsureAdmin())
-        return
-    success := LS_SessionManager.PrepareSession()
-    icon := success ? "OK Iconi" : "OK Iconx"
-    MsgBox (success ? "Prepare-session completed" : "Prepare-session finished with warnings"), "Lab Station", icon
-    LS_GuiPublishStatus()
-    if (IsSet(LS_GUI) && LS_GUI)
-        LS_GuiRefreshStatus(LS_GUI)
-}
-
-LS_GuiRunRelease() {
-    if (!LS_GuiEnsureAdmin())
-        return
-    success := LS_SessionManager.ReleaseSession(Map("reboot", true))
-    icon := success ? "OK Iconi" : "OK Iconx"
-    MsgBox (success ? "Release-session completed" : "Release-session finished with warnings"), "Lab Station", icon
-    LS_GuiPublishStatus()
-    if (IsSet(LS_GUI) && LS_GUI)
-        LS_GuiRefreshStatus(LS_GUI)
-}
-
 LS_GuiSize_Handler(guiObj, minMax, w, h) {
     if (minMax = -1) { ; minimized
         guiObj.Hide()
@@ -409,17 +374,6 @@ LS_GuiRestartService(gui) {
     }
     if (IsSet(gui) && gui)
         LS_GuiRefreshServiceState(gui)
-}
-
-LS_GuiToggleTray(gui) {
-    try {
-        A_IconHidden := !A_IconHidden
-        if (!A_IconHidden)
-            LS_EnsureTrayMenu()
-    } catch as e {
-        MsgBox "Unable to toggle tray icon: " . e.Message, "Lab Station", "OK Iconx"
-        return
-    }
 }
 
 LS_GuiToggleLocalMode(gui) {
@@ -493,18 +447,6 @@ LS_GuiOpenLog_Handler(ctrl, info) {
 
 LS_GuiRunSetup_Handler(ctrl, info) {
     LS_GuiRunSetup()
-}
-
-LS_GuiRunGuard_Handler(ctrl, info) {
-    LS_GuiRunGuard()
-}
-
-LS_GuiRunPrepare_Handler(ctrl, info) {
-    LS_GuiRunPrepare()
-}
-
-LS_GuiRunRelease_Handler(ctrl, info) {
-    LS_GuiRunRelease()
 }
 
 LS_GuiRestartService_Handler(ctrl, info) {

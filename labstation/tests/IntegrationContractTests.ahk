@@ -45,7 +45,6 @@ try {
 try {
     winrmSource := FileRead(A_ScriptDir . "\..\system\WinRM.ahk", "UTF-8")
     configureScript := LS_WinRM.BuildConfigureScript("LabGatewaySvc", "test-password")
-    AssertContains("winrm", winrmSource, "HttpsPort := 5986", &errors)
     AssertContains("winrm", configureScript, "Transport=HTTPS", &errors)
     AssertContains("winrm", configureScript, "5986", &errors)
     AssertContains("winrm", configureScript, "AllowUnencrypted", &errors)

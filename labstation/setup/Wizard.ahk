@@ -10,6 +10,7 @@
 #Include ..\system\AccountManager.ahk
 #Include ..\system\WinRM.ahk
 #Include ..\system\ServiceManager.ahk
+#Include ..\system\RemoteAppWorkspaceStore.ahk
 #Include ..\diagnostics\Status.ahk
 
 LS_RunSetupWizard() {

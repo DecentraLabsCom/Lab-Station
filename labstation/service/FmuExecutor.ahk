@@ -28,10 +28,6 @@ if (!IsSet(LAB_STATION_FMU_EXECUTOR_PORT)) {
     global LAB_STATION_FMU_EXECUTOR_PORT := LS_ResolveFmuExecutorPort()
 }
 
-if (!IsSet(LAB_STATION_FMU_EXECUTOR_LOG)) {
-    global LAB_STATION_FMU_EXECUTOR_LOG := LAB_STATION_FMU_EXECUTOR_DIR "\executor.log"
-}
-
 class LS_FmuExecutor {
     static _pid := 0
     static _lastHealthCheck := 0

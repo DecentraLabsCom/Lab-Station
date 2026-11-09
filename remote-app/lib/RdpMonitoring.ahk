@@ -186,13 +186,10 @@ CheckSessionEvents(*) {
 
 ; Session change handler (WM_WTSSESSION_CHANGE)
 OnSessionChange(wParam, lParam, msg, hwnd) {
-    static WTS_SESSION_CONSOLE_CONNECT := 0x1
-    static WTS_SESSION_REMOTE_CONNECT  := 0x3
     static WTS_SESSION_REMOTE_DISCONNECT := 0x4
     static WTS_SESSION_DISCONNECT := 0x5
     static WTS_SESSION_LOGOFF := 0x6
     static WTS_SESSION_LOCK := 0x7
-    static WTS_SESSION_UNLOCK := 0x8
 
     global target, WORKSPACE_MODE
 

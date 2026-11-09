@@ -1062,10 +1062,6 @@ WorkspaceMonitor(*) {
     }
 }
 
-WorkspaceProcessIsRunning(app) {
-    return WorkspaceHasAttachedWindow(app) || WorkspaceLaunchProcessIsRunning(app)
-}
-
 WorkspaceLaunchProcessIsRunning(app) {
     ; ShellExecute-based launchers can return the PID of an already-running
     ; single-instance app. Do not supervise or terminate a process that owned
