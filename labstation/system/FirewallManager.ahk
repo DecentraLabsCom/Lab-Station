@@ -77,17 +77,21 @@ class LS_FirewallManager {
     }
 
     static ConfigureWinRmFirewall() {
+        ; Keep the WinRM HTTPS rule scoped by Gateway address and port, but do not
+        ; add a Windows service filter: it prevented TCP 5986 from matching on a
+        ; deployed Windows Station even though the listener and source scope were correct.
         return this.ConfigureScopedRule(
             this.WinRmValue,
             "WinRM",
             "5986",
             "WinRM",
             "LabStation-WinRM-HTTPS",
-            "Lab Station WinRM HTTPS from Gateway"
+            "Lab Station WinRM HTTPS from Gateway",
+            false
         )
     }
 
-    static ConfigureScopedRule(valueName, label, port, service, ruleName, displayName) {
+    static ConfigureScopedRule(valueName, label, port, service, ruleName, displayName, useServiceFilter := true) {
         if (!LS_EnsureAdmin())
             return false
         addresses := this.ReadConfiguredAddresses(valueName)
@@ -96,6 +100,8 @@ class LS_FirewallManager {
             return false
         }
         addressArray := this.PowerShellAddressArray(addresses)
+        serviceFilterArgument := useServiceFilter ? " -Service '" . service . "'" : ""
+        expectedServiceFilter := useServiceFilter ? service : "Any"
         script := ""
             . "`$ErrorActionPreference = 'Stop'`n"
             . "`$allowedAddresses = " . addressArray . "`n"
@@ -124,11 +130,11 @@ class LS_FirewallManager {
             . "  New-NetFirewallRule -Name 'LabStation-WinRM-HTTP-Block' -DisplayName 'Lab Station block WinRM HTTP' -Direction Inbound -Action Block -Enabled True -Protocol TCP -LocalPort '5985' -Service 'WinRM' -Profile Domain,Private,Public -ErrorAction Stop | Out-Null`n"
             . "}`n"
             . "Remove-NetFirewallRule -Name '" . ruleName . "' -ErrorAction SilentlyContinue`n"
-            . "New-NetFirewallRule -Name '" . ruleName . "' -DisplayName '" . displayName . "' -Direction Inbound -Action Allow -Enabled True -Protocol TCP -LocalPort '" . port . "' -Service '" . service . "' -RemoteAddress `$allowedAddresses -Profile Domain,Private,Public -ErrorAction Stop | Out-Null`n"
+            . "New-NetFirewallRule -Name '" . ruleName . "' -DisplayName '" . displayName . "' -Direction Inbound -Action Allow -Enabled True -Protocol TCP -LocalPort '" . port . "'" . serviceFilterArgument . " -RemoteAddress `$allowedAddresses -Profile Domain,Private,Public -ErrorAction Stop | Out-Null`n"
             . "`$rule = Get-NetFirewallRule -Name '" . ruleName . "' -ErrorAction Stop`n"
             . "`$actualAddresses = @((Get-NetFirewallAddressFilter -AssociatedNetFirewallRule `$rule -ErrorAction Stop).RemoteAddress)`n"
             . "`$actualPort = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule `$rule -ErrorAction Stop | Where-Object { ([string]`$_.Protocol -match '(?i)^TCP$|^6$') -and [string]`$_.LocalPort -eq '" . port . "' }).Count -gt 0`n"
-            . "`$actualService = @(Get-NetFirewallServiceFilter -AssociatedNetFirewallRule `$rule -ErrorAction Stop | Where-Object { [string]`$_.Service -eq '" . service . "' }).Count -gt 0`n"
+            . "`$actualService = @(Get-NetFirewallServiceFilter -AssociatedNetFirewallRule `$rule -ErrorAction Stop | Where-Object { [string]`$_.Service -eq '" . expectedServiceFilter . "' }).Count -gt 0`n"
             . "if (-not `$rule.Enabled -or `$rule.Action -ne 'Allow' -or -not `$actualPort -or -not `$actualService -or `$actualAddresses.Count -ne `$allowedAddresses.Count -or @(`$actualAddresses | Where-Object { `$allowedAddresses -notcontains ([string]`$_).Trim() }).Count -gt 0) { throw 'The scoped firewall rule did not pass verification' }`n"
             . "Write-Output 'LABSTATION_SCOPED_FIREWALL_READY'`n"
         capture := LS_RunPowerShellCapture(script, "Configure Gateway-scoped " . label . " firewall rule", LAB_STATION_LONG_COMMAND_TIMEOUT_MS)
@@ -178,7 +184,7 @@ class LS_FirewallManager {
             . "  return `$true`n"
             . "}`n"
             . "`$rdpRule = Test-ScopedRule 'LabStation-RDP-Gateway-TCP' '3389' 'TermService' `$rdpExpected`n"
-            . "`$winrmRule = Test-ScopedRule 'LabStation-WinRM-HTTPS' '5986' 'WinRM' `$winrmExpected`n"
+            . "`$winrmRule = Test-ScopedRule 'LabStation-WinRM-HTTPS' '5986' 'Any' `$winrmExpected`n"
             . "`$rdpNoUnexpectedRules = Test-NoUnexpectedAllowRule '3389' 'TermService' 'LabStation-RDP-Gateway-TCP' 'RDP'`n"
             . "`$winrmNoUnexpectedRules = Test-NoUnexpectedAllowRule '5986' 'WinRM' 'LabStation-WinRM-HTTPS' 'WinRM'`n"
             . "`$winrmHttpBlocked = `$false`n"

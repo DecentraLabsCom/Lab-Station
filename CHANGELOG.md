@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.6] - 2026-11-09
+
+### Fixed
+- Allow Gateway WinRM HTTPS by source IP and port without a service filter, which blocked inbound TCP connections on the deployed Windows Station.
+
 ## [3.6.0-preview.5] - 2026-11-08
 
 ### Fixed
