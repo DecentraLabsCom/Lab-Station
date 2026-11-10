@@ -148,6 +148,10 @@ jobs:
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\WizardActionCallbacksTests.ahk
 
+      - name: Run LabStation firewall manager tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\FirewallManagerTests.ahk
+
       - name: Run LabStation integration contract tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\IntegrationContractTests.ahk

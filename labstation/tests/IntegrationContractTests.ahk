@@ -48,6 +48,8 @@ try {
     AssertContains("winrm", configureScript, "Transport=HTTPS", &errors)
     AssertContains("winrm", configureScript, "5986", &errors)
     AssertContains("winrm", configureScript, "AllowUnencrypted", &errors)
+    AssertContains("winrm", configureScript, "$winrmSetting = '@{' + $Key", &errors)
+    AssertContains("winrm", configureScript, "& winrm set $WinRMPath $winrmSetting", &errors)
     AssertContains("winrm", configureScript, "Certificate", &errors)
     AssertContains("winrm", winrmSource, "Get-WSManInstance -ResourceURI 'winrm/config/listener'", &errors)
     AssertContains("winrm", winrmSource, "CertificateThumbprint", &errors)

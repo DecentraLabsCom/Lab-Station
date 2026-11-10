@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.7] - 2026-11-10
+
+### Fixed
+- Normalize full-length IPv4 and IPv6 prefixes when verifying Gateway firewall scopes, since Windows may report them as bare host addresses.
+- Disable conflicting inbound firewall rules by name to avoid failures when Windows returns rules from the active policy store.
+- Preserve quoted WinRM boolean values when falling back to the Windows PowerShell 5.1 `winrm` command.
+- Load the protected RemoteApp workspace store from the setup wizard before configuring RemoteApp workspaces.
+
+### Changed
+- Refresh the bundled FMU Executor 0.3.10 source snapshot.
+
 ## [3.6.0-preview.6] - 2026-11-09
 
 ### Fixed

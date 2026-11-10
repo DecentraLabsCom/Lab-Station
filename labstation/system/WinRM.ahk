@@ -229,7 +229,8 @@ function Set-WinRMConfigBool([string]$Path, [bool]$Value, [string]$WinRMPath, [s
         }
     } catch {}
     $textValue = if ($Value) { 'true' } else { 'false' }
-    & winrm set $WinRMPath "@{$Key=`"$textValue`"}" | Out-Null
+    $winrmSetting = '@{' + $Key + '="' + $textValue + '"}'
+    & winrm set $WinRMPath $winrmSetting | Out-Null
     if ($LASTEXITCODE -ne 0) { throw ('winrm set failed for ' + $WinRMPath + '/' + $Key + ' with exit code ' + $LASTEXITCODE) }
 }
 
