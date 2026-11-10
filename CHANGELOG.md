@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.6.0-preview.8] - 2026-11-10
+
+### Changed
+- Detect active Public Windows network profiles before WinRM configuration and show a targeted, opt-in instruction without changing the system-wide profile.
+
 ## [3.6.0-preview.7] - 2026-11-10
 
 ### Fixed

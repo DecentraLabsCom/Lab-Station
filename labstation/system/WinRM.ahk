@@ -16,6 +16,24 @@ class LS_WinRM {
         if (!LS_EnsureAdmin()) {
             return false
         }
+        publicProfiles := this.GetActivePublicNetworkProfiles()
+        if (publicProfiles.Length > 0) {
+            profileDetails := ""
+            profileCommands := ""
+            for profile in publicProfiles {
+                profileDetails .= "- " . profile["interfaceAlias"] . " (interface index " . profile["interfaceIndex"] . ")`n"
+                profileCommands .= "Set-NetConnectionProfile -InterfaceIndex " . profile["interfaceIndex"] . " -NetworkCategory Private`n"
+            }
+            MsgBox(
+                "Windows has an active network connection set to Public, and WinRM setup was rejected with this profile. Lab Station will not change this Windows-wide setting automatically.`n`n"
+                . profileDetails . "`nIf a listed connection is untrusted, disconnect it. For a trusted lab network only, run the matching command(s) in elevated PowerShell, then retry WinRM configuration:`n`n"
+                . profileCommands,
+                "WinRM network profile",
+                "OK Icon!"
+            )
+            LS_LogWarning("WinRM setup stopped before changing the network profile because an active Public profile was detected")
+            return false
+        }
         if (!LS_FirewallManager.ConfigureWinRmFirewall()) {
             LS_LogError("Configure a valid Gateway WinRM firewall scope before enabling WinRM")
             return false
@@ -47,6 +65,45 @@ class LS_WinRM {
         else
             LS_LogError("WinRM configuration failed or not ready (exit=" . exitCode . ")")
         return false
+    }
+
+    static GetActivePublicNetworkProfiles() {
+        script := this.BuildActivePublicNetworkProfileQuery()
+        capture := LS_RunPowerShellCapture(script, "Check active network profiles for WinRM setup")
+        if (capture["exitCode"] != 0) {
+            detail := LS_CaptureDetail(capture)
+            if (detail != "")
+                LS_LogWarning("Unable to check active network profiles for WinRM setup: " . detail)
+            return []
+        }
+
+        profiles := []
+        prefix := "LABSTATION_PUBLIC_PROFILE|"
+        for line in StrSplit(capture["stdout"], "`n") {
+            line := Trim(line, " `r`t")
+            if (SubStr(line, 1, StrLen(prefix)) != prefix)
+                continue
+            values := StrSplit(SubStr(line, StrLen(prefix) + 1), "|")
+            if (values.Length < 2 || !RegExMatch(values[1], "^\d+$") || values[2] = "")
+                continue
+            profiles.Push(Map("interfaceIndex", values[1], "interfaceAlias", values[2]))
+        }
+        return profiles
+    }
+
+    static BuildActivePublicNetworkProfileQuery() {
+        return "
+        (
+$ErrorActionPreference = 'Stop'
+$profiles = @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object {
+    $connectivityValues = @([string]$_.IPv4Connectivity, [string]$_.IPv6Connectivity)
+    $hasTraffic = @($connectivityValues | Where-Object { $_ -and $_ -ne 'NoTraffic' -and $_ -ne 'Disconnected' }).Count -gt 0
+    [string]$_.NetworkCategory -eq 'Public' -and $hasTraffic
+})
+foreach ($profile in $profiles) {
+    Write-Output ('LABSTATION_PUBLIC_PROFILE|' + [string]$profile.InterfaceIndex + '|' + [string]$profile.InterfaceAlias)
+}
+        )"
     }
 
     static GetStatus(firewallStatus := "") {

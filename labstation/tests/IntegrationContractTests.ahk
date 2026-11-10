@@ -45,6 +45,13 @@ try {
 try {
     winrmSource := FileRead(A_ScriptDir . "\..\system\WinRM.ahk", "UTF-8")
     configureScript := LS_WinRM.BuildConfigureScript("LabGatewaySvc", "test-password")
+    networkProfileQuery := LS_WinRM.BuildActivePublicNetworkProfileQuery()
+    AssertContains("winrm", networkProfileQuery, "NetworkCategory -eq 'Public'", &errors)
+    AssertContains("winrm", networkProfileQuery, "IPv4Connectivity", &errors)
+    AssertContains("winrm", networkProfileQuery, "IPv6Connectivity", &errors)
+    AssertContains("winrm", networkProfileQuery, "NoTraffic", &errors)
+    AssertContains("winrm", winrmSource, "GetActivePublicNetworkProfiles()", &errors)
+    AssertContains("winrm", winrmSource, "Lab Station will not change this Windows-wide setting automatically", &errors)
     AssertContains("winrm", configureScript, "Transport=HTTPS", &errors)
     AssertContains("winrm", configureScript, "5986", &errors)
     AssertContains("winrm", configureScript, "AllowUnencrypted", &errors)
