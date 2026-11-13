@@ -8,6 +8,7 @@
 #Include ..\core\Json.ahk
 #Include ..\system\AccountManager.ahk
 #Include ServiceState.ahk
+#Include ..\diagnostics\Status.ahk
 
 class LS_SessionGuard {
     static Run(options := Map()) {

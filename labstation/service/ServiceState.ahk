@@ -9,7 +9,7 @@
 class LS_ServiceState {
     static RecordPrepareSession(success, details := Map()) {
         record := Map("success", success)
-        this.CopyIfPresent(record, details, ["durationMs", "user"])
+        this.CopyIfPresent(record, details, ["durationMs", "user", "reason"])
         return this.WriteSection("prepare-session", record)
     }
 

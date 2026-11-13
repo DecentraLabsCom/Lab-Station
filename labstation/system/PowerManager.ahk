@@ -9,6 +9,7 @@
 #Include WakeOnLan.ahk
 #Include EnergyAudit.ahk
 #Include ..\service\ServiceState.ahk
+#Include ..\diagnostics\Status.ahk
 
 class LS_PowerManager {
     static LastExitCode := 2

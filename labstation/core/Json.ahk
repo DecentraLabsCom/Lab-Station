@@ -51,15 +51,7 @@ class LS_JsonNumberValue {
 }
 
 LS_IsArray(obj) {
-    if !IsObject(obj)
-        return false
-    expected := 1
-    for key, value in obj {
-        if (key != expected)
-            return false
-        expected += 1
-    }
-    return true
+    return Type(obj) = "Array"
 }
 
 LS_JsonEscape(value) {

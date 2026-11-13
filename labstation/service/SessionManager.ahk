@@ -42,7 +42,7 @@ class LS_SessionManager {
         if (localSessionDecision = "evict") {
             if (options.Has("guard") && !options["guard"]) {
                 try {
-                    currentLocalSessions := LS_SessionGuard.FindConflictingSessions(managedUser, true)
+                    currentLocalSessions := this.GetPrepareLocalSessions(managedUser)
                 } catch as e {
                     return this.RecordPrepareFailure(started, user, "session inventory unavailable before immediate eviction: " . e.Message)
                 }
@@ -59,7 +59,7 @@ class LS_SessionManager {
             }
         }
         try {
-            if (LS_SessionGuard.FindConflictingSessions(managedUser, true).Length > 0)
+            if (this.GetPrepareLocalSessions(managedUser).Length > 0)
                 return this.RecordPrepareFailure(started, user, "local interactive session became active or remained active during preparation")
         } catch as e {
             return this.RecordPrepareFailure(started, user, "session inventory unavailable after guard: " . e.Message)

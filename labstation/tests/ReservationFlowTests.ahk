@@ -8,9 +8,11 @@
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-ReservationFlowTests-" A_TickCount
 global ORIGINAL_STATE_FILE := LAB_STATION_SERVICE_STATE_FILE
+global ORIGINAL_LOCAL_MODE_FLAG := LAB_STATION_LOCAL_MODE_FLAG
 
 DirCreate(TEST_ROOT)
 LAB_STATION_SERVICE_STATE_FILE := TEST_ROOT "\service-state.ini"
+LAB_STATION_LOCAL_MODE_FLAG := TEST_ROOT "\local-mode.flag"
 
 RunReservationFlowTests()
 
@@ -23,6 +25,10 @@ class RecordingSessionManager extends LS_SessionManager {
     static resetResult := true
     static logoffResult := true
     static rebootResult := true
+
+    static GetPrepareLocalSessions(managedUser) {
+        return []
+    }
 
     static Reset() {
         this.calls := []
@@ -105,7 +111,7 @@ class FailingInventorySessionManager extends LS_SessionManager {
 }
 
 RunReservationFlowTests() {
-    global ORIGINAL_STATE_FILE, LAB_STATION_SERVICE_STATE_FILE, TEST_ROOT
+    global ORIGINAL_STATE_FILE, ORIGINAL_LOCAL_MODE_FLAG, LAB_STATION_SERVICE_STATE_FILE, LAB_STATION_LOCAL_MODE_FLAG, TEST_ROOT
 
     try {
         TestPrepareSessionSuccess()
@@ -121,6 +127,7 @@ RunReservationFlowTests() {
     }
 
     LAB_STATION_SERVICE_STATE_FILE := ORIGINAL_STATE_FILE
+    LAB_STATION_LOCAL_MODE_FLAG := ORIGINAL_LOCAL_MODE_FLAG
     try DirDelete(TEST_ROOT, true)
 
     if (TEST_FAILURES > 0) {
@@ -145,7 +152,6 @@ TestPrepareSessionSuccess() {
 
     LS_TestAssert(success, "prepare-session succeeds when all operations succeed")
     AssertCallSequence([
-        "guard",
         "close-controller",
         "fmu-cleanup",
         "clear-profile",
@@ -153,9 +159,7 @@ TestPrepareSessionSuccess() {
         "extra-cleaner"
     ], "prepare-session operation order")
 
-    guardCall := RecordingSessionManager.calls[1]
-    LS_TestAssert(guardCall["options"]["guard"] = false, "prepare-session forwards guard=false")
-    LS_TestAssert(RecordingSessionManager.calls[4]["user"] = "LABUSER", "prepare-session forwards the selected user")
+    LS_TestAssert(RecordingSessionManager.calls[3]["user"] = "LABUSER", "prepare-session forwards the selected user")
 
     state := LS_ServiceState.ReadSection("prepare-session")
     LS_TestAssert(state.Has("success") && state["success"], "prepare-session records success")
@@ -170,7 +174,6 @@ TestPrepareSessionFailureStillRunsCleanup() {
 
     LS_TestAssert(!success, "prepare-session reports failure when profile cleanup fails")
     AssertCallSequence([
-        "guard",
         "close-controller",
         "fmu-cleanup",
         "clear-profile",

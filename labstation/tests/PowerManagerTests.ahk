@@ -133,7 +133,10 @@ TestWakeIssuesCanBlockPowerAction() {
 }
 
 TestWakeWarningsStillAllowPowerActionByDefault() {
-    RecordingPowerManager.Reset([Readiness(false, ["NIC not ready"])])
+    RecordingPowerManager.Reset([
+        Readiness(false, ["NIC not ready"]),
+        Readiness(false, ["NIC not ready"])
+    ])
 
     result := RecordingPowerManager.Shutdown(Map("repairWake", false))
 

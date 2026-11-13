@@ -6,6 +6,7 @@
 #Include ..\core\Logger.ahk
 #Include ..\core\Json.ahk
 #Include SessionManager.ahk
+#Include LeaseDispatcher.ahk
 #Include SessionGuard.ahk
 #Include Recovery.ahk
 #Include ..\diagnostics\Status.ahk
