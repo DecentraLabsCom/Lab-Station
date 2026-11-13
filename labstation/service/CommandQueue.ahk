@@ -90,12 +90,14 @@ class LS_CommandQueue {
                     success := LS_PowerManager.Shutdown(cmd["options"])
                     LS_PublishTelemetryBestEffort("power action")
                     message := success ? "Shutdown scheduled" : "Unable to schedule shutdown"
-                    return this.ResultState(success, success ? 0 : 2, message)
+                    exitCode := success ? LS_PowerManager.LastExitCode : 2
+                    return this.ResultState(success, exitCode, message)
                 case "power-hibernate":
                     success := LS_PowerManager.Hibernate(cmd["options"])
                     LS_PublishTelemetryBestEffort("power action")
                     message := success ? "Hibernate scheduled" : "Unable to schedule hibernate"
-                    return this.ResultState(success, success ? 0 : 2, message)
+                    exitCode := success ? LS_PowerManager.LastExitCode : 2
+                    return this.ResultState(success, exitCode, message)
                 default:
                     return this.ResultState(false, 2, "Unsupported command: " . cmd["name"])
             }
@@ -134,6 +136,8 @@ class LS_CommandQueue {
             opts["repairWake"] := this.ParseBool(parsed["repair-wake"], "repair-wake")
         if (parsed.Has("require-wake"))
             opts["failOnWakeIssues"] := this.ParseBool(parsed["require-wake"], "require-wake")
+        if (parsed.Has("require-idle"))
+            opts["requireIdle"] := this.ParseBool(parsed["require-idle"], "require-idle")
         if (parsed.Has("guard"))
             opts["guard"] := this.ParseBool(parsed["guard"], "guard")
         if (parsed.Has("guard-grace") && parsed["guard-grace"] != "") {

@@ -4,10 +4,11 @@ This document summarizes what to expect when a station can be used both locally 
 
 ## 1. Key principles
 
-- Remote reservations require a clean remote session: `prepare-session` automatically runs `session guard` unless `--no-guard` is supplied.
+- Remote reservations require a clean remote session. On a hybrid station, `prepare-session` runs `session guard` unless `--no-guard` is supplied; active local mode stops preparation safely.
 - The instructor receives a `msg` warning on screen that explains the reason and includes a configurable countdown (90 seconds by default for `prepare-session`; 120 seconds for standalone `session guard`) before the session is signed out.
 - If the instructor ignores the warning, the system forces the logoff to ensure the remote session starts with a clean state.
 - All forced logoffs are recorded in `labstation/labstation.log` and `data/telemetry/session-guard-events.jsonl`, and the latest event is reflected in `status.json`.
+- Dedicated stations refuse preparation if an unexpected interactive user is active; they do not log that user out automatically.
 
 ## 2. Recommended flow
 
@@ -43,12 +44,14 @@ and `notify` instead.
 ## 4. "Local mode" signaling
 
 - The backend or the desktop panel can create `labstation/data/local-mode.flag`
-  when an instructor declares exclusive in-person use. Lab Station exposes the
-  flag; Lab Gateway must enforce the policy by blocking or requiring manual
-  confirmation for remote reservations.
+  when an instructor declares exclusive in-person use. Local mode is only
+  available for the hybrid profile and expires after eight hours unless it is
+  disabled earlier. Lab Station and Lab Gateway both block preparation while
+  the flag is active. Enabling local mode also requires a successful session
+  inventory and no active reservation or remote LABUSER session.
 - `status.json`/`telemetry/heartbeat.json` expose `localModeEnabled` so
-  dashboards can reflect the state. The flag does not itself reject a remote
-  command.
+  dashboards can reflect the state. The flag is checked by both the Station
+  command and Gateway operator paths.
 
 The same state is visible in the Lab Station desktop panel. The **Local mode
 (on-site)** action toggles the flag, and the status report shows whether the
@@ -85,5 +88,6 @@ These rules help hybrid stations keep sessions clean without ruling out occasion
 The Gateway UI should use the typed `sessions` active-session summary together
 with `localModeEnabled`, `summary.ready`, and `lastForcedLogoff` from the
 status/heartbeat contracts. `localSessionActive` remains the legacy signal for
-other-user session handling. The local-mode flag is a policy signal; Lab
-Station does not itself reject a reservation based on that flag.
+other-user session handling. Lab Station refuses `prepare-session` while the
+local-mode flag is active and refuses to enable the flag during an active
+reservation or remote LABUSER session.

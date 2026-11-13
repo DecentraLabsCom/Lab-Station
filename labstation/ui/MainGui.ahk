@@ -102,7 +102,7 @@ LS_BuildGui() {
     myGui.SetupButton.OnEvent("Click", LS_GuiRunSetup_Handler)
 
     myGui.SetFont("s9 Bold c9CA3AF")
-    myGui.AddText("x490 y180", "Local mode (on-site)")
+    myGui.LocalModeLabel := myGui.AddText("x490 y180", "Local mode (on-site)")
 
     myGui.SetFont("s9 cFFFFFF")
     myGui.LocalModeButton := myGui.AddButton("x490 y200 w220 h34", "🔒 Enable local mode")
@@ -202,6 +202,10 @@ LS_GuiRefreshStatus(gui) {
     summary.Push(localIcon . "  Local mode: " . (localMode ? "Enabled" : "Disabled"))
     if (gui.HasProp("LocalModeButton") && gui.LocalModeButton) {
         gui.LocalModeButton.Text := localMode ? "🌐 Disable local mode" : "🔒 Enable local mode"
+        hybridProfile := status.Has("stationProfile") && status["stationProfile"] = "hybrid"
+        gui.LocalModeButton.Visible := hybridProfile || localMode
+        if (gui.HasProp("LocalModeLabel") && gui.LocalModeLabel)
+            gui.LocalModeLabel.Visible := hybridProfile || localMode
     }
     summary.Push("")
     hasUsers := status.Has("sessions") && status["sessions"].Has("hasOtherUsers") && status["sessions"]["hasOtherUsers"]
@@ -377,19 +381,27 @@ LS_GuiRestartService(gui) {
 }
 
 LS_GuiToggleLocalMode(gui) {
-    local file
     flag := LAB_STATION_LOCAL_MODE_FLAG
     message := ""
     try {
         EnsureDir(LAB_STATION_DATA_DIR)
-        if (FileExist(flag)) {
-            FileDelete(flag)
+        localModeEnabled := LS_Status.IsLocalModeEnabled()
+        if (localModeEnabled) {
+            if (FileExist(flag))
+                FileDelete(flag)
+            if (LAB_STATION_LEGACY_DATA_DIR != "") {
+                legacyFlag := LAB_STATION_LEGACY_DATA_DIR "\local-mode.flag"
+                if (FileExist(legacyFlag))
+                    FileDelete(legacyFlag)
+            }
             message := "Local mode disabled. Remote reservations can proceed."
         } else {
-            file := FileOpen(flag, "w", "UTF-8")
-            file.Write("local-mode")
-            file.Close()
-            message := "Local mode enabled. Remote reservations should be paused."
+            result := LS_LeaseDispatcher.ExecuteAdministrativeLocalMode()
+            if (result["exitCode"] >= 2) {
+                MsgBox result["stderr"], "Lab Station", "OK Iconx"
+                return
+            }
+            message := "Local mode enabled for up to eight hours. Remote reservations should be paused."
         }
     } catch as e {
         MsgBox "Unable to toggle local mode: " . e.Message, "Lab Station", "OK Iconx"

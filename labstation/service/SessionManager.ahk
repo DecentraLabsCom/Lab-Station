@@ -10,14 +10,35 @@
 #Include ServiceState.ahk
 
 class LS_SessionManager {
+    static LastPrepareExitCode := 0
+
     static PrepareSession(options := Map()) {
+        this.LastPrepareExitCode := 0
         LS_LogInfo("Prepare-session started")
         started := A_TickCount
+        user := options.Has("user") ? options["user"] : ""
+        managedUser := user != "" ? user : LS_AccountManager.DefaultUser
+        if (LS_Status.IsLocalModeEnabled())
+            return this.RecordPrepareFailure(started, user, "local mode is active")
+
+        if (LS_Status.GetStationProfile() != "hybrid") {
+            try {
+                conflictingSessions := LS_SessionGuard.FindConflictingSessions(managedUser)
+            } catch as e {
+                return this.RecordPrepareFailure(started, user, "session inventory unavailable: " . e.Message)
+            }
+            if (conflictingSessions.Length > 0)
+                return this.RecordPrepareFailure(started, user, "unexpected interactive session on dedicated station")
+        }
+
+        if (!this.RunSessionGuard(options))
+            return this.RecordPrepareFailure(started, user, "session guard failed")
+        if (LS_Status.IsLocalModeEnabled())
+            return this.RecordPrepareFailure(started, user, "local mode became active during preparation")
+
         ok := true
-        ok := this.RunSessionGuard(options) && ok
         ok := this.CloseControllerProcesses() && ok
         ok := this.CleanFmuExecutorState() && ok
-        user := options.Has("user") ? options["user"] : ""
         ok := this.ClearLabUserWorkingDirs(user) && ok
         ok := this.ResetControllerLogs() && ok
         if (options.Has("extraCleaners")) {
@@ -35,11 +56,23 @@ class LS_SessionManager {
         if (ok) {
             LS_LogInfo("Prepare-session completed")
         } else {
+            this.LastPrepareExitCode := 1
             LS_LogWarning("Prepare-session finished with warnings")
         }
         details := Map("durationMs", A_TickCount - started, "user", user)
         LS_ServiceState.RecordPrepareSession(ok, details)
         return ok
+    }
+
+    static RecordPrepareFailure(started, user, reason) {
+        this.LastPrepareExitCode := 2
+        LS_LogWarning("Prepare-session refused: " . reason)
+        LS_ServiceState.RecordPrepareSession(false, Map(
+            "durationMs", A_TickCount - started,
+            "user", user,
+            "reason", reason
+        ))
+        return false
     }
 
     static RunSessionGuard(options) {

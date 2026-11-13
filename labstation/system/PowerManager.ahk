@@ -11,6 +11,8 @@
 #Include ..\service\ServiceState.ahk
 
 class LS_PowerManager {
+    static LastExitCode := 2
+
     static Shutdown(options := Map()) {
         opts := this.NormalizeOptions(options)
         opts["mode"] := "shutdown"
@@ -31,13 +33,28 @@ class LS_PowerManager {
         normalized["repairWake"] := options.Has("repairWake") ? options["repairWake"] : true
         normalized["skipWakeCheck"] := options.Has("skipWakeCheck") ? options["skipWakeCheck"] : false
         normalized["failOnWakeIssues"] := options.Has("failOnWakeIssues") ? options["failOnWakeIssues"] : false
+        normalized["requireIdle"] := options.Has("requireIdle") ? options["requireIdle"] : false
         return normalized
     }
 
     static Execute(options) {
+        this.LastExitCode := 2
         mode := options["mode"]
         this.LogRequest(mode, options)
         readiness := options["skipWakeCheck"] ? this.ReadinessSkipped() : this.ValidateWakeReadiness()
+        if (options["requireIdle"] && mode != "shutdown") {
+            LS_LogWarning("--require-idle only applies to shutdown")
+            this.RecordPowerAction(false, mode, options, readiness)
+            return false
+        }
+        if (options["requireIdle"]) {
+            idle := this.ValidateIdle()
+            if (!idle["ok"]) {
+                LS_LogWarning("Shutdown blocked: " . idle["reason"])
+                this.RecordPowerAction(false, mode, options, readiness)
+                return false
+            }
+        }
         if (!readiness["ok"] && options["repairWake"]) {
             LS_LogWarning("Wake readiness issues detected before power action. Reapplying WoL configuration...")
             this.ConfigureWake()
@@ -52,14 +69,56 @@ class LS_PowerManager {
             }
             LS_LogWarning(msg)
         }
-        command := this.BuildCommand(mode, options)
+        commandOptions := options
+        if (options["requireIdle"]) {
+            if (options["delay"] > 0)
+                Sleep(options["delay"] * 1000)
+            idle := this.ValidateIdle()
+            if (!idle["ok"]) {
+                LS_LogWarning("Shutdown cancelled after delay: " . idle["reason"])
+                this.RecordPowerAction(false, mode, options, readiness)
+                return false
+            }
+            commandOptions := Map(
+                "delay", 0,
+                "force", options["force"],
+                "reason", options["reason"]
+            )
+        }
+        if (!options["skipWakeCheck"]) {
+            readiness := this.ValidateWakeReadiness()
+            if (!readiness["ok"]) {
+                msg := "Wake readiness incomplete: " . LS_StrJoin(readiness["issues"], "; ")
+                if (options["failOnWakeIssues"]) {
+                    LS_LogError(msg)
+                    this.RecordPowerAction(false, mode, options, readiness)
+                    return false
+                }
+                LS_LogWarning(msg)
+            }
+        }
+        command := this.BuildCommand(mode, commandOptions)
         description := mode = "hibernate" ? "Schedule hibernate" : "Schedule shutdown"
         exitCode := this.ScheduleCommand(command, description)
         success := (exitCode = 0)
         if (!success)
             LS_LogError(Format("Power action failed (exit={1})", exitCode))
+        this.LastExitCode := success ? (readiness["ok"] ? 0 : 1) : 2
         this.RecordPowerAction(success, mode, options, readiness)
         return success
+    }
+
+    static ValidateIdle() {
+        if (LS_Status.IsLocalModeEnabled())
+            return Map("ok", false, "reason", "local mode is active")
+        sessions := LS_Status.GetSessionInformation(LS_Status.GetIdentityInformation())
+        if (!sessions["queryOk"])
+            return Map("ok", false, "reason", "session inventory is unavailable")
+        for entry in sessions["entries"] {
+            if (LS_Status.IsActiveSession(entry))
+                return Map("ok", false, "reason", "an active user session exists")
+        }
+        return Map("ok", true, "reason", "")
     }
 
     static ConfigureWake() {
@@ -75,6 +134,8 @@ class LS_PowerManager {
         details.Push("mode=" . mode)
         details.Push("delay=" . options["delay"])
         details.Push("force=" . (options["force"] ? "true" : "false"))
+        if (options["requireIdle"])
+            details.Push("requireIdle=true")
         if (options["reason"] != "")
             details.Push("reason=" . options["reason"])
         LS_LogInfo("Power action requested: " . LS_StrJoin(details, ", "))
@@ -148,6 +209,7 @@ class LS_PowerManager {
         details["mode"] := mode
         details["delay"] := options["delay"]
         details["force"] := options["force"]
+        details["requireIdle"] := options["requireIdle"]
         if (options["reason"] != "")
             details["reason"] := options["reason"]
         details["wakeReady"] := readiness["ok"]

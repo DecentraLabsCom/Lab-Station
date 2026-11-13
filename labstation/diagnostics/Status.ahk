@@ -21,7 +21,7 @@ class LS_Status {
         data["timestamp"] := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
         data["host"] := A_ComputerName
         data["version"] := LAB_STATION_VERSION
-        data["managementCapabilities"] := ["reservation-lease-v1"]
+        data["managementCapabilities"] := ["reservation-lease-v1", "power-idle-guard-v1"]
         data["stationProfile"] := this.GetStationProfile()
         data["identity"] := this.GetIdentityInformation()
         data["identity"]["agentVersion"] := LAB_STATION_VERSION
@@ -679,11 +679,58 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     }
 
     static IsLocalModeEnabled() {
-        if (FileExist(LAB_STATION_LOCAL_MODE_FLAG))
+        if (this.IsLocalModeFlagActive(LAB_STATION_LOCAL_MODE_FLAG))
             return true
-        if (LAB_STATION_LEGACY_DATA_DIR != "" && FileExist(LAB_STATION_LEGACY_DATA_DIR "\local-mode.flag"))
+        legacyFlag := LAB_STATION_LEGACY_DATA_DIR != ""
+            ? LAB_STATION_LEGACY_DATA_DIR "\local-mode.flag"
+            : ""
+        return legacyFlag != "" && this.IsLocalModeFlagActive(legacyFlag)
+    }
+
+    static IsLocalModeFlagActive(path) {
+        if (!path || !FileExist(path))
+            return false
+        try {
+            value := Trim(FileRead(path, "UTF-8"))
+            expiresAt := ""
+            setAt := ""
+            try {
+                state := LS_ParseJson(value)
+                if (Type(state) = "Map") {
+                    expiresAt := this.LocalModeTimestamp(state.Has("expiresAt") ? state["expiresAt"] : "")
+                    setAt := this.LocalModeTimestamp(state.Has("setAt") ? state["setAt"] : "")
+                }
+            } catch {
+                ; The previous format stored a timestamp or a marker as plain text.
+            }
+            if (expiresAt = "") {
+                setAt := this.LocalModeTimestamp(value)
+                if (setAt != "")
+                    expiresAt := DateAdd(setAt, 28800, "Seconds")
+            }
+            if (expiresAt != "") {
+                isExpired := DateDiff(A_NowUTC, expiresAt, "Seconds") > 0
+            } else {
+                ; Older desktop toggles wrote a marker instead of a timestamp.
+                ; Its file time gives those markers the same eight-hour lifetime.
+                modifiedAt := FileGetTime(path, "M")
+                isExpired := DateDiff(A_Now, modifiedAt, "Seconds") > 28800
+            }
+            if (isExpired) {
+                try FileDelete(path)
+                return FileExist(path) ? true : false
+            }
             return true
-        return false
+        } catch {
+            ; Keep an unreadable flag active: uncertainty must not unlock a lab.
+            return true
+        }
+    }
+
+    static LocalModeTimestamp(value) {
+        if (!RegExMatch(value, "^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$", &match))
+            return ""
+        return match[1] . match[2] . match[3] . match[4] . match[5] . match[6]
     }
 
     static GetFmuExecutorStatus() {

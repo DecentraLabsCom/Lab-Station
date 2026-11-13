@@ -124,7 +124,7 @@ LS_ShowHelp() {
         "  LabStation.exe winrm [configure|status] # Configure or inspect WinRM" . "`n" .
         "  LabStation.exe status               # Quick summary" . "`n" .
         "  LabStation.exe status-json [path]   # Export diagnostics" . "`n" .
-        "  LabStation.exe local-mode [set|clear|status]" . "`n" .
+        "  LabStation.exe local-mode [set [--ttl=seconds]|clear|status]" . "`n" .
         "  LabStation.exe gui                  # Launch desktop GUI" . "`n" .
         "  LabStation.exe tray                 # Tray UI" . "`n" .
         "  LabStation.exe service [install|uninstall|start|stop]" . "`n" .
@@ -199,30 +199,38 @@ LS_RunStatusJsonCommand(args) {
 }
 
 LS_HandleLocalModeCommand(args) {
-    if (args.Length != 1) {
+    if (args.Length < 1 || args.Length > 2) {
         LS_LogWarning("Local-mode command rejected because its action is invalid")
         return 2
     }
     action := StrLower(args[1])
+    if (action != "set" && args.Length != 1) {
+        LS_LogWarning("Only local-mode set accepts a TTL option")
+        return 2
+    }
+    ttlSeconds := 28800
+    if (action = "set" && args.Length = 2) {
+        if (!RegExMatch(args[2], "^--ttl=(\d+)$", &ttlMatch)) {
+            LS_LogWarning("Local-mode TTL must use --ttl=seconds")
+            return 2
+        }
+        ttlSeconds := ttlMatch[1] + 0
+        if (ttlSeconds < 60 || ttlSeconds > 86400) {
+            LS_LogWarning("Local-mode TTL must be between 60 and 86400 seconds")
+            return 2
+        }
+    }
     switch action {
         case "status":
             enabled := LS_Status.IsLocalModeEnabled()
             return LS_WriteStdout(LS_ToJson(Map("enabled", enabled))) ? 0 : 2
         case "set":
-            EnsureDir(LAB_STATION_DATA_DIR)
-            temporary := LAB_STATION_LOCAL_MODE_FLAG . ".new"
-            try {
-                if (FileExist(temporary))
-                    FileDelete(temporary)
-                FileAppend(FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") . "`n", temporary, "UTF-8")
-                FileMove(temporary, LAB_STATION_LOCAL_MODE_FLAG, 1)
-                LS_PublishTelemetryBestEffort("local-mode enabled")
-                return 0
-            } catch as e {
-                LS_LogError("Unable to enable local mode: " . e.Message)
-                try FileDelete(temporary)
-                return 2
+            result := LS_LeaseDispatcher.ExecuteAdministrativeLocalMode(ttlSeconds)
+            if (result["exitCode"] >= 2) {
+                LS_WriteStdout(result["stderr"])
+                LS_LogWarning("Local-mode enable rejected: " . result["stderr"])
             }
+            return result["exitCode"]
         case "clear":
             try {
                 if (FileExist(LAB_STATION_LOCAL_MODE_FLAG))
@@ -315,13 +323,19 @@ LS_HandleAccountCommand(args) {
 
 LS_RunPrepareSession(args := []) {
     opts := LS_ParseSessionOptions(args)
-    if (LS_SessionManager.PrepareSession(opts)) {
+    result := LS_LeaseDispatcher.ExecuteAdministrativePrepare(opts)
+    if (result["exitCode"] = 0) {
         LS_ShowMessage("Session prepared successfully", "Lab Station", "OK Iconi")
         return 0
-    } else {
+    }
+    if (result["exitCode"] = 1) {
         LS_ShowMessage("Prepare-session finished with warnings (see log)", "Lab Station", "OK Iconx")
         return 1
     }
+    LS_WriteStdout(result["message"])
+    LS_LogWarning("Administrative prepare rejected: " . result["message"])
+    LS_ShowMessage(result["message"], "Lab Station", "OK Iconx")
+    return result["exitCode"]
 }
 
 LS_RunReleaseSession(args := []) {
@@ -481,7 +495,7 @@ LS_ParseEnergyOptions(args) {
 
 LS_HandlePowerCommand(args) {
     if (args.Length = 0) {
-        LS_ShowMessage("Usage: LabStation.exe power [shutdown|hibernate] [--delay=0] [--reason=text]", "Lab Station", "OK Iconi")
+        LS_ShowMessage("Usage: LabStation.exe power [shutdown|hibernate] [--delay=0] [--reason=text] [--require-idle]", "Lab Station", "OK Iconi")
         return 2
     }
     sub := StrLower(args[1])
@@ -491,6 +505,10 @@ LS_HandlePowerCommand(args) {
             powerArgs.Push(args[A_Index + 1])
     }
     opts := LS_ParsePowerOptions(powerArgs)
+    if (opts.Has("invalidRequireIdle") || (sub = "hibernate" && opts.Has("requireIdle"))) {
+        LS_LogWarning("--require-idle only accepts no value and applies only to shutdown")
+        return 2
+    }
     success := false
     switch sub {
         case "shutdown":
@@ -504,10 +522,10 @@ LS_HandlePowerCommand(args) {
     LS_PublishTelemetryBestEffort("power action")
     if (success) {
         LS_ShowMessage("Power action scheduled", "Lab Station", "OK Iconi")
-        return 0
+        return LS_PowerManager.LastExitCode
     } else {
         LS_ShowMessage("Power action failed (see log)", "Lab Station", "OK Iconx")
-        return 1
+        return 2
     }
 }
 
@@ -525,8 +543,14 @@ LS_ParsePowerOptions(args) {
             opts["force"] := true
         } else if (lower = "--skip-wake-check") {
             opts["skipWakeCheck"] := true
-        } else if (lower = "--require-wake") {
+        } else if (lower = "--require-wake" || lower = "--require-wake=true") {
             opts["failOnWakeIssues"] := true
+        } else if (lower = "--require-wake=false") {
+            opts["failOnWakeIssues"] := false
+        } else if (lower = "--require-idle") {
+            opts["requireIdle"] := true
+        } else if (InStr(lower, "--require-idle") = 1) {
+            opts["invalidRequireIdle"] := true
         } else if (lower = "--repair-wake=no" || lower = "--no-repair-wake") {
             opts["repairWake"] := false
         } else if (lower = "--repair-wake" || lower = "--repair-wake=yes") {

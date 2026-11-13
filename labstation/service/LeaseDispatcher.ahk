@@ -7,6 +7,106 @@
 class LS_LeaseDispatcher {
     static MutexName := "Global\DecentraLabs.LabStation.ReservationLease"
 
+    static ExecuteAdministrativeLocalMode(ttlSeconds := 28800) {
+        request := Map("id", "operator-local-mode", "command", "local-mode")
+        if (LS_Status.GetStationProfile() != "hybrid")
+            return this.ErrorResult(request, "STATION_PROFILE_UNSUPPORTED", "local mode can only be enabled on a hybrid Station")
+        if (ttlSeconds < 60 || ttlSeconds > 86400)
+            return this.ErrorResult(request, "STATION_COMMAND_REJECTED", "local-mode TTL must be between 60 and 86400 seconds")
+
+        mutex := DllCall("CreateMutexW", "Ptr", 0, "Int", 0, "WStr", this.MutexName, "Ptr")
+        if (!mutex)
+            return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "lease journal lock is unavailable")
+        waitResult := DllCall("WaitForSingleObject", "Ptr", mutex, "UInt", 180000, "UInt")
+        if (waitResult != 0 && waitResult != 0x80) {
+            DllCall("CloseHandle", "Ptr", mutex)
+            return this.ErrorResult(request, "STATION_OPERATION_IN_PROGRESS", "another lease operation is still running")
+        }
+
+        try {
+            try {
+                state := this.LoadState()
+            } catch {
+                return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "lease journal is invalid or unavailable")
+            }
+            if (state.Has("active"))
+                return this.ErrorResult(request, "STATION_LEASE_CONFLICT", "an active reservation prevents enabling local mode")
+
+            try {
+                sessions := LS_Status.GetSessionInformation(LS_Status.GetIdentityInformation())
+            } catch {
+                return this.ErrorResult(request, "STATION_SESSION_QUERY_FAILED", "session inventory is unavailable")
+            }
+            if (!sessions["queryOk"])
+                return this.ErrorResult(request, "STATION_SESSION_QUERY_FAILED", "session inventory is unavailable")
+            if (sessions["labUserRemoteActive"])
+                return this.ErrorResult(request, "STATION_REMOTE_SESSION_ACTIVE", "an active remote lab-user session prevents enabling local mode")
+
+            temporary := LAB_STATION_LOCAL_MODE_FLAG . ".new"
+            try {
+                EnsureDir(LAB_STATION_DATA_DIR)
+                if (FileExist(temporary))
+                    FileDelete(temporary)
+                setAt := A_NowUTC
+                expiresAt := DateAdd(setAt, ttlSeconds, "Seconds")
+                payload := Map(
+                    "enabled", true,
+                    "setAt", FormatTime(setAt, "yyyy-MM-ddTHH:mm:ssZ"),
+                    "expiresAt", FormatTime(expiresAt, "yyyy-MM-ddTHH:mm:ssZ")
+                )
+                FileAppend(LS_ToJson(payload) . "`n", temporary, "UTF-8")
+                FileMove(temporary, LAB_STATION_LOCAL_MODE_FLAG, 1)
+            } catch as e {
+                try FileDelete(temporary)
+                LS_LogError("Unable to enable local mode: " . e.Message)
+                return this.ErrorResult(request, "STATION_LOCAL_MODE_FAILED", "local mode could not be enabled")
+            }
+            LS_PublishTelemetryBestEffort("local-mode enabled")
+            return this.Result(request, 0, "local mode enabled", Map("expiresAt", FormatTime(expiresAt, "yyyy-MM-ddTHH:mm:ssZ")), "local mode enabled", "")
+        } finally {
+            DllCall("ReleaseMutex", "Ptr", mutex)
+            DllCall("CloseHandle", "Ptr", mutex)
+        }
+    }
+
+    static ExecuteAdministrativePrepare(options) {
+        request := Map("id", "operator-prepare", "command", "prepare-session")
+        mutex := DllCall("CreateMutexW", "Ptr", 0, "Int", 0, "WStr", this.MutexName, "Ptr")
+        if (!mutex)
+            return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "lease journal lock is unavailable")
+        waitResult := DllCall("WaitForSingleObject", "Ptr", mutex, "UInt", 180000, "UInt")
+        if (waitResult != 0 && waitResult != 0x80) {
+            DllCall("CloseHandle", "Ptr", mutex)
+            return this.ErrorResult(request, "STATION_OPERATION_IN_PROGRESS", "another lease operation is still running")
+        }
+
+        try {
+            try {
+                state := this.LoadState()
+            } catch {
+                return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "lease journal is invalid or unavailable")
+            }
+            if (state.Has("active"))
+                return this.ErrorResult(request, "STATION_LEASE_CONFLICT", "an active lease must be prepared by its reservation flow")
+
+            started := A_TickCount
+            successful := LS_SessionManager.PrepareSession(options)
+            exitCode := successful ? 0 : LS_SessionManager.LastPrepareExitCode
+            if (exitCode < 1 && !successful)
+                exitCode := 1
+            message := exitCode = 0 ? "station prepared"
+                : exitCode = 1 ? "Prepare-session finished with warnings"
+                : "Prepare-session was refused"
+            result := this.Result(request, exitCode, message, Map("administrative", true), message,
+                exitCode >= 2 ? message : "")
+            result["durationMs"] := A_TickCount - started
+            return result
+        } finally {
+            DllCall("ReleaseMutex", "Ptr", mutex)
+            DllCall("CloseHandle", "Ptr", mutex)
+        }
+    }
+
     ; The unscoped operator release shares the lease mutex with reservation
     ; operations so it cannot log off LABUSER while a lease is active or while
     ; a reservation is being prepared.
@@ -162,14 +262,24 @@ class LS_LeaseDispatcher {
             successful := false
         }
         exitCode := successful ? 0 : 1
+        if (!successful && command = "prepare-session" && LS_SessionManager.LastPrepareExitCode >= 2)
+            exitCode := 2
         leaseState := command = "prepare-session" ? (successful ? "active" : "recovery-required") : (successful ? "released" : "recovery-required")
-        result := this.SuccessResult(request, assignedGeneration, leaseState,
-            successful ? (command = "prepare-session" ? "session prepared" : "session released") : "session operation completed with warnings")
-        result["exitCode"] := exitCode
-        result["success"] := true
-        result["outcome"] := exitCode = 0 ? "success" : "warning"
+        message := successful ? (command = "prepare-session" ? "session prepared" : "session released")
+            : exitCode >= 2 ? "session preparation refused" : "session operation completed with warnings"
+        if (exitCode >= 2) {
+            context := request["context"]
+            lease := Map("leaseId", context["leaseId"], "generation", assignedGeneration,
+                "state", leaseState, "expiresAt", context["expiresAt"])
+            result := this.Result(request, exitCode, message, Map("lease", lease), "", message)
+        } else {
+            result := this.SuccessResult(request, assignedGeneration, leaseState, message)
+            result["exitCode"] := exitCode
+            result["outcome"] := exitCode = 0 ? "success" : "warning"
+        }
         result["durationMs"] := Max(1, A_TickCount - started)
-        result["metadata"]["lease"]["state"] := leaseState
+        if (result["metadata"].Has("lease"))
+            result["metadata"]["lease"]["state"] := leaseState
         operation["state"] := "completed"
         operation["updatedAt"] := this.TimestampUtc()
         operation["result"] := result

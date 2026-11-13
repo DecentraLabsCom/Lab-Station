@@ -19,22 +19,15 @@ class LS_SessionGuard {
         message := options.Has("message") && options["message"] != "" ? options["message"] : this.BuildDefaultMessage(grace)
 
         try {
-            sessions := this.QuerySessions()
+            targets := this.FindConflictingSessions(guardUser)
         } catch as e {
             LS_LogWarning("Session guard: unable to read sessions - " . e.Message)
             return false
         }
-        targets := []
-        for session in sessions {
-            if (this.EqualsUser(session["user"], guardUser))
-                continue
-            state := StrLower(session["state"])
-            if (state = "disc" || state = "down" || (state = "" && session["user"] = ""))
-                continue
+        for session in targets {
             session["guardGrace"] := grace
             session["force"] := force
             session["guardMessage"] := message
-            targets.Push(session)
         }
 
         if (targets.Length = 0) {
@@ -57,6 +50,20 @@ class LS_SessionGuard {
                 result := false
         }
         return result
+    }
+
+    static FindConflictingSessions(guardUser := "") {
+        guardUser := guardUser != "" ? guardUser : LS_AccountManager.DefaultUser
+        targets := []
+        for session in this.QuerySessions() {
+            if (this.EqualsUser(session["user"], guardUser))
+                continue
+            state := StrLower(session["state"])
+            if (state = "disc" || state = "down" || (state = "" && session["user"] = ""))
+                continue
+            targets.Push(session)
+        }
+        return targets
     }
 
     static WaitForGrace(seconds) {

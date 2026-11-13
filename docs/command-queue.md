@@ -41,8 +41,8 @@ Supported `name` values and their options are:
 | `session-guard` | `user`, `grace`, `message`, `notify=yes\|no` |
 | `status-json` | `path` (defaults to `labstation/data/status.json`) |
 | `reboot-if-needed` | `force=yes\|no`, `timeout`, `reason`, `user` |
-| `power-shutdown` | `delay`, `reason`, `force=yes\|no`, `skip-wake-check=yes\|no`, `repair-wake=yes\|no`, `require-wake=yes\|no` |
-| `power-hibernate` | Same options as `power-shutdown` |
+| `power-shutdown` | `delay`, `reason`, `force=yes\|no`, `skip-wake-check=yes\|no`, `repair-wake=yes\|no`, `require-wake=yes\|no`, `require-idle=yes\|no` |
+| `power-hibernate` | Same options except `require-idle`, which is shutdown-only |
 
 Boolean values may be `yes`/`no`, `true`/`false`, `on`/`off`, `1`/`0`.
 Numeric values must be non-negative integers. Unknown command names produce a
