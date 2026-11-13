@@ -25,6 +25,8 @@ RunTelemetryTests() {
     try {
         TestBuildPayloadMirrorsStatusAndOperations()
         TestV3EnvelopeHasPortableRequiredFields()
+        TestPortableSummaryTracksPrimaryReadiness()
+        TestLocalModeMarkerPolicyMatchesSharedMatrix()
         TestPublishWritesPrimaryAndLegacyHeartbeats()
         TestBuildPayloadFallsBackToServiceStateOperations()
         TestPublishReportsPrimaryWriteFailure()
@@ -97,6 +99,59 @@ TestV3EnvelopeHasPortableRequiredFields() {
         LS_TestAssert(Type(session["evictable"]) = "Integer", "session eviction state serializes as a JSON boolean")
     }
     LS_TestAssert(payload["status"] = status, "heartbeat embeds the source status snapshot")
+}
+
+TestPortableSummaryTracksPrimaryReadiness() {
+    matrix := LS_TestLoadParityMatrix()
+    contract := matrix["portableStatus"]
+    cases := [
+        Map("profile", "dedicated", "physicalReady", true, "physicalAvailable", true, "wakeReady", false),
+        Map("profile", "hybrid", "physicalReady", false, "physicalAvailable", true, "wakeReady", true),
+        Map("profile", "hybrid", "physicalReady", false, "physicalAvailable", false, "wakeReady", true),
+        Map("profile", "fmu-only", "physicalReady", false, "physicalAvailable", true, "wakeReady", false)
+    ]
+
+    for testCase in cases {
+        readiness := Map(
+            "physicalLab", Map("available", testCase["physicalAvailable"], "ready", testCase["physicalReady"], "issues", []),
+            "wake", Map("available", true, "ready", testCase["wakeReady"], "issues", []),
+            "fmu", Map("available", true, "ready", testCase["profile"] = "fmu-only", "issues", [])
+        )
+        summary := Map("state", "ready", "ready", true, "issues", [])
+        normalized := LS_Status.NormalizePortableSummary(summary, readiness, testCase["profile"])
+        primary := contract["primaryCapabilityByProfile"][testCase["profile"]]
+        expectedReady := readiness[primary]["ready"]
+
+        LS_TestAssert(normalized["ready"] = expectedReady,
+            testCase["profile"] . " summary.ready follows its primary capability")
+        if (expectedReady) {
+            LS_TestAssert(normalized["state"] = contract["readyState"], "ready primary capability maps to the shared ready state")
+        } else {
+            LS_TestAssert(LS_TestArrayContains(contract["notReadyStates"], normalized["state"]),
+                testCase["profile"] . " not-ready summary uses a shared state")
+        }
+    }
+}
+
+TestLocalModeMarkerPolicyMatchesSharedMatrix() {
+    global TEST_ROOT
+    matrix := LS_TestLoadParityMatrix()
+    policy := matrix["localMode"]
+    malformedPath := TEST_ROOT . "\malformed-local-mode.flag"
+    FileAppend("{not-json", malformedPath, "UTF-8")
+
+    malformedActive := LS_Status.IsLocalModeFlagActive(malformedPath)
+    FileDelete(malformedPath)
+    expiredPath := TEST_ROOT . "\expired-local-mode.flag"
+    expiredTimestamp := FormatTime(DateAdd(A_NowUTC, -32400, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    FileAppend(expiredTimestamp, expiredPath, "UTF-8")
+    expiredActive := LS_Status.IsLocalModeFlagActive(expiredPath)
+
+    LS_TestAssert(policy["malformedLegacyMarker"] = "active-until-explicit-clear",
+        "shared policy keeps malformed legacy local-mode markers fail-closed")
+    LS_TestAssert(malformedActive, "Windows keeps an unparseable local-mode marker active")
+    LS_TestAssert(policy["expiredLegacyTimestamp"] = "inactive", "shared policy expires old timestamp markers")
+    LS_TestAssert(!expiredActive && !FileExist(expiredPath), "Windows clears an expired legacy timestamp marker")
 }
 
 TestPublishWritesPrimaryAndLegacyHeartbeats() {

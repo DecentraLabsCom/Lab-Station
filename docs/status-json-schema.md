@@ -55,7 +55,7 @@ The status document can also include the following diagnostic blocks:
 | `identity` | Lab account and local profile information. |
 | `firewall` | Whether inbound traffic defaults to Block, RDP/WinRM rules match their configured Gateway sources, and WinRM HTTP/5985 is blocked. |
 | `biosChecklist` | BIOS/UEFI Wake-on-LAN checks shown to the operator. |
-| `policy` | Autologon, Remote Desktop Users and interactive-logon policy state. Autologon diagnostics report whether the LSA secret exists and whether a plaintext Winlogon password value is present; they never include the credential. |
+| `policy` | Autologon, Remote Desktop Users, interactive-logon policy state and the configured `allowLocalSessionEviction` policy. Autologon diagnostics report whether the LSA secret exists and whether a plaintext Winlogon password value is present; they never include the credential. |
 | `sessions` | Current sessions and the typed active-session summary. |
 | `fmuExecutor` | FMU Executor availability, endpoint health, local process state and configured port. Secrets are represented only by boolean state. |
 | `lastForcedLogoff` | The latest forced-logoff record, when one exists. |
@@ -73,8 +73,11 @@ requirements, `readiness.wake.ready` covers the local WoL and power-management
 configuration, and `readiness.fmu.ready` also requires the optional FMU
 Executor to be configured and running. Wake or FMU diagnostics therefore do
 not make an otherwise accessible physical laboratory unavailable. The
-aggregate `summary` remains the complete station diagnostic verdict and can
-still include issues for all capabilities.
+`summary.ready` and `summary.issues` describe the profile's primary capability:
+the physical lab for `dedicated` and `hybrid`, and FMU for `fmu-only`. They do
+not combine Wake-on-LAN or optional FMU diagnostics when those are separate
+from the primary capability. Consumers needing a particular capability should
+read its `readiness` entry.
 
 The `sessions` object reports the Windows session classification used by the
 Gateway. `active` means that at least one active session is present. `kind` is

@@ -3,6 +3,7 @@
 #Include ..\service\SessionGuard.ahk
 #Include ..\service\FmuExecutor.ahk
 #Include ..\service\SessionManager.ahk
+#Include ParityTestSupport.ahk
 
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-ReservationFlowTests-" A_TickCount
@@ -71,12 +72,47 @@ class RecordingSessionManager extends LS_SessionManager {
     }
 }
 
+class RecordingProfileCleaner extends LS_SessionManager {
+    static profileRoot := ""
+    static cleanCalls := []
+
+    static GetUserProfilePath(user) {
+        return this.profileRoot
+    }
+
+    static CleanDirectory(path) {
+        this.cleanCalls.Push(path)
+        if (!DirExist(path))
+            return true
+        try {
+            Loop Files, path . "\*", "FD" {
+                if InStr(A_LoopFileAttrib, "D")
+                    DirDelete(A_LoopFileFullPath, true)
+                else
+                    FileDelete(A_LoopFileFullPath)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
+class FailingInventorySessionManager extends LS_SessionManager {
+    static GetPrepareLocalSessions(managedUser) {
+        throw Error("synthetic session inventory failure")
+    }
+}
+
 RunReservationFlowTests() {
     global ORIGINAL_STATE_FILE, LAB_STATION_SERVICE_STATE_FILE, TEST_ROOT
 
     try {
         TestPrepareSessionSuccess()
         TestPrepareSessionFailureStillRunsCleanup()
+        TestPrepareSessionFailsClosedWhenSessionInventoryUnavailable()
+        TestPrepareLocalSessionPolicyMatchesSharedMatrix()
+        TestPrepareCleanupClearsSharedEphemeralCategories()
         TestReleaseSessionWithoutReboot()
         TestReleaseSessionWithReboot()
         TestReleaseSessionFailureStillRecordsFailure()
@@ -143,6 +179,82 @@ TestPrepareSessionFailureStillRunsCleanup() {
 
     state := LS_ServiceState.ReadSection("prepare-session")
     LS_TestAssert(state.Has("success") && !state["success"], "prepare-session records failure")
+}
+
+TestPrepareSessionFailsClosedWhenSessionInventoryUnavailable() {
+    FailingInventorySessionManager.LastPrepareExitCode := 0
+    success := FailingInventorySessionManager.PrepareSession(Map("user", "LABUSER"))
+    state := LS_ServiceState.ReadSection("prepare-session")
+
+    LS_TestAssert(!success, "prepare-session refuses when local sessions cannot be inspected")
+    LS_TestAssert(FailingInventorySessionManager.LastPrepareExitCode = 2, "unknown local-session state is a hard refusal")
+    LS_TestAssert(state.Has("success") && !state["success"], "session inventory failure is recorded as an unsuccessful prepare")
+    LS_TestAssert(state.Has("reason") && InStr(state["reason"], "session inventory unavailable"),
+        "prepare result records why admission was refused")
+}
+
+TestPrepareLocalSessionPolicyMatchesSharedMatrix() {
+    matrix := LS_TestLoadParityMatrix()
+    policy := matrix["sessionSafety"]["prepareDecision"]
+
+    LS_TestAssert(
+        LS_SessionManager.PrepareLocalSessionDecision("hybrid", 0, false) = policy["noLocalSession"],
+        "preparation continues when the local-session inventory is empty"
+    )
+    LS_TestAssert(
+        LS_SessionManager.PrepareLocalSessionDecision("dedicated", 1, false) = policy["dedicatedLocalSession"],
+        "dedicated stations refuse preparation while a local user is active"
+    )
+    LS_TestAssert(
+        LS_SessionManager.PrepareLocalSessionDecision("hybrid", 1, false) = policy["hybridLocalSessionWithoutAuthorization"],
+        "hybrid stations protect local users unless eviction is authorized"
+    )
+    LS_TestAssert(
+        LS_SessionManager.PrepareLocalSessionDecision("hybrid", 1, true) = policy["hybridLocalSessionWithAuthorization"],
+        "hybrid stations evict local users only after explicit authorization"
+    )
+}
+
+TestPrepareCleanupClearsSharedEphemeralCategories() {
+    global TEST_ROOT
+    matrix := LS_TestLoadParityMatrix()
+    cleanup := matrix["prepareCleanup"]
+    RecordingProfileCleaner.profileRoot := TEST_ROOT . "\profile-fixture"
+    RecordingProfileCleaner.cleanCalls := []
+
+    categoryPaths := Map(
+        "temporary", "AppData\Local\Temp",
+        "application-cache", "AppData\Local\Microsoft\Windows\INetCache",
+        "downloads", "Downloads",
+        "scratch", "Documents\LabStationScratch",
+        "recent-items", "AppData\Roaming\Microsoft\Windows\Recent"
+    )
+    for _, category in cleanup["requiredCategories"] {
+        LS_TestAssert(categoryPaths.Has(category), "Windows cleanup maps shared category " . category)
+        if (!categoryPaths.Has(category))
+            continue
+        path := RecordingProfileCleaner.profileRoot . "\" . categoryPaths[category]
+        DirCreate(path)
+        FileAppend("reservation data", path . "\session-data.tmp", "UTF-8")
+    }
+    managedSettings := RecordingProfileCleaner.profileRoot . "\Documents\LabStationManaged\application.json"
+    DirCreate(RecordingProfileCleaner.profileRoot . "\Documents\LabStationManaged")
+    FileAppend("managed configuration", managedSettings, "UTF-8")
+
+    success := RecordingProfileCleaner.ClearLabUserWorkingDirs("fixture-user")
+
+    LS_TestAssert(success, "Windows cleanup succeeds for a disposable profile tree")
+    for _, category in cleanup["requiredCategories"] {
+        if (!categoryPaths.Has(category))
+            continue
+        cleanedFile := RecordingProfileCleaner.profileRoot . "\" . categoryPaths[category] . "\session-data.tmp"
+        LS_TestAssert(!FileExist(cleanedFile), "Windows cleanup removes " . category . " data")
+    }
+    LS_TestAssert(LS_TestArrayContains(cleanup["preserveCategories"], "managed-application-configuration"),
+        "shared cleanup policy protects managed application configuration")
+    LS_TestAssert(FileExist(managedSettings), "Windows cleanup preserves managed application configuration")
+    LS_TestAssert(RecordingProfileCleaner.cleanCalls.Length = cleanup["requiredCategories"].Length,
+        "Windows cleanup visits each shared ephemeral category")
 }
 
 TestReleaseSessionWithoutReboot() {

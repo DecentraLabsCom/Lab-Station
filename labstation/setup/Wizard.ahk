@@ -98,6 +98,9 @@ LS_WizardSaveProfile(mode) {
     try {
         EnsureDir(LAB_STATION_DATA_DIR)
         IniWrite(mode, LAB_STATION_PROFILE_FILE, "Station", "Profile")
+        evictionPolicy := Trim(IniRead(LAB_STATION_PROFILE_FILE, "Station", "AllowLocalSessionEviction", ""))
+        if (evictionPolicy = "")
+            IniWrite("true", LAB_STATION_PROFILE_FILE, "Station", "AllowLocalSessionEviction")
         LS_LogInfo("Station profile saved: " . mode)
         return true
     } catch as e {

@@ -17,6 +17,11 @@ The queue is enabled by the `service-loop` started by
 
 The service polls the inbox every five seconds. Status and heartbeat documents
 are refreshed once per minute, independently of queue processing.
+The setup wizard installs and starts the background task. It checks lease
+expiry on each service-loop iteration; the loop sleeps five seconds between
+iterations, so a long-running queued command can delay the next check. Keep the
+task running while reservation leases are active. If cleanup fails, the
+station remains closed to new leases and records a recovery-required state.
 
 ## Input format
 
@@ -47,6 +52,9 @@ Supported `name` values and their options are:
 Boolean values may be `yes`/`no`, `true`/`false`, `on`/`off`, `1`/`0`.
 Numeric values must be non-negative integers. Unknown command names produce a
 hard-failure result and are still archived.
+For hybrid Prepare, `guard=no` suppresses the warning and grace period, then
+immediately evicts an eligible local console session when eviction is enabled.
+It does not bypass the profile or local-session policy.
 
 ## Result format
 

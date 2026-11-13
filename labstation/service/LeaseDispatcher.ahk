@@ -3,6 +3,9 @@
 #Include ..\core\Config.ahk
 #Include ..\core\Json.ahk
 #Include ..\core\Logger.ahk
+#Include SessionManager.ahk
+#Include ..\diagnostics\Status.ahk
+#Include Telemetry.ahk
 
 class LS_LeaseDispatcher {
     static MutexName := "Global\DecentraLabs.LabStation.ReservationLease"
@@ -143,7 +146,160 @@ class LS_LeaseDispatcher {
         }
     }
 
+    ; The installed background task runs this watchdog independently of a
+    ; Gateway connection. Expiry cleanup uses the same durable lease journal
+    ; and mutex as dispatched operations so it cannot race a prepare/release.
+    static EnforceLeaseExpiry(sessionExecutor := unset) {
+        mutex := DllCall("CreateMutexW", "Ptr", 0, "Int", 0, "WStr", this.MutexName, "Ptr")
+        if (!mutex) {
+            LS_LogWarning("Lease expiry watchdog could not open the lease journal lock")
+            return
+        }
+        waitResult := DllCall("WaitForSingleObject", "Ptr", mutex, "UInt", 0, "UInt")
+        if (waitResult != 0 && waitResult != 0x80) {
+            DllCall("CloseHandle", "Ptr", mutex)
+            return
+        }
+
+        try {
+            try {
+                state := this.LoadState()
+            } catch as e {
+                LS_LogWarning("Lease expiry watchdog cannot read the lease journal: " . e.Message)
+                return
+            }
+            if (!state.Has("active"))
+                return
+
+            active := state["active"]
+            for key in ["kind", "leaseId", "generation", "notBefore", "expiresAt"] {
+                if (active.Has(key))
+                    continue
+                active["state"] := "recovery-required"
+                active["updatedAt"] := this.TimestampUtc()
+                state["active"] := active
+                try {
+                    this.SaveState(state)
+                } catch {
+                    LS_LogWarning("Active lease is incomplete and its recovery state could not be recorded")
+                    return
+                }
+                LS_LogWarning("Active lease is incomplete; station admission remains closed")
+                return
+            }
+            expiresAt := this.ParseUtc(active["expiresAt"])
+            now := this.ParseUtc(this.TimestampUtc())
+            if (expiresAt = "") {
+                active["state"] := "recovery-required"
+                active["updatedAt"] := this.TimestampUtc()
+                state["active"] := active
+                try {
+                    this.SaveState(state)
+                } catch {
+                    LS_LogWarning("Active lease has an invalid expiry and its recovery state could not be recorded")
+                    return
+                }
+                LS_LogWarning("Active lease has an invalid expiry; station admission remains closed")
+                return
+            }
+            if (now < expiresAt)
+                return
+
+            leaseId := active["leaseId"]
+            generation := active["generation"] + 0
+            if (generation < 1) {
+                active["state"] := "recovery-required"
+                active["updatedAt"] := this.TimestampUtc()
+                state["active"] := active
+                try {
+                    this.SaveState(state)
+                } catch {
+                    LS_LogWarning("Active lease has an invalid generation and its recovery state could not be recorded")
+                    return
+                }
+                LS_LogWarning("Active lease has an invalid generation; station admission remains closed")
+                return
+            }
+            operations := state["operations"]
+            expiryOperationId := "lease-expiry-" . generation
+            journalChanged := false
+            for operationId, operation in operations {
+                if (operation["leaseId"] != leaseId || operation["generation"] != generation
+                    || operation["state"] != "processing")
+                    continue
+                recoveryRequest := Map("id", operationId, "command", operation["command"])
+                operation["state"] := "recovery-required"
+                operation["updatedAt"] := this.TimestampUtc()
+                operation["result"] := this.ErrorResult(recoveryRequest,
+                    "STATION_OPERATION_RECOVERY_REQUIRED", "operation was interrupted before lease expiry cleanup")
+                operations[operationId] := operation
+                journalChanged := true
+            }
+
+            ; An expired lease must be releasable even when the last operation
+            ; stopped between its durable journal writes.
+            if (!active.Has("state") || active["state"] != "recovery-required") {
+                active["state"] := "recovery-required"
+                active["updatedAt"] := this.TimestampUtc()
+                state["active"] := active
+                journalChanged := true
+            }
+            if (journalChanged) {
+                try {
+                    this.SaveState(state)
+                } catch as e {
+                    LS_LogWarning("Lease expiry watchdog could not record recovery state: " . e.Message)
+                    return
+                }
+            }
+            if (operations.Has(expiryOperationId)) {
+                if (journalChanged)
+                    LS_LogWarning("A prior lease-expiry operation has an uncertain outcome; station admission remains closed")
+                return
+            }
+
+            context := Map(
+                "kind", active["kind"],
+                "leaseId", leaseId,
+                "generation", generation,
+                "notBefore", active["notBefore"],
+                "expiresAt", active["expiresAt"]
+            )
+            if (active.Has("labId"))
+                context["labId"] := active["labId"]
+            if (active.Has("reservationKey"))
+                context["reservationKey"] := active["reservationKey"]
+            issuedAt := this.TimestampUtc()
+            executeBefore := FormatTime(DateAdd(A_NowUTC, 300, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+            request := Map(
+                "schemaVersion", 2,
+                "id", expiryOperationId,
+                "operation", "execute",
+                "command", "release-session",
+                "args", [],
+                "issuedAt", issuedAt,
+                "executeBefore", executeBefore,
+                "context", context
+            )
+            result := IsSet(sessionExecutor) ? this.ExecuteLocked(request, sessionExecutor) : this.ExecuteLocked(request)
+            if (result["exitCode"] >= 2) {
+                LS_LogWarning("Lease expiry cleanup requires operator reconciliation for generation " . generation)
+            } else if (result["exitCode"] = 1) {
+                LS_LogWarning("Expired lease cleanup was incomplete; station admission remains closed for generation " . generation)
+            } else {
+                LS_LogInfo("Expired reservation lease released for generation " . generation)
+            }
+        } finally {
+            DllCall("ReleaseMutex", "Ptr", mutex)
+            DllCall("CloseHandle", "Ptr", mutex)
+        }
+    }
+
     static Execute(request, sessionExecutor := unset) {
+        if (IsObject(request) && Type(request) = "Map" && request.Has("operation")
+            && request["operation"] = "operation.status")
+            return this.OperationStatus(request)
+
         validation := this.ValidateRequest(request)
         if (validation["code"] != "")
             return this.ErrorResult(request, validation["code"], validation["message"])
@@ -163,6 +319,66 @@ class LS_LeaseDispatcher {
             DllCall("ReleaseMutex", "Ptr", mutex)
             DllCall("CloseHandle", "Ptr", mutex)
         }
+    }
+
+    static OperationStatus(request) {
+        validation := this.ValidateOperationStatusRequest(request)
+        if (validation["code"] != "")
+            return this.ErrorResult(request, validation["code"], validation["message"])
+
+        operationId := request["operationId"]
+        try {
+            state := this.LoadState()
+        } catch {
+            return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "operation journal is invalid or unavailable")
+        }
+
+        operations := state["operations"]
+        if (!operations.Has(operationId)) {
+            record := Map("operationId", operationId, "state", "not-found")
+            return this.Result(request, 1, "operation not found", Map("operationId", operationId, "state", "not-found"), LS_ToJson(record), "")
+        }
+
+        operation := operations[operationId]
+        if (Type(operation) != "Map" || !operation.Has("state")
+            || (operation["state"] != "processing" && operation["state"] != "completed"
+                && operation["state"] != "recovery-required"))
+            return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "operation journal entry is invalid")
+
+        record := Map("operationId", operationId, "state", operation["state"])
+        for key in ["command", "leaseId", "generation", "updatedAt"] {
+            if (operation.Has(key))
+                record[key] := operation[key]
+        }
+        if (operation.Has("result")) {
+            if (Type(operation["result"]) != "Map")
+                return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "operation journal result is invalid")
+            record["result"] := operation["result"]
+        }
+        return this.Result(request, 0, "operation status retrieved", Map("operationId", operationId, "state", operation["state"]), LS_ToJson(record), "")
+    }
+
+    static ValidateOperationStatusRequest(request) {
+        if (!IsObject(request) || Type(request) != "Map")
+            return Map("code", "STATION_COMMAND_REJECTED", "message", "operation status request is invalid")
+        allowed := Map("schemaVersion", true, "id", true, "operation", true, "operationId", true)
+        for key in request {
+            if (!allowed.Has(key))
+                return Map("code", "STATION_COMMAND_REJECTED", "message", "operation status request has unsupported fields")
+        }
+        for key in ["schemaVersion", "id", "operation", "operationId"] {
+            if (!request.Has(key))
+                return Map("code", "STATION_COMMAND_REJECTED", "message", "operation status request is incomplete")
+        }
+        if (request["schemaVersion"] != 2 || request["operation"] != "operation.status")
+            return Map("code", "STATION_COMMAND_REJECTED", "message", "operation status request is unsupported")
+        for key in ["id", "operationId"] {
+            value := request[key]
+            if (Type(value) != "String" || StrLen(value) > 96
+                || !RegExMatch(value, "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"))
+                return Map("code", "STATION_COMMAND_REJECTED", "message", "operation status identifier is invalid")
+        }
+        return Map("code", "", "message", "")
     }
 
     static ExecuteLocked(request, sessionExecutor := unset) {
@@ -476,7 +692,8 @@ class LS_LeaseDispatcher {
 
     static Result(request, exitCode, message, metadata, stdout, stderr) {
         operationId := IsObject(request) && request.Has("id") ? request["id"] : ""
-        command := IsObject(request) && request.Has("command") ? request["command"] : "lease-dispatch"
+        command := IsObject(request) && request.Has("command") ? request["command"]
+            : IsObject(request) && request.Has("operation") ? request["operation"] : "lease-dispatch"
         return Map(
             "id", operationId,
             "command", command,

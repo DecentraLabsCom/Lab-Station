@@ -4,6 +4,7 @@
 #Include ..\service\FmuExecutor.ahk
 #Include ..\service\SessionManager.ahk
 #Include ..\service\LeaseDispatcher.ahk
+#Include ParityTestSupport.ahk
 
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-LeaseDispatcherTests-" A_TickCount
@@ -21,6 +22,8 @@ try {
     TestLeaseFailedPrepareRequiresRecovery()
     TestLeaseRejectsExpiredRequestBeforeRunningSessionWork()
     TestLeaseCorruptJournalFailsClosed()
+    TestLeaseExpiryWatchdogReleasesExpiredLease()
+    TestOperationStatusReturnsPersistedResult()
 } catch as err {
     LS_TestFail("Unhandled lease-dispatch test exception: " . err.Message)
 }
@@ -127,6 +130,72 @@ TestLeaseCorruptJournalFailsClosed() {
     LS_TestAssert(result["exitCode"] = 2, "corrupt lease journal rejects operations")
     LS_TestAssert(result["metadata"]["code"] = "STATION_JOURNAL_UNAVAILABLE", "corrupt journal has stable error code")
     LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 0, "corrupt journal never runs session work")
+}
+
+TestLeaseExpiryWatchdogReleasesExpiredLease() {
+    global LEASE_EXECUTOR_CALLS
+    ResetLeaseTestState()
+    matrix := LS_TestLoadParityMatrix()
+    policy := matrix["leaseExpiry"]
+    now := A_NowUTC
+    active := Map(
+        "kind", "reservation",
+        "leaseId", "lease-watchdog",
+        "generation", 7,
+        "state", "active",
+        "notBefore", FormatTime(DateAdd(now, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ"),
+        "expiresAt", FormatTime(DateAdd(now, 120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ"),
+        "updatedAt", FormatTime(now, "yyyy-MM-ddTHH:mm:ssZ")
+    )
+    LS_LeaseDispatcher.SaveState(Map("nextGeneration", 7, "active", active, "operations", Map()))
+
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_TestAssert(policy["unexpiredLease"] = "retain", "shared policy retains a lease before expiry")
+    LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 0, "watchdog leaves an unexpired lease untouched")
+
+    active["expiresAt"] := FormatTime(DateAdd(now, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    LS_LeaseDispatcher.SaveState(Map("nextGeneration", 7, "active", active, "operations", Map()))
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+
+    state := LS_LeaseDispatcher.LoadState()
+    LS_TestAssert(policy["expiredLease"] = "release-once", "shared policy releases an expired lease once")
+    LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 1, "watchdog runs release-session only once for the expired lease")
+    LS_TestAssert(LEASE_EXECUTOR_CALLS[1]["command"] = "release-session", "expiry cleanup uses the shared release-session operation")
+    LS_TestAssert(!state.Has("active"), "successful expiry cleanup clears the active lease")
+    LS_TestAssert(state["operations"].Has("lease-expiry-7"), "expiry cleanup persists an operation result")
+    LS_TestAssert(state["operations"]["lease-expiry-7"]["state"] = "completed", "expiry cleanup is durably completed")
+}
+
+TestOperationStatusReturnsPersistedResult() {
+    global LEASE_EXECUTOR_CALLS
+    ResetLeaseTestState()
+    matrix := LS_TestLoadParityMatrix()
+    policy := matrix["operationStatus"]
+    request := LeaseRequest("prepare-session", "status-prepare", 0)
+    prepared := LS_LeaseDispatcher.Execute(request, LeaseTestExecutor)
+    query := Map("schemaVersion", 2, "id", "status-query", "operation", "operation.status", "operationId", request["id"])
+    status := LS_LeaseDispatcher.Execute(query)
+    operation := LS_ParseJson(status["stdout"])
+
+    LS_TestAssert(prepared["exitCode"] = 0, "operation.status fixture prepare completes successfully")
+    LS_TestAssert(policy["persistedOperation"] = "return-record", "shared policy returns the persisted operation record")
+    LS_TestAssert(operation["operationId"] = request["id"] && operation["state"] = "completed",
+        "Windows operation.status returns the completed operation record")
+    LS_TestAssert(operation["result"]["exitCode"] = 0, "operation.status returns the durable command result")
+    LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 1, "status lookup does not repeat the operation")
+
+    missing := LS_LeaseDispatcher.Execute(Map(
+        "schemaVersion", 2,
+        "id", "status-missing",
+        "operation", "operation.status",
+        "operationId", "missing-operation"
+    ))
+    missingRecord := LS_ParseJson(missing["stdout"])
+    LS_TestAssert(policy["missingOperation"] = "not-found", "shared policy reports absent operation ids as not found")
+    LS_TestAssert(missing["exitCode"] = 1 && missingRecord["state"] = "not-found",
+        "Windows operation.status distinguishes an absent operation from a transport failure")
+    LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 1, "missing status lookup causes no session side effect")
 }
 
 ResetLeaseTestState() {

@@ -21,7 +21,7 @@ class LS_Status {
         data["timestamp"] := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
         data["host"] := A_ComputerName
         data["version"] := LAB_STATION_VERSION
-        data["managementCapabilities"] := ["reservation-lease-v1", "power-idle-guard-v1"]
+        data["managementCapabilities"] := ["reservation-lease-v1", "operation-status-v1", "power-idle-guard-v1"]
         data["stationProfile"] := this.GetStationProfile()
         data["identity"] := this.GetIdentityInformation()
         data["identity"]["agentVersion"] := LAB_STATION_VERSION
@@ -35,6 +35,7 @@ class LS_Status {
         data["biosChecklist"] := this.GetBiosChecklist()
         rights := this.GetSecurityRights()
         data["policy"] := this.GetPolicyInformation(data["identity"], rights)
+        data["policy"]["allowLocalSessionEviction"] := this.IsLocalSessionEvictionAllowed()
         data["sessions"] := this.GetSessionInformation(data["identity"])
         data["fmuExecutor"] := this.GetFmuExecutorStatus()
         data["readiness"] := this.BuildCapabilityReadiness(data)
@@ -61,8 +62,7 @@ class LS_Status {
         data["readiness"]["physicalLab"]["available"] := data["remoteAppEnabled"] && data["identity"]["labUserExists"]
         data["readiness"]["wake"]["available"] := data["wake"]["programmableCount"] > 0
         data["readiness"]["fmu"]["available"] := data["fmuExecutor"]["available"]
-        if (data["summary"]["state"] = "needs-action")
-            data["summary"]["state"] := "degraded"
+        data["summary"] := this.NormalizePortableSummary(data["summary"], data["readiness"], data["profile"])
         data["supportTier"] := "certified"
         data["platformSpecific"] := Map("windows", Map(
             "remoteAppEnabled", data["remoteAppEnabled"],
@@ -154,6 +154,16 @@ class LS_Status {
             return profile = "hybrid" ? "hybrid" : "server"
         } catch {
             return "server"
+        }
+    }
+
+    static IsLocalSessionEvictionAllowed() {
+        try {
+            value := StrLower(Trim(IniRead(LAB_STATION_PROFILE_FILE, "Station", "AllowLocalSessionEviction", "true")))
+            return value = "1" || value = "true" || value = "yes" || value = "on"
+        } catch {
+            ; An unreadable hybrid policy must not authorize forced logoff.
+            return false
         }
     }
 
@@ -693,29 +703,23 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         try {
             value := Trim(FileRead(path, "UTF-8"))
             expiresAt := ""
-            setAt := ""
             try {
                 state := LS_ParseJson(value)
-                if (Type(state) = "Map") {
+                if (Type(state) = "Map")
                     expiresAt := this.LocalModeTimestamp(state.Has("expiresAt") ? state["expiresAt"] : "")
-                    setAt := this.LocalModeTimestamp(state.Has("setAt") ? state["setAt"] : "")
-                }
             } catch {
-                ; The previous format stored a timestamp or a marker as plain text.
+                ; Older versions stored the activation timestamp as plain text.
             }
             if (expiresAt = "") {
-                setAt := this.LocalModeTimestamp(value)
-                if (setAt != "")
-                    expiresAt := DateAdd(setAt, 28800, "Seconds")
+                legacySetAt := this.LocalModeTimestamp(value)
+                if (legacySetAt != "")
+                    expiresAt := DateAdd(legacySetAt, 28800, "Seconds")
             }
-            if (expiresAt != "") {
-                isExpired := DateDiff(A_NowUTC, expiresAt, "Seconds") > 0
-            } else {
-                ; Older desktop toggles wrote a marker instead of a timestamp.
-                ; Its file time gives those markers the same eight-hour lifetime.
-                modifiedAt := FileGetTime(path, "M")
-                isExpired := DateDiff(A_Now, modifiedAt, "Seconds") > 28800
-            }
+            ; An unknown or malformed marker has no trustworthy activation time.
+            ; Keep local mode active until an operator explicitly clears it.
+            if (expiresAt = "")
+                return true
+            isExpired := DateDiff(A_NowUTC, expiresAt, "Seconds") > 0
             if (isExpired) {
                 try FileDelete(path)
                 return FileExist(path) ? true : false
@@ -728,9 +732,27 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     }
 
     static LocalModeTimestamp(value) {
-        if (!RegExMatch(value, "^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$", &match))
+        if (!RegExMatch(value, "^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$", &match))
             return ""
-        return match[1] . match[2] . match[3] . match[4] . match[5] . match[6]
+        digits := match[1] . match[2] . match[3] . match[4] . match[5] . match[6]
+        if (FormatTime(digits, "yyyy-MM-ddTHH:mm:ss") != SubStr(value, 1, 19))
+            return ""
+
+        zone := match[8]
+        if (zone != "Z") {
+            offsetHours := SubStr(zone, 2, 2) + 0
+            offsetMinutes := SubStr(zone, 5, 2) + 0
+            if (offsetHours > 23 || offsetMinutes > 59)
+                return ""
+            offset := (offsetHours * 60 + offsetMinutes) * (SubStr(zone, 1, 1) = "+" ? -1 : 1)
+            digits := DateAdd(digits, offset, "Minutes")
+        }
+
+        ; DateAdd and DateDiff operate at whole-second precision. Round a
+        ; fractional timestamp up so an old marker is never cleared early.
+        if (match[7] != "" && RegExMatch(match[7], "[1-9]"))
+            digits := DateAdd(digits, 1, "Seconds")
+        return digits
     }
 
     static GetFmuExecutorStatus() {
@@ -824,19 +846,22 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
 
     static BuildSummary(data) {
         stationIssues := this.CollectStationIssues(data)
-        wakeIssues := this.CollectWakeIssues(data)
-        fmuIssues := this.CollectFmuIssues(data)
         issues := []
         for issue in stationIssues
-            issues.Push(issue)
-        for issue in wakeIssues
-            issues.Push(issue)
-        for issue in fmuIssues
             issues.Push(issue)
         summary := Map()
         summary["state"] := issues.Length > 0 ? "needs-action" : "ready"
         summary["ready"] := issues.Length = 0
         summary["issues"] := issues
+        return summary
+    }
+
+    static NormalizePortableSummary(summary, readiness, profile) {
+        primaryCapability := profile = "fmu-only" ? "fmu" : "physicalLab"
+        primary := readiness[primaryCapability]
+        summary["ready"] := primary["ready"]
+        summary["state"] := summary["ready"] ? "ready"
+            : (primary.Has("available") && !primary["available"] ? "unavailable" : "degraded")
         return summary
     }
 

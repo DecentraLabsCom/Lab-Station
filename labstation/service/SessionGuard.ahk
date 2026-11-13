@@ -16,10 +16,11 @@ class LS_SessionGuard {
         grace := grace < 30 ? 30 : grace
         notify := !options.Has("notify") || options["notify"]
         force := !options.Has("force") || options["force"]
+        localOnly := options.Has("localOnly") && options["localOnly"]
         message := options.Has("message") && options["message"] != "" ? options["message"] : this.BuildDefaultMessage(grace)
 
         try {
-            targets := this.FindConflictingSessions(guardUser)
+            targets := this.FindConflictingSessions(guardUser, localOnly)
         } catch as e {
             LS_LogWarning("Session guard: unable to read sessions - " . e.Message)
             return false
@@ -43,27 +44,71 @@ class LS_SessionGuard {
 
         LS_LogInfo(Format("Session guard: waiting {1} seconds before forced logoff", grace))
         this.WaitForGrace(grace)
+        if (options.Has("abortOnLocalMode") && options["abortOnLocalMode"] && LS_Status.IsLocalModeEnabled()) {
+            LS_LogInfo("Session guard: local mode became active during grace period; no sessions were evicted")
+            return false
+        }
+        if (localOnly) {
+            try {
+                currentTargets := this.FindConflictingSessions(guardUser, true)
+            } catch as e {
+                LS_LogWarning("Session guard: unable to recheck local sessions - " . e.Message)
+                return false
+            }
+            if (!this.SameSessionSnapshot(targets, currentTargets)) {
+                LS_LogInfo("Session guard: local sessions changed during grace period; no sessions were evicted")
+                return false
+            }
+        }
 
         result := true
         for session in targets {
+            if (options.Has("abortOnLocalMode") && options["abortOnLocalMode"] && LS_Status.IsLocalModeEnabled()) {
+                LS_LogInfo("Session guard: local mode became active during session release")
+                return false
+            }
             if (!this.LogoffSession(session, force))
                 result := false
         }
         return result
     }
 
-    static FindConflictingSessions(guardUser := "") {
+    static FindConflictingSessions(guardUser := "", localOnly := false) {
         guardUser := guardUser != "" ? guardUser : LS_AccountManager.DefaultUser
         targets := []
         for session in this.QuerySessions() {
-            if (this.EqualsUser(session["user"], guardUser))
+            ; Prepare considers every physical-console session, including one
+            ; signed in as LABUSER. The managed account exemption applies only
+            ; to the general guard, where its remote lab session is expected.
+            if (!localOnly && this.EqualsUser(session["user"], guardUser))
                 continue
             state := StrLower(session["state"])
             if (state = "disc" || state = "down" || (state = "" && session["user"] = ""))
                 continue
+            if (localOnly && StrLower(Trim(session["session"])) != "console")
+                continue
             targets.Push(session)
         }
         return targets
+    }
+
+    static SameSessionSnapshot(before, after) {
+        if (before.Length != after.Length)
+            return false
+        currentById := Map()
+        for session in after
+            currentById[session["id"]] := session
+        for session in before {
+            id := session["id"]
+            if (!currentById.Has(id))
+                return false
+            current := currentById[id]
+            if (!this.EqualsUser(current["user"], session["user"])
+                || StrLower(current["session"]) != StrLower(session["session"])
+                || StrLower(current["state"]) != StrLower(session["state"]))
+                return false
+        }
+        return true
     }
 
     static WaitForGrace(seconds) {

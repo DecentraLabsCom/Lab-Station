@@ -14,8 +14,8 @@ RunParityMatrixTests() {
         LS_TestOutput("Parity matrix: loading shared vector file`n")
         matrix := LS_TestLoadParityMatrix()
         LS_TestOutput("Parity matrix: loaded " . matrix["sharedScenarios"].Length . " scenarios`n")
-        if (matrix["version"] != 1)
-            errors.Push("portable test matrix version must be 1")
+        if (matrix["version"] != 2)
+            errors.Push("portable test matrix version must be 2")
         if (matrix["portableStatus"]["schemaVersion"] != "3.0.0")
             errors.Push("portable test matrix must target Station Contract v3")
 

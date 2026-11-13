@@ -235,6 +235,11 @@ LS_HandleLocalModeCommand(args) {
             try {
                 if (FileExist(LAB_STATION_LOCAL_MODE_FLAG))
                     FileDelete(LAB_STATION_LOCAL_MODE_FLAG)
+                if (LAB_STATION_LEGACY_DATA_DIR != "") {
+                    legacyFlag := LAB_STATION_LEGACY_DATA_DIR "\local-mode.flag"
+                    if (FileExist(legacyFlag))
+                        FileDelete(legacyFlag)
+                }
                 LS_PublishTelemetryBestEffort("local-mode cleared")
                 return 0
             } catch as e {
@@ -651,6 +656,11 @@ LS_ServiceLoop() {
             LS_Status.ExportJson(LAB_STATION_STATUS_FILE, status)
             LS_Telemetry.Publish(status)
             nextStatus := now + statusInterval
+        }
+        try {
+            LS_LeaseDispatcher.EnforceLeaseExpiry()
+        } catch as e {
+            LS_LogError("Lease expiry watchdog error: " . e.Message)
         }
         try {
             LS_CommandQueue.ProcessPending()

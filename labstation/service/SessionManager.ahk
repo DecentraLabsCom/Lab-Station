@@ -8,6 +8,9 @@
 #Include ..\core\Shell.ahk
 #Include ..\system\AccountManager.ahk
 #Include ServiceState.ahk
+#Include ..\diagnostics\Status.ahk
+#Include SessionGuard.ahk
+#Include FmuExecutor.ahk
 
 class LS_SessionManager {
     static LastPrepareExitCode := 0
@@ -21,18 +24,46 @@ class LS_SessionManager {
         if (LS_Status.IsLocalModeEnabled())
             return this.RecordPrepareFailure(started, user, "local mode is active")
 
-        if (LS_Status.GetStationProfile() != "hybrid") {
-            try {
-                conflictingSessions := LS_SessionGuard.FindConflictingSessions(managedUser)
-            } catch as e {
-                return this.RecordPrepareFailure(started, user, "session inventory unavailable: " . e.Message)
-            }
-            if (conflictingSessions.Length > 0)
-                return this.RecordPrepareFailure(started, user, "unexpected interactive session on dedicated station")
+        try {
+            localSessions := this.GetPrepareLocalSessions(managedUser)
+        } catch as e {
+            return this.RecordPrepareFailure(started, user, "session inventory unavailable: " . e.Message)
         }
 
-        if (!this.RunSessionGuard(options))
-            return this.RecordPrepareFailure(started, user, "session guard failed")
+        profile := LS_Status.GetStationProfile()
+        allowEviction := localSessions.Length > 0 && LS_Status.IsLocalSessionEvictionAllowed()
+        localSessionDecision := this.PrepareLocalSessionDecision(profile, localSessions.Length, allowEviction)
+        if (localSessionDecision = "refuse") {
+            reason := profile = "hybrid"
+                ? "local session is active and local-session eviction is disabled"
+                : "unexpected local interactive session on dedicated station"
+            return this.RecordPrepareFailure(started, user, reason)
+        }
+        if (localSessionDecision = "evict") {
+            if (options.Has("guard") && !options["guard"]) {
+                try {
+                    currentLocalSessions := LS_SessionGuard.FindConflictingSessions(managedUser, true)
+                } catch as e {
+                    return this.RecordPrepareFailure(started, user, "session inventory unavailable before immediate eviction: " . e.Message)
+                }
+                if (!LS_SessionGuard.SameSessionSnapshot(localSessions, currentLocalSessions))
+                    return this.RecordPrepareFailure(started, user, "local sessions changed before immediate eviction")
+                for session in localSessions {
+                    if (LS_Status.IsLocalModeEnabled())
+                        return this.RecordPrepareFailure(started, user, "local mode became active during session release")
+                    if (!LS_SessionGuard.LogoffSession(session))
+                        return this.RecordPrepareFailure(started, user, "unable to evict local interactive session")
+                }
+            } else if (!this.RunSessionGuard(options, true)) {
+                return this.RecordPrepareFailure(started, user, "session guard failed")
+            }
+        }
+        try {
+            if (LS_SessionGuard.FindConflictingSessions(managedUser, true).Length > 0)
+                return this.RecordPrepareFailure(started, user, "local interactive session became active or remained active during preparation")
+        } catch as e {
+            return this.RecordPrepareFailure(started, user, "session inventory unavailable after guard: " . e.Message)
+        }
         if (LS_Status.IsLocalModeEnabled())
             return this.RecordPrepareFailure(started, user, "local mode became active during preparation")
 
@@ -64,6 +95,18 @@ class LS_SessionManager {
         return ok
     }
 
+    static GetPrepareLocalSessions(managedUser) {
+        return LS_SessionGuard.FindConflictingSessions(managedUser, true)
+    }
+
+    static PrepareLocalSessionDecision(profile, localSessionCount, allowEviction) {
+        if (localSessionCount <= 0)
+            return "continue"
+        if (profile = "hybrid" && allowEviction)
+            return "evict"
+        return "refuse"
+    }
+
     static RecordPrepareFailure(started, user, reason) {
         this.LastPrepareExitCode := 2
         LS_LogWarning("Prepare-session refused: " . reason)
@@ -75,7 +118,7 @@ class LS_SessionManager {
         return false
     }
 
-    static RunSessionGuard(options) {
+    static RunSessionGuard(options, localOnly := false) {
         guardEnabled := true
         if (options.Has("guard"))
             guardEnabled := options["guard"]
@@ -88,6 +131,8 @@ class LS_SessionManager {
             guardOpts["message"] := options["guardMessage"]
         if (options.Has("guardNotify"))
             guardOpts["notify"] := options["guardNotify"]
+        guardOpts["localOnly"] := localOnly
+        guardOpts["abortOnLocalMode"] := localOnly
         return LS_SessionGuard.Run(guardOpts)
     }
 

@@ -13,7 +13,7 @@ normalizer for older installations.
 
 The v3 status document contains platform, profile, RemoteApp and WinRM state,
 legacy AppControl-autostart detection, Wake-on-LAN and power compliance, sessions, FMU Executor health,
-the complete `summary.ready` verdict, capability-specific `readiness`,
+the profile-primary `summary.ready` verdict, capability-specific `readiness`,
 operation timestamps, `localModeEnabled`, and the latest `lastForcedLogoff`.
 The heartbeat keeps the same contract fields at its top level, as well as a
 complete nested `status` copy for existing file-drop consumers. It also keeps the latest operation summary at the top level so a dashboard can
@@ -32,6 +32,12 @@ Executor is available and healthy. A wake or FMU issue can therefore leave the
 physical-lab capability ready while keeping the affected capability unready;
 consumers should select the capability that matches the decision they are
 making.
+
+`summary.ready` and `summary.issues` describe the profile's primary capability:
+`readiness.physicalLab` for Windows `dedicated` and `hybrid` Stations. Linux
+`fmu-only` Stations use `readiness.fmu`. Wake readiness stays independent, and
+an optional FMU issue does not make a physical Station unready. Use an explicit
+`readiness` entry whenever a decision concerns a specific capability.
 
 The v2 files in this repository document the legacy Windows payload only. The
 canonical v3 schemas are maintained by Lab Gateway; the Station bundle carries
