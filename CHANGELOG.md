@@ -1,9 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [3.6.0-preview.9] - 2026-11-13
 
 ### Fixed
 - Block administrative session release while a reservation or demo lease is active, serializing the cleanup against lease operations.
+- Resolve uncertain WinRM operations through the shared operation-status recovery sequence.
+
+### Changed
+- Align Windows reservation session preparation, release cleanup, and lease expiration with Linux Station behavior.
+- Report physical-lab readiness consistently with Linux Station telemetry.
+
+## [Unreleased]
 
 ## [3.6.0-preview.8] - 2026-11-10
 
