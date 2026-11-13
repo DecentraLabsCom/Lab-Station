@@ -7,6 +7,42 @@
 class LS_LeaseDispatcher {
     static MutexName := "Global\DecentraLabs.LabStation.ReservationLease"
 
+    ; The unscoped operator release shares the lease mutex with reservation
+    ; operations so it cannot log off LABUSER while a lease is active or while
+    ; a reservation is being prepared.
+    static ExecuteAdministrativeRelease(options) {
+        request := Map("id", "operator-release", "command", "release-session")
+        mutex := DllCall("CreateMutexW", "Ptr", 0, "Int", 0, "WStr", this.MutexName, "Ptr")
+        if (!mutex)
+            return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "lease journal lock is unavailable")
+        waitResult := DllCall("WaitForSingleObject", "Ptr", mutex, "UInt", 180000, "UInt")
+        if (waitResult != 0 && waitResult != 0x80) {
+            DllCall("CloseHandle", "Ptr", mutex)
+            return this.ErrorResult(request, "STATION_OPERATION_IN_PROGRESS", "another lease operation is still running")
+        }
+
+        try {
+            try {
+                state := this.LoadState()
+            } catch {
+                return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "lease journal is invalid or unavailable")
+            }
+            if (state.Has("active"))
+                return this.ErrorResult(request, "STATION_LEASE_CONFLICT", "an active lease must be released by its reservation flow")
+
+            started := A_TickCount
+            successful := LS_SessionManager.ReleaseSession(options)
+            exitCode := successful ? 0 : 1
+            message := successful ? "station released" : "Release-session finished with warnings"
+            result := this.Result(request, exitCode, message, Map("administrative", true), message, successful ? "" : message)
+            result["durationMs"] := A_TickCount - started
+            return result
+        } finally {
+            DllCall("ReleaseMutex", "Ptr", mutex)
+            DllCall("CloseHandle", "Ptr", mutex)
+        }
+    }
+
     static Execute(request, sessionExecutor := unset) {
         validation := this.ValidateRequest(request)
         if (validation["code"] != "")

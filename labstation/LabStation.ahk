@@ -326,13 +326,19 @@ LS_RunPrepareSession(args := []) {
 
 LS_RunReleaseSession(args := []) {
     opts := LS_ParseSessionOptions(args)
-    if (LS_SessionManager.ReleaseSession(opts)) {
+    result := LS_LeaseDispatcher.ExecuteAdministrativeRelease(opts)
+    if (result["exitCode"] = 0) {
         LS_ShowMessage("Session released successfully", "Lab Station", "OK Iconi")
         return 0
-    } else {
+    }
+    if (result["exitCode"] = 1) {
         LS_ShowMessage("Release-session finished with warnings (see log)", "Lab Station", "OK Iconx")
         return 1
     }
+    LS_WriteStdout(result["message"])
+    LS_LogWarning("Administrative release rejected: " . result["message"])
+    LS_ShowMessage(result["message"], "Lab Station", "OK Iconx")
+    return result["exitCode"]
 }
 
 LS_RunLeaseDispatcher(args := []) {

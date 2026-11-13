@@ -70,9 +70,8 @@ class LS_CommandQueue {
                     message := success ? "Prepare-session completed" : "Prepare-session reported warnings"
                     return this.ResultState(success, success ? 0 : 1, message)
                 case "release-session":
-                    success := LS_SessionManager.ReleaseSession(cmd["options"])
-                    message := success ? "Release-session completed" : "Release-session reported warnings"
-                    return this.ResultState(success, success ? 0 : 1, message)
+                    result := LS_LeaseDispatcher.ExecuteAdministrativeRelease(cmd["options"])
+                    return this.ResultState(result["exitCode"] < 2, result["exitCode"], result["message"])
                 case "status-json":
                     target := cmd["options"].Has("path") ? cmd["options"]["path"] : LAB_STATION_STATUS_FILE
                     success := LS_Status.ExportJson(target)

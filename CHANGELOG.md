@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Block administrative session release while a reservation or demo lease is active, serializing the cleanup against lease operations.
+
 ## [3.6.0-preview.8] - 2026-11-10
 
 ### Changed

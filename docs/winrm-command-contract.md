@@ -236,6 +236,11 @@ print(status['summary']['state'])
 ```
 
 ## 7. Operational flow per reservation
+The `Release` action under Lab Manager Operations is administrative and has no
+reservation context. It releases only when no reservation or demo lease is
+active. Reservation completion uses the separate lease-dispatch v2 path, which
+validates the matching lease before closing LABUSER.
+
 1. **Wake host** (WoL handled elsewhere) and wait for WinRM to respond.
 2. **`prepare-session`** to ensure LABUSER is clean. This automatically runs `session guard` (unless you pass `--no-guard`) to evict local users before cleaning; abort if exit code >=2.
 3. **Assign reservation** via Guacamole/RemoteApp.
