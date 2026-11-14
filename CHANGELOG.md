@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.6.0-preview.10] - 2026-11-14
+
+### Changed
+- Run each workspace application's ordered close attempts concurrently, with
+  an independent bounded deadline per application.
+
 ## [3.6.0-preview.9] - 2026-11-13
 
 ### Fixed
