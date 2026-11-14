@@ -30,11 +30,11 @@ configuration initialization.
 | `Config.ahk` | Defaults for polling, startup, activation, browser enhancement, RDP events, and the cooperative close files. |
 | `WorkspaceConfig.ahk` | Maximum workspace app count and the protected ProgramData manifest root. |
 | `Utils.ahk` | Common logging, wait loops, executable parsing, window dimensions, and browser command enhancement. |
-| `WindowClosing.ahk` | Standard close cascade plus custom ClassNN and client-coordinate strategies. |
+| `WindowClosing.ahk` | Standard close cascade plus reusable custom ClassNN and client-coordinate strategies. |
 | `CloseRequest.ahk` | Presence marker and request/result handshake used by `release-session` and `prepare-session`. |
 | `RdpMonitoring.ahk` | WTS session notifications first; event-log polling as fallback. |
 | `SingleAppMode.ahk` | Launches, activates, hardens, and closes one application. |
-| `WorkspaceMode.ahk` | Loads an admin-managed manifest, launches up to five compatible Win32 apps, hosts them in tabs, and closes their process trees together. |
+| `WorkspaceMode.ahk` | Loads an admin-managed manifest, launches up to five compatible Win32 apps, hosts them in tabs, and closes them concurrently. Per-app `closeCoordinates` can attempt a button close on the primary window before that app's `WinClose`, `SC_CLOSE`, `WM_CLOSE`, and process-tree fallbacks. All app close sequences share a 10-second workspace deadline. |
 
 ## Development notes
 
@@ -43,6 +43,12 @@ configuration initialization.
 - Do not use `@close-button` and `@close-coords` together.
 - Client coordinates are relative to the target window's client area; use
   `WindowSpy.exe` when configuring a custom close action.
+- Workspace `closeCoordinates` are stored on the app entry in its protected
+  manifest. AppControl uses a physical click only when that app is the visible
+  selected tab and the point resolves to that primary window; it otherwise
+  skips the click and proceeds with the coordinate-message and standard close
+  fallbacks. App close sequences progress independently in parallel, under a
+  shared 10-second workspace deadline.
 - The browser kiosk enhancement is enabled by default for single mode.
   Workspace applications use their manifest arguments without browser
   auto-enhancement. The implementation and defaults live in `Config.ahk` and

@@ -192,10 +192,21 @@ LS_WorkspaceEditorNormalizeApp(source, index) {
     windowExecutable := source.Has("windowExecutable") ? source["windowExecutable"] : ""
     windowClass := source.Has("windowClass") ? source["windowClass"] : ""
     titleContains := source.Has("windowTitleContains") ? source["windowTitleContains"] : ""
+    closeCoordinates := source.Has("closeCoordinates") ? source["closeCoordinates"] : []
     timeout := source.Has("startupTimeoutSeconds") ? source["startupTimeoutSeconds"] : 60
     if (Type(workingDirectory) != "String" || Type(windowExecutable) != "String"
         || Type(windowClass) != "String" || Type(titleContains) != "String")
         throw Error("Application " . index . " has invalid optional field types")
+    if (!(closeCoordinates is Array) || (closeCoordinates.Length != 0 && closeCoordinates.Length != 2))
+        throw Error("Application " . index . " closeCoordinates must be empty or an [X,Y] pair")
+    if (closeCoordinates.Length = 2) {
+        for coordinateIndex, coordinate in closeCoordinates {
+            if ((Type(coordinate) != "Integer" && Type(coordinate) != "Float")
+                || Floor(coordinate) != coordinate || coordinate < 0 || coordinate > 32767)
+                throw Error("Application " . index . " closeCoordinates must contain integers from 0 to 32767")
+            closeCoordinates[coordinateIndex] := Integer(coordinate)
+        }
+    }
     try timeout := Integer(timeout)
     catch
         throw Error("Application " . index . " startup timeout must be an integer")
@@ -211,6 +222,7 @@ LS_WorkspaceEditorNormalizeApp(source, index) {
         "workingDirectory", workingDirectory,
         "windowClass", windowClass,
         "windowTitleContains", titleContains,
+        "closeCoordinates", closeCoordinates,
         "startupTimeoutSeconds", Integer(timeout)
     )
 }
@@ -226,6 +238,8 @@ LS_WorkspaceEditorRefreshApps(editor) {
         }
         if (app["windowTitleContains"] != "")
             windowLabel .= " / " . app["windowTitleContains"]
+        if (app["closeCoordinates"].Length = 2)
+            windowLabel .= " / close " . app["closeCoordinates"][1] . "," . app["closeCoordinates"][2]
         editor.AppList.Add(, app["title"], fileName, windowLabel)
     }
     editor.StatusText.Text := editor.Apps.Length . " of 5 applications. Automatic window matching is used when no class is specified."
@@ -281,7 +295,8 @@ LS_WorkspaceEditorMoveApp(editor, direction) {
 LS_WorkspaceEditorShowAppDialog(editor, index := 0) {
     seed := index ? editor.Apps[index] : Map(
         "title", "", "executable", "", "arguments", [], "workingDirectory", "",
-        "windowExecutable", "", "windowClass", "", "windowTitleContains", "", "startupTimeoutSeconds", 60, "id", ""
+        "windowExecutable", "", "windowClass", "", "windowTitleContains", "", "closeCoordinates", [],
+        "startupTimeoutSeconds", 60, "id", ""
     )
     dialog := Gui("+Owner" . editor.Hwnd . " +ToolWindow", index ? "Edit application" : "Add application")
     dialog.BackColor := "0F1419"
@@ -313,9 +328,9 @@ LS_WorkspaceEditorShowAppDialog(editor, index := 0) {
     dialog.BrowseFolderButton.OnEvent("Click", LS_WorkspaceEditorBrowseFolder_Handler)
 
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.AddText("x20 y184 w595 h31", "AppControl waits for the main window. Configure Advanced matching if a launcher starts another program.")
+    dialog.AddText("x20 y184 w595 h31", "AppControl waits for the main window. Use Advanced options for window matching or a custom close button.")
     dialog.SetFont("s8 c374151", "Segoe UI")
-    dialog.AdvancedButton := dialog.AddButton("x20 y222 w150 h26", "Advanced matching...")
+    dialog.AdvancedButton := dialog.AddButton("x20 y222 w150 h26", "Advanced options...")
     dialog.AdvancedButton.OnEvent("Click", LS_WorkspaceEditorAdvanced_Handler)
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
     dialog.WindowExecutableLabel := dialog.AddText("x20 y267 w115 Hidden", "Window executable")
@@ -336,7 +351,14 @@ LS_WorkspaceEditorShowAppDialog(editor, index := 0) {
     dialog.SetFont("s8 c374151", "Segoe UI")
     dialog.TimeoutEdit := dialog.AddEdit("x140 y369 w80 Hidden", seed["startupTimeoutSeconds"])
     dialog.SetFont("s8 c9CA3AF", "Segoe UI")
-    dialog.AdvancedHelpText := dialog.AddText("x20 y407 w595 h38 Hidden", "Set Window executable when a launcher starts a separate program. Class and title filters select its main window. The wait is a maximum; startup continues as soon as the matching window appears.")
+    dialog.CloseCoordinatesLabel := dialog.AddText("x20 y407 w115 Hidden", "Close X,Y")
+    dialog.SetFont("s8 c374151", "Segoe UI")
+    closeCoordinatesText := seed["closeCoordinates"].Length = 2
+        ? seed["closeCoordinates"][1] . "," . seed["closeCoordinates"][2]
+        : ""
+    dialog.CloseCoordinatesEdit := dialog.AddEdit("x140 y404 w150 Hidden", closeCoordinatesText)
+    dialog.SetFont("s8 c9CA3AF", "Segoe UI")
+    dialog.AdvancedHelpText := dialog.AddText("x20 y438 w595 h38 Hidden", "Set Window executable for launchers; class/title select the main window. Capture close X,Y in the app's hosted client area at workspace size.")
 
     dialog.SetFont("s9 c374151", "Segoe UI")
     dialog.SaveButton := dialog.AddButton("x453 y222 w78 h30 Default", "Apply")
@@ -386,12 +408,13 @@ LS_WorkspaceEditorAdvanced_Handler(ctrl, info) {
     visible := dialog.AdvancedVisible
     for control in [dialog.WindowExecutableLabel, dialog.WindowExecutableEdit, dialog.BrowseWindowExeButton,
         dialog.WindowClassLabel, dialog.WindowClassEdit, dialog.TitleFilterLabel,
-        dialog.TitleFilterEdit, dialog.TimeoutLabel, dialog.TimeoutEdit, dialog.AdvancedHelpText]
+        dialog.TitleFilterEdit, dialog.TimeoutLabel, dialog.TimeoutEdit,
+        dialog.CloseCoordinatesLabel, dialog.CloseCoordinatesEdit, dialog.AdvancedHelpText]
         control.Visible := visible
-    dialog.AdvancedButton.Text := visible ? "Hide advanced options" : "Advanced matching..."
-    dialog.SaveButton.Move(, visible ? 449 : 222)
-    dialog.CancelButton.Move(, visible ? 449 : 222)
-    dialog.Show(visible ? "h510" : "h260")
+    dialog.AdvancedButton.Text := visible ? "Hide advanced options" : "Advanced options..."
+    dialog.SaveButton.Move(, visible ? 484 : 222)
+    dialog.CancelButton.Move(, visible ? 484 : 222)
+    dialog.Show(visible ? "h545" : "h260")
 }
 
 LS_WorkspaceEditorAppSave_Handler(ctrl, info) {
@@ -418,6 +441,7 @@ LS_WorkspaceEditorReadApp(dialog) {
     windowExecutable := Trim(dialog.WindowExecutableEdit.Value)
     windowClass := Trim(dialog.WindowClassEdit.Value)
     titleContains := Trim(dialog.TitleFilterEdit.Value)
+    closeCoordinatesText := Trim(dialog.CloseCoordinatesEdit.Value)
     timeoutText := Trim(dialog.TimeoutEdit.Value)
 
     if (title = "" || StrLen(title) > 48) {
@@ -468,6 +492,21 @@ LS_WorkspaceEditorReadApp(dialog) {
         return 0
     }
 
+    closeCoordinates := []
+    if (closeCoordinatesText != "") {
+        if (!RegExMatch(closeCoordinatesText, "^(\d{1,5})\s*,\s*(\d{1,5})$", &coordinateMatch)) {
+            MsgBox "Close coordinates must be two client-area integers in X,Y form.", "Application settings", "OK Iconx"
+            return 0
+        }
+        closeX := Integer(coordinateMatch[1])
+        closeY := Integer(coordinateMatch[2])
+        if (closeX > 32767 || closeY > 32767) {
+            MsgBox "Close coordinates must be between 0 and 32767.", "Application settings", "OK Iconx"
+            return 0
+        }
+        closeCoordinates := [closeX, closeY]
+    }
+
     try arguments := LS_WorkspaceEditorParseArguments(argumentsText)
     catch as e {
         MsgBox "Could not parse application parameters:`n" . e.Message, "Application settings", "OK Iconx"
@@ -496,6 +535,7 @@ LS_WorkspaceEditorReadApp(dialog) {
         "workingDirectory", workingDirectory,
         "windowClass", windowClass,
         "windowTitleContains", titleContains,
+        "closeCoordinates", closeCoordinates,
         "startupTimeoutSeconds", timeout
     )
 }
@@ -646,6 +686,8 @@ LS_WorkspaceEditorSave(editor) {
         )
         if (source["windowExecutable"] != "")
             appManifest["windowExecutable"] := source["windowExecutable"]
+        if (source["closeCoordinates"].Length = 2)
+            appManifest["closeCoordinates"] := source["closeCoordinates"]
         apps.Push(appManifest)
     }
     manifest := Map("schemaVersion", 1, "workspaceId", workspaceId, "apps", apps)
@@ -731,6 +773,17 @@ LS_WorkspaceEditorValidateApps(apps) {
         for argument in arguments {
             if (Type(argument) != "String" || StrLen(argument) > 8192)
                 throw Error("Application '" . title . "' has an invalid parameter")
+        }
+
+        closeCoordinates := app.Has("closeCoordinates") ? app["closeCoordinates"] : []
+        if (!(closeCoordinates is Array) || (closeCoordinates.Length != 0 && closeCoordinates.Length != 2))
+            throw Error("Application '" . title . "' close coordinates must be empty or an [X,Y] pair")
+        if (closeCoordinates.Length = 2) {
+            for coordinate in closeCoordinates {
+                if ((Type(coordinate) != "Integer" && Type(coordinate) != "Float")
+                    || Floor(coordinate) != coordinate || coordinate < 0 || coordinate > 32767)
+                    throw Error("Application '" . title . "' close coordinates must be integers from 0 to 32767")
+            }
         }
 
         timeout := app.Has("startupTimeoutSeconds") ? app["startupTimeoutSeconds"] : 60

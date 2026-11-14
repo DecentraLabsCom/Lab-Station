@@ -200,6 +200,18 @@ WorkspaceValidateApp(source, appIndex) {
             throw Error("Application '" . id . "' arguments must be strings no longer than 8192 characters")
     }
 
+    closeCoordinates := source.Has("closeCoordinates") ? source["closeCoordinates"] : []
+    if (!(closeCoordinates is Array) || (closeCoordinates.Length != 0 && closeCoordinates.Length != 2))
+        throw Error("Application '" . id . "' closeCoordinates must be empty or an [X,Y] pair")
+    if (closeCoordinates.Length = 2) {
+        for coordinateIndex, coordinate in closeCoordinates {
+            if ((Type(coordinate) != "Integer" && Type(coordinate) != "Float")
+                || Floor(coordinate) != coordinate || coordinate < 0 || coordinate > 32767)
+                throw Error("Application '" . id . "' closeCoordinates must contain integers from 0 to 32767")
+            closeCoordinates[coordinateIndex] := Integer(coordinate)
+        }
+    }
+
     workingDirectory := source.Has("workingDirectory") ? source["workingDirectory"] : ""
     if (Type(workingDirectory) != "String" || StrLen(workingDirectory) > 1024)
         throw Error("Application '" . id . "' workingDirectory must be a path string")
@@ -223,6 +235,7 @@ WorkspaceValidateApp(source, appIndex) {
         "executable", executable,
         "windowExecutable", windowExecutable,
         "arguments", arguments,
+        "closeCoordinates", closeCoordinates,
         "workingDirectory", workingDirectory,
         "windowClass", windowClass,
         "windowTitleContains", titleContains,
@@ -1112,6 +1125,7 @@ WorkspacePruneAttachedWindows(app) {
 
 WorkspaceCloseAll(reason := "workspace close") {
     global WORKSPACE_APPS, WORKSPACE_SHUTTING_DOWN
+    global WORKSPACE_CLOSE_TIMEOUT_MS, WORKSPACE_CLOSE_POLL_INTERVAL_MS
     if (WORKSPACE_SHUTTING_DOWN)
         return true
 
@@ -1119,30 +1133,278 @@ WorkspaceCloseAll(reason := "workspace close") {
     SetTimer(WorkspaceMonitor, 0)
     Log("Closing workspace applications (" . reason . ")", "INFO")
     success := true
+    closeDeadline := A_TickCount + WORKSPACE_CLOSE_TIMEOUT_MS
+    closeStates := []
 
     Loop WORKSPACE_APPS.Length {
         index := WORKSPACE_APPS.Length - A_Index + 1
         app := WORKSPACE_APPS[index]
-        Loop app["hwnds"].Length {
-            hwnd := app["hwnds"][app["hwnds"].Length - A_Index + 1]
-            if (hwnd && WinExist("ahk_id " . hwnd))
-                PostMessage(0x0010, 0, 0, , "ahk_id " . hwnd) ; WM_CLOSE
+        state := Map(
+            "app", app,
+            "deadline", closeDeadline,
+            "stage", "",
+            "stageDeadline", 0,
+            "taskkillPid", 0,
+            "complete", false
+        )
+        closeStates.Push(state)
+
+        if (WorkspaceAppCloseComplete(app)) {
+            WorkspaceFinishCloseState(state)
+            continue
         }
 
-        if (!WaitUntil(() => !WorkspaceHasAttachedWindow(app) && !WorkspaceLaunchProcessIsRunning(app), 4000, 100)) {
-            ; Only terminate the process AppControl started. A browser window may
-            ; belong to a pre-existing shared browser process, which must survive.
-            if (WorkspaceLaunchProcessIsRunning(app))
-                WorkspaceTerminateProcessTree(app["launchPid"])
-            if (!WaitUntil(() => !WorkspaceHasAttachedWindow(app) && !WorkspaceLaunchProcessIsRunning(app), 3000, 100)) {
-                Log("Workspace application did not close cleanly: " . app["id"] . " (launcher PID " . app["launchPid"] . ")", "ERROR")
+        if (app["closeCoordinates"].Length = 2 && app["hwnd"] && WinExist("ahk_id " . app["hwnd"]))
+            WorkspaceBeginCoordinateClose(state, index)
+        else
+            WorkspaceBeginCloseStage(state, "winclose")
+    }
+
+    ; Each app advances through its own ordered close stages while this loop
+    ; polls all apps together. No app's wait blocks the others from progressing.
+    Loop {
+        outstanding := false
+        for state in closeStates {
+            if (state["complete"])
+                continue
+
+            app := state["app"]
+            if (WorkspaceAppCloseComplete(app)) {
+                Log("Workspace application closed during " . state["stage"] . ": " . app["id"], "INFO")
+                WorkspaceFinishCloseState(state)
+                continue
+            }
+
+            if (A_TickCount >= state["deadline"] - WORKSPACE_CLOSE_DEADLINE_MARGIN_MS) {
+                taskkillPid := state["taskkillPid"]
+                if (taskkillPid && ProcessExist(taskkillPid)) {
+                    try ProcessClose(taskkillPid)
+                    catch as e
+                        Log("Unable to stop timed-out taskkill helper PID " . taskkillPid . ": " . e.Message, "WARNING")
+                }
+                if (WorkspaceAppCloseComplete(app)) {
+                    WorkspaceFinishCloseState(state)
+                    continue
+                }
+                Log("Workspace application did not close within " . WORKSPACE_CLOSE_TIMEOUT_MS
+                    . " ms: " . app["id"] . " (launcher PID " . app["launchPid"] . ")", "ERROR")
+                app["state"] := "closed"
+                WorkspaceCloseProcessHandle(app)
+                state["complete"] := true
                 success := false
+                continue
+            }
+
+            if (state["stage"] = "coordinates"
+                && (!app["hwnd"] || !WinExist("ahk_id " . app["hwnd"]))) {
+                outstanding := true
+                WorkspaceBeginCloseStage(state, "winclose")
+                continue
+            }
+
+            outstanding := true
+            if (state["stage"] = "process-tree" || state["stage"] = "wait")
+                continue
+            if (A_TickCount < state["stageDeadline"])
+                continue
+
+            switch state["stage"] {
+                case "coordinates":
+                    if (!app["hwnd"] || !WinExist("ahk_id " . app["hwnd"]))
+                        Log("Workspace coordinate close closed the primary window; continuing with remaining windows", "DEBUG")
+                    WorkspaceBeginCloseStage(state, "winclose")
+                case "winclose":
+                    WorkspaceBeginCloseStage(state, "system-close")
+                case "system-close":
+                    WorkspaceBeginCloseStage(state, "wm-close")
+                case "wm-close":
+                    if (WorkspaceLaunchProcessIsRunning(app))
+                        WorkspaceBeginProcessTreeClose(state)
+                    else {
+                        state["stage"] := "wait"
+                        state["stageDeadline"] := state["deadline"] - WORKSPACE_CLOSE_DEADLINE_MARGIN_MS
+                    }
             }
         }
-        app["state"] := "closed"
-        WorkspaceCloseProcessHandle(app)
+
+        if (!outstanding)
+            break
+        Sleep(WORKSPACE_CLOSE_POLL_INTERVAL_MS)
     }
     return success
+}
+
+WorkspaceAppCloseComplete(app) {
+    return !WorkspaceHasAttachedWindow(app) && !WorkspaceLaunchProcessIsRunning(app)
+}
+
+WorkspaceFinishCloseState(state) {
+    app := state["app"]
+    state["complete"] := true
+    app["state"] := "closed"
+    WorkspaceCloseProcessHandle(app)
+}
+
+WorkspaceSendCloseStage(app, stage, deadline) {
+    global WORKSPACE_CLOSE_DEADLINE_MARGIN_MS
+
+    hwndIndex := app["hwnds"].Length
+    while (hwndIndex >= 1) {
+        if (A_TickCount >= deadline - WORKSPACE_CLOSE_DEADLINE_MARGIN_MS)
+            return
+        hwnd := app["hwnds"][hwndIndex]
+        hwndIndex -= 1
+        if (!hwnd || !WinExist("ahk_id " . hwnd))
+            continue
+
+        target := "ahk_id " . hwnd
+        try {
+            switch stage {
+                case "winclose":
+                    WinClose(target, , 0)
+                case "system-close":
+                    PostMessage(0x0112, 0xF060, 0, , target) ; WM_SYSCOMMAND / SC_CLOSE
+                case "wm-close":
+                    PostMessage(0x0010, 0, 0, , target) ; WM_CLOSE
+            }
+        } catch as e {
+            Log("Workspace " . stage . " failed for HWND " . hwnd . ": " . e.Message, "WARNING")
+        }
+    }
+}
+
+WorkspaceBeginCoordinateClose(state, appIndex) {
+    global WORKSPACE_COORDINATE_CLOSE_TIMEOUT_MS, WORKSPACE_CLOSE_DEADLINE_MARGIN_MS
+
+    app := state["app"]
+    hwnd := app["hwnd"]
+    coordinates := app["closeCoordinates"]
+    state["stage"] := "coordinates"
+    state["stageDeadline"] := Min(state["deadline"] - WORKSPACE_CLOSE_DEADLINE_MARGIN_MS,
+        A_TickCount + WORKSPACE_COORDINATE_CLOSE_TIMEOUT_MS)
+
+    if (WorkspaceShouldClickWorkspaceWindow(app, appIndex))
+        WorkspaceClickClientCoordinates(hwnd, coordinates[1], coordinates[2])
+
+    if (WinExist("ahk_id " . hwnd)) {
+        try {
+            PostMessage(0x0201, 0, (coordinates[2] << 16) | coordinates[1], , "ahk_id " . hwnd) ; WM_LBUTTONDOWN
+            PostMessage(0x0202, 0, (coordinates[2] << 16) | coordinates[1], , "ahk_id " . hwnd) ; WM_LBUTTONUP
+        } catch as e {
+            Log("Workspace coordinate PostMessage failed for HWND " . hwnd . ": " . e.Message, "WARNING")
+        }
+    }
+}
+
+WorkspaceBeginCloseStage(state, stage) {
+    global WORKSPACE_SOFT_CLOSE_STAGE_TIMEOUT_MS, WORKSPACE_CLOSE_DEADLINE_MARGIN_MS
+
+    app := state["app"]
+    state["stage"] := stage
+    state["stageDeadline"] := Min(state["deadline"] - WORKSPACE_CLOSE_DEADLINE_MARGIN_MS,
+        A_TickCount + WORKSPACE_SOFT_CLOSE_STAGE_TIMEOUT_MS)
+    WorkspaceSendCloseStage(app, stage, state["deadline"])
+}
+
+WorkspaceBeginProcessTreeClose(state) {
+    app := state["app"]
+    pid := app["launchPid"]
+    if (!pid) {
+        state["stage"] := "wait"
+        return false
+    }
+
+    taskkill := A_WinDir . "\System32\taskkill.exe"
+    taskkillPid := 0
+    try Run('"' . taskkill . '" /PID ' . Integer(pid) . " /T /F", , "Hide", &taskkillPid)
+    catch as e {
+        Log("Unable to start bounded process-tree close for PID " . pid . ": " . e.Message, "ERROR")
+        state["stage"] := "wait"
+        return false
+    }
+    state["taskkillPid"] := taskkillPid
+    state["stage"] := "process-tree"
+    return true
+}
+
+WorkspaceShouldClickWorkspaceWindow(app, appIndex) {
+    global WORKSPACE_ACTIVE_TAB, WORKSPACE_GUI
+
+    hwnd := app["hwnd"]
+    if (!IsObject(WORKSPACE_GUI)
+        || !DllCall("IsWindowVisible", "Ptr", WORKSPACE_GUI.Hwnd, "Int")
+        || appIndex != WORKSPACE_ACTIVE_TAB
+        || !DllCall("IsWindow", "Ptr", hwnd, "Int")
+        || !DllCall("IsWindowVisible", "Ptr", hwnd, "Int")
+        || !DllCall("IsWindowEnabled", "Ptr", hwnd, "Int"))
+        return false
+
+    try {
+        if (WinGetMinMax("ahk_id " . WORKSPACE_GUI.Hwnd) = -1)
+            return false
+    } catch {
+        return false
+    }
+
+    ; A modal dialog can cover or disable the main-window close control.
+    return !WorkspaceGetBlockingModalWindow(app)
+}
+
+WorkspaceClickClientCoordinates(hwnd, x, y) {
+    global WORKSPACE_GUI
+
+    if (!WorkspaceFocusHostedWindow(hwnd))
+        return false
+
+    if (!IsObject(WORKSPACE_GUI)
+        || DllCall("GetForegroundWindow", "Ptr") != WORKSPACE_GUI.Hwnd) {
+        Log("Workspace host did not become the foreground window; skipping physical close click", "WARNING")
+        return false
+    }
+
+    clientRect := Buffer(16, 0)
+    if (!DllCall("GetClientRect", "Ptr", hwnd, "Ptr", clientRect, "Int"))
+        return false
+    clientWidth := NumGet(clientRect, 8, "Int")
+    clientHeight := NumGet(clientRect, 12, "Int")
+    if (x >= clientWidth || y >= clientHeight) {
+        Log("Workspace close coordinates are outside the hosted window client area", "WARNING")
+        return false
+    }
+
+    point := Buffer(8, 0)
+    NumPut("Int", x, point, 0)
+    NumPut("Int", y, point, 4)
+    if (!DllCall("User32\ClientToScreen", "Ptr", hwnd, "Ptr", point, "Int")) {
+        Log("Could not translate workspace close coordinates to screen space", "WARNING")
+        return false
+    }
+
+    screenX := NumGet(point, 0, "Int")
+    screenY := NumGet(point, 4, "Int")
+    if (!WorkspacePointHitsWindow(hwnd, screenX, screenY)) {
+        Log("Workspace close point is obscured by another window; skipping physical click", "WARNING")
+        return false
+    }
+
+    previousCoordMode := A_CoordModeMouse
+    try {
+        CoordMode("Mouse", "Screen")
+        Sleep(300)
+        Click(screenX, screenY)
+        return true
+    } catch as e {
+        Log("Workspace coordinate click failed: " . e.Message, "WARNING")
+        return false
+    } finally {
+        CoordMode("Mouse", previousCoordMode)
+    }
+}
+
+WorkspacePointHitsWindow(hwnd, x, y) {
+    packedPoint := (y << 32) | (x & 0xFFFFFFFF)
+    hitHwnd := DllCall("User32\WindowFromPoint", "Int64", packedPoint, "Ptr")
+    return hitHwnd = hwnd || (hitHwnd && DllCall("IsChild", "Ptr", hwnd, "Ptr", hitHwnd, "Int"))
 }
 
 WorkspaceTerminateProcessTree(pid) {

@@ -35,27 +35,54 @@ TryCustomGracefulClose(target, timeoutSec := 3) {
             }
         
         case "coordinates":
-            try {                
-                Log("Attempting X,Y click in (pre)disconnected session", "DEBUG")
-                WinActivate(target)
-                Sleep(300)
-                Click(customCloseX, customCloseY)
-                Log("Clicked at coordinates: " . customCloseX . "," . customCloseY)
-                
-                if WinExist(target) {
-                    Log("First click may not have worked - trying PostMessage click", "DEBUG")
-                    PostMessage(0x0201, 0, (customCloseY << 16) | customCloseX, , target) ; WM_LBUTTONDOWN
-                    PostMessage(0x0202, 0, (customCloseY << 16) | customCloseX, , target) ; WM_LBUTTONUP
-                }
-                
-                if WinWaitClose(target, , timeoutSec) {
-                    return true
-                }
-            }
+            if TryCoordinateGracefulClose(target, customCloseX, customCloseY, timeoutSec)
+                return true
     }
     
     Log("Custom graceful close failed, will use standard closing methods", "DEBUG")
     return false
+}
+
+; Coordinate close shared by single-app and workspace modes. A callback can
+; supply a host-aware physical click; PostMessage always targets the supplied
+; window and uses that window's client coordinates.
+TryCoordinateGracefulClose(target, x, y, timeoutSec := 3, performClick := true, clickCallback := 0) {
+    if !WinExist(target)
+        return false
+
+    Log("Attempting X,Y close at coordinates: " . x . "," . y, "DEBUG")
+    if (performClick) {
+        try {
+            if IsObject(clickCallback) {
+                clickSucceeded := clickCallback.Call()
+                if (clickSucceeded)
+                    Log("Clicked at coordinates: " . x . "," . y)
+                else
+                    Log("Physical coordinate click could not be performed; trying PostMessage", "DEBUG")
+            } else {
+                WinActivate(target)
+                Sleep(300)
+                Click(x, y)
+                Log("Clicked at coordinates: " . x . "," . y)
+            }
+        } catch as e {
+            Log("Coordinate click failed; trying PostMessage: " . e.Message, "WARNING")
+        }
+    } else {
+        Log("Skipping physical coordinate click because target is not active and visible", "DEBUG")
+    }
+
+    if WinExist(target) {
+        Log("First click may not have worked - trying PostMessage click", "DEBUG")
+        try {
+            PostMessage(0x0201, 0, (y << 16) | x, , target) ; WM_LBUTTONDOWN
+            PostMessage(0x0202, 0, (y << 16) | x, , target) ; WM_LBUTTONUP
+        } catch as e {
+            Log("PostMessage coordinate close failed: " . e.Message, "WARNING")
+        }
+    }
+
+    return WinWaitClose(target, , timeoutSec)
 }
 
 ; Universal close cascade for a single application window

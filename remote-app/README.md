@@ -95,6 +95,26 @@ regular Win32 desktop windows; UWP windows are rejected. Applications with
 incompatible DPI-awareness settings or main windows that cannot be re-parented
 fail startup and AppControl closes the applications it already launched.
 
+### Workspace close coordinates
+
+An app entry can optionally define `"closeCoordinates": [X, Y]` for a custom
+close button on that app's primary window. For example, add
+`"closeCoordinates": [394, 395]` to the first app entry if only the primary
+workspace app needs a controlled close. Coordinates are specific to that app;
+leave the field out of entries that should use the standard workspace close.
+
+Capture the client-area coordinates after AppControl has embedded and resized
+the application in its workspace tab, using the same RDP resolution and display
+scaling as the real session. On shutdown, AppControl attempts a physical
+coordinate click only when that app's tab is selected and its primary window is
+visible and enabled. Otherwise it skips the physical click and sends the
+coordinate `PostMessage` attempt directly to the primary window. AppControl
+advances each application through `WinClose`, `SC_CLOSE`, `WM_CLOSE`, and
+process-tree cleanup independently, so workspace apps close in parallel while
+each keeps that fallback order. All apps share a 10-second shutdown deadline.
+The coordinate attempt targets only the primary window; auxiliary windows
+continue through the standard close path.
+
 ## Options
 
 | Option | Meaning |
@@ -108,6 +128,52 @@ fail startup and AppControl closes the applications it already launched.
 `@close-button` and `@close-coords` are mutually exclusive. Application
 parameters do not need the `@` prefix and are passed through to the launched
 application.
+
+## Capture and test close coordinates
+
+Capture coordinates after AppControl has prepared the application window. In
+single-application mode AppControl activates the target and attempts to maximize
+it, then removes its minimize button and system menu (including the window
+close button). Maximization is best-effort: fixed-size dialogs or applications
+that reject the maximize request can remain windowed. Removing the buttons does
+not mean the window was maximized. Measuring the application before this setup
+can produce different coordinates.
+
+1. Start the application through AppControl without `@close-coords` or `@test`.
+   Wait until AppControl has finished its maximize attempt and style changes and
+   the application's final layout is visible.
+2. Open `WindowSpy.exe` in the same interactive Windows session and hover over
+   the center of the application's intended close control. In **Mouse
+   Position**, record the **Client** X and Y values. Also record the target
+   window's `ahk_class` value for AppControl's first argument. With the standard
+   release extracted to `C:\LabStation`, Window Spy is at
+   `C:\LabStation\WindowSpy.exe`, beside `LabStation.exe`.
+3. Keep the application's size, RDP resolution and display scaling the same as
+   the session you will test. The coordinates are relative to the target
+   window's client area, not the screen. AutoHotkey v2 `Click` uses the active
+   window's client area by default, and AppControl activates the target first;
+   see the [CoordMode reference](https://www.autohotkey.com/docs/v2/lib/CoordMode.htm).
+4. Append `@close-coords="X,Y"` to the single-application Parameters value.
+   To exercise the custom close while connected, append `@test` as well:
+
+   ```text
+   InstrumentWindow "C:\LabApps\Instrument.exe" @close-coords="414,823" @test
+   ```
+
+`@test` runs the custom close attempt five seconds after launch. If the target
+window closes, AppControl exits; if it stays open, AppControl logs the failed
+attempt and remains active. The coordinate method first calls `Click(X,Y)`; if
+the window remains, it sends mouse-button messages to that same point. Check
+`remote-app\AppControl.log` for `First click may not have worked - trying
+PostMessage click` to tell when that fallback ran. A successful `@test` can
+therefore mean either attempt closed the window. The `@close-button` and
+`@close-coords` command-line options apply only to single-application mode;
+workspace coordinates are configured per app in its manifest as described
+above.
+
+`@test` checks the custom close while the session is connected; it does not
+simulate an RDP disconnect. Remove it for a disconnect trial, or the five-second
+timer may close the application first.
 
 ## Configuration defaults
 
@@ -131,8 +197,13 @@ lab application or Windows image requires it.
 For a single Remote App connection:
 
 - **Program:** `C:\LabStation\remote-app\AppControl.exe`
+- **Working directory:** `C:\LabStation\remote-app`
 - **Parameters:**
   `Chrome_WidgetWin_1 "C:\Program Files\Google\Chrome\Application\chrome.exe" --app=http://lab.example`
+
+These paths assume the release ZIP was extracted to `C:\LabStation` as shown
+in the [Lab Station installation guide](../README.md#install-and-operate). Use
+the actual `remote-app` directory if the package was installed elsewhere.
 
 For workspace mode, set **Parameters** to `@workspace=lab-control-room` using
 the manifest ID. The single-application parameter form above is unchanged.
