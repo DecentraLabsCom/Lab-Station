@@ -79,7 +79,10 @@
     },
     "operations": {"$ref": "#/definitions/object"},
     "lastForcedLogoff": {"$ref": "#/definitions/object"},
-    "localSessionActive": {"type": "boolean"},
+    "localSessionActive": {
+      "type": "boolean",
+      "description": "Whether any interactive physical-console session is active, including LABUSER; remote RDP sessions are excluded regardless of account."
+    },
     "localModeEnabled": {"type": "boolean"}
   },
   "additionalProperties": true,
@@ -97,6 +100,10 @@
         "labUserActive": {"type": "boolean"},
         "labUserRemoteActive": {"type": "boolean"},
         "localUserActive": {"type": "boolean"},
+        "localSessionActive": {
+          "type": "boolean",
+          "description": "Whether any interactive physical-console session is active, including LABUSER; remote RDP sessions are excluded regardless of account."
+        },
         "remoteSessionActive": {"type": "boolean"},
         "entries": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
       },

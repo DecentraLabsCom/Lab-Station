@@ -25,15 +25,9 @@ class LS_AccountManager {
             return false
         }
         password := localPass
-        if (!this.ApplyLockdown(user, false))
+        if (!this.ApplyLockdown(user))
             return false
-        if (!this.ConfigureAutologon(user, localPass))
-            return false
-        if (this.RefreshAutologonState(user))
-            return true
-        LS_LogError("AutoAdminLogon verification failed after applying the LABUSER lockdown")
-        LS_AutologonManager.Disable()
-        return false
+        return true
     }
 
     static EnsureAccount(user, &password) {
@@ -133,11 +127,7 @@ exit 0
         return false
     }
 
-    static ConfigureAutologon(user, password, domain := "") {
-        return LS_AutologonManager.Configure(user, password, domain)
-    }
-
-    static ApplyLockdown(user := "", verifyAutologon := true) {
+    static ApplyLockdown(user := "") {
         if (!LS_EnsureAdmin()) {
             return false
         }
@@ -145,11 +135,10 @@ exit 0
             user := this.DefaultUser
         }
         ok := true
+        ok := LS_AutologonManager.Disable() && ok
         ok := this.EnsureRemoteDesktopRestrictions(user) && ok
         ok := this.ConfigureDenyInteractiveLogon(user) && ok
         ok := this.ConfigureRemoteAppUserRestrictions(user) && ok
-        if (verifyAutologon)
-            ok := this.RefreshAutologonState(user) && ok
         if (ok) {
             LS_LogInfo("Lockdown applied")
         } else {
@@ -319,6 +308,115 @@ try {
         return true
     }
 
+    static RestoreHybridInteractiveLogon(user := "", gatewayUser := "LabGatewaySvc") {
+        if (!LS_EnsureAdmin())
+            return false
+        if (!user || user = "")
+            user := this.DefaultUser
+        if (!gatewayUser || gatewayUser = "")
+            gatewayUser := "LabGatewaySvc"
+
+        script := this.BuildRestoreHybridInteractiveLogonScript(user, gatewayUser)
+        capture := LS_RunPowerShellCapture(
+            script,
+            "Restore hybrid local interactive logon",
+            LAB_STATION_LONG_COMMAND_TIMEOUT_MS
+        )
+        ready := capture["exitCode"] = 0
+            && InStr(capture["stdout"], "LABSTATION_HYBRID_INTERACTIVE_READY") > 0
+        if (ready) {
+            LS_LogInfo("Hybrid local interactive logon restrictions restored")
+            return true
+        }
+
+        detail := LS_CaptureDetail(capture)
+        if (detail != "")
+            LS_LogError("Unable to restore hybrid local interactive logon restrictions: " . detail)
+        else
+            LS_LogError("Unable to restore hybrid local interactive logon restrictions (exit=" . capture["exitCode"] . ")")
+        return false
+    }
+
+    static BuildRestoreHybridInteractiveLogonScript(user, gatewayUser := "LabGatewaySvc") {
+        escapedUser := this.EscapeForPSSingleQuote(user)
+        escapedGatewayUser := this.EscapeForPSSingleQuote(gatewayUser)
+        template := "
+        (
+`$ErrorActionPreference = 'Stop'
+`$target = '__LABUSER__'
+`$gatewayUser = '__GATEWAYUSER__'
+`$targetLower = `$target.ToLowerInvariant()
+`$gatewayUserLower = `$gatewayUser.ToLowerInvariant()
+`$localUsers = @(Get-LocalUser -ErrorAction Stop)
+`$tempExport = Join-Path `$env:TEMP ('ls-hybrid-secexport-' + [guid]::NewGuid().Guid + '.inf')
+`$tempCfg = Join-Path `$env:TEMP ('ls-hybrid-deny-' + [guid]::NewGuid().Guid + '.inf')
+`$tempDb = Join-Path `$env:TEMP ('ls-hybrid-deny-' + [guid]::NewGuid().Guid + '.sdb')
+try {
+    & secedit.exe /export /cfg `$tempExport /areas USER_RIGHTS | Out-Null
+    if (`$LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath `$tempExport)) {
+        throw 'Unable to export the current user-rights policy'
+    }
+
+    `$denyLine = Get-Content -LiteralPath `$tempExport | Where-Object { `$_ -match '^SeDenyInteractiveLogonRight\s*=' } | Select-Object -First 1
+    `$denySids = New-Object System.Collections.Generic.List[string]
+    if (`$denyLine -match '^SeDenyInteractiveLogonRight\s*=\s*(.*)$') {
+        foreach (`$token in `$Matches[1].Split(',')) {
+            `$value = `$token.Trim()
+            if (`$value -and -not `$denySids.Contains(`$value)) { [void]`$denySids.Add(`$value) }
+        }
+    }
+
+    `$accountTokensToRemove = @{}
+    foreach (`$localUser in `$localUsers) {
+        `$nameLower = `$localUser.Name.ToLowerInvariant()
+        `$isGatewayServiceAccount = `$nameLower -eq `$gatewayUserLower -or `$localUser.Description -eq 'DecentraLabs Lab Gateway WinRM account'
+        if (`$nameLower -eq `$targetLower -or `$isGatewayServiceAccount) { continue }
+        `$sid = `$localUser.SID.Value
+        if (`$sid) { `$accountTokensToRemove[('*' + `$sid).ToLowerInvariant()] = `$true }
+    }
+
+    `$removedTokens = @(`$denySids | Where-Object { `$accountTokensToRemove.ContainsKey(`$_.ToLowerInvariant()) })
+    if (`$removedTokens.Count -gt 0) {
+        `$remainingTokens = @(`$denySids | Where-Object { -not `$accountTokensToRemove.ContainsKey(`$_.ToLowerInvariant()) })
+        `$cfg = @'
+[Unicode]
+Unicode=yes
+[Version]
+signature="`$CHICAGO`$"
+Revision=1
+[Privilege Rights]
+SeDenyInteractiveLogonRight = __DENY_SIDS__
+'@
+        `$cfg = `$cfg.Replace('__DENY_SIDS__', (`$remainingTokens -join ','))
+        `$cfg | Out-File -FilePath `$tempCfg -Encoding Unicode -Force
+        & secedit.exe /configure /db `$tempDb /cfg `$tempCfg /areas USER_RIGHTS /quiet | Out-Null
+        if (`$LASTEXITCODE -ne 0) { throw ('secedit failed with exit code ' + `$LASTEXITCODE) }
+
+        & secedit.exe /export /cfg `$tempExport /areas USER_RIGHTS | Out-Null
+        if (`$LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath `$tempExport)) {
+            throw 'Unable to verify the updated user-rights policy'
+        }
+        `$verifiedLine = Get-Content -LiteralPath `$tempExport | Where-Object { `$_ -match '^SeDenyInteractiveLogonRight\s*=' } | Select-Object -First 1
+        `$verifiedTokens = @()
+        if (`$verifiedLine -match '^SeDenyInteractiveLogonRight\s*=\s*(.*)$') {
+            `$verifiedTokens = @(`$Matches[1].Split(',') | ForEach-Object { `$_.Trim() } | Where-Object { `$_ })
+        }
+        foreach (`$removedToken in `$removedTokens) {
+            if (`$verifiedTokens -contains `$removedToken) {
+                throw ('The dedicated-profile denial remains for a local account: ' + `$removedToken)
+            }
+        }
+    }
+
+    Write-Output 'LABSTATION_HYBRID_INTERACTIVE_READY'
+} finally {
+    Remove-Item -LiteralPath `$tempExport, `$tempCfg, `$tempDb -Force -ErrorAction SilentlyContinue
+}
+        )"
+        script := StrReplace(template, "__LABUSER__", escapedUser)
+        return StrReplace(script, "__GATEWAYUSER__", escapedGatewayUser)
+    }
+
     static ConfigureRemoteAppUserRestrictions(user) {
         if (!LS_EnsureAdmin())
             return false
@@ -462,10 +560,6 @@ Remove-Item `$tempCfg -Force -ErrorAction SilentlyContinue
 if (`$code -ne 0) { throw `"secedit failed with exit code `$code`" }
         )"
         return StrReplace(template, "__LABUSER__", escaped)
-    }
-
-    static RefreshAutologonState(user) {
-        return LS_AutologonManager.IsEnabledForUser(user) && LS_AutologonManager.HasSecret()
     }
 
     static AccountExists(user) {

@@ -11,7 +11,18 @@
 #Include ..\diagnostics\Status.ahk
 
 class LS_SessionGuard {
+    static LastRunWarning := false
+    static LastRunRetryable := false
+    static LastRunMessage := ""
+    static LastRunAcknowledgedSessions := 0
+    static LastRunFailureCode := ""
+
     static Run(options := Map()) {
+        this.LastRunWarning := false
+        this.LastRunRetryable := false
+        this.LastRunMessage := ""
+        this.LastRunAcknowledgedSessions := 0
+        this.LastRunFailureCode := ""
         guardUser := options.Has("user") ? options["user"] : LS_AccountManager.DefaultUser
         grace := options.Has("grace") ? (options["grace"] + 0) : 120
         grace := grace < 30 ? 30 : grace
@@ -24,6 +35,8 @@ class LS_SessionGuard {
             targets := this.FindConflictingSessions(guardUser, localOnly)
         } catch as e {
             LS_LogWarning("Session guard: unable to read sessions - " . e.Message)
+            this.LastRunRetryable := true
+            this.LastRunFailureCode := "STATION_SESSION_QUERY_FAILED"
             return false
         }
         for session in targets {
@@ -37,16 +50,88 @@ class LS_SessionGuard {
             return true
         }
 
-        if (notify) {
+        guardStarted := A_TickCount
+        guardDeadline := guardStarted + grace * 1000
+        if (localOnly) {
+            if (!notify) {
+                this.LastRunRetryable := true
+                this.LastRunMessage := "local-session acknowledgement is required, but the confirmation dialog is disabled; no session was closed. Enable it or use --no-guard as an explicit bypass."
+                this.LastRunFailureCode := "STATION_SESSION_ACKNOWLEDGEMENT_REQUIRED"
+                LS_LogWarning("Session guard: local-session eviction requires an explicit acknowledgement")
+                return false
+            }
             for session in targets {
-                this.NotifySession(session, message, grace)
+                remainingMs := guardDeadline - A_TickCount
+                if (remainingMs <= 0) {
+                    try {
+                        currentTargets := this.FindConflictingSessions(guardUser, true)
+                    } catch as e {
+                        this.LastRunRetryable := true
+                        this.LastRunMessage := "session inventory unavailable after the confirmation deadline; no session was closed"
+                        this.LastRunFailureCode := "STATION_SESSION_QUERY_FAILED"
+                        LS_LogWarning("Session guard: unable to recheck local sessions after the confirmation deadline - " . e.Message)
+                        return false
+                    }
+                    if (!this.SameSessionSnapshot(targets, currentTargets)) {
+                        this.LastRunRetryable := true
+                        this.LastRunMessage := "local sessions changed during confirmation; no session was closed"
+                        this.LastRunFailureCode := "STATION_SESSION_CHANGED"
+                        LS_LogWarning("Session guard: local sessions changed during confirmation; refusing eviction")
+                        return false
+                    }
+                    if (this.SessionSnapshotContains(currentTargets, session["id"])) {
+                        this.LastRunRetryable := true
+                        this.LastRunMessage := "local session acknowledgement timed out; no session was closed"
+                        this.LastRunFailureCode := "STATION_SESSION_ACKNOWLEDGEMENT_REQUIRED"
+                        LS_LogWarning("Session guard: local-session acknowledgement timed out")
+                        return false
+                    }
+                    continue
+                }
+                if (!this.ConfirmSession(session, message, Ceil(remainingMs / 1000))) {
+                    try {
+                        currentTargets := this.FindConflictingSessions(guardUser, true)
+                    } catch as e {
+                        this.LastRunRetryable := true
+                        this.LastRunMessage := "session inventory unavailable after the confirmation dialog; no session was closed"
+                        this.LastRunFailureCode := "STATION_SESSION_QUERY_FAILED"
+                        LS_LogWarning("Session guard: unable to recheck local sessions after confirmation - " . e.Message)
+                        return false
+                    }
+                    if (!this.SameSessionSnapshot(targets, currentTargets)) {
+                        this.LastRunRetryable := true
+                        this.LastRunMessage := "local sessions changed during confirmation; no session was closed"
+                        this.LastRunFailureCode := "STATION_SESSION_CHANGED"
+                        LS_LogWarning("Session guard: local sessions changed during confirmation; refusing eviction")
+                        return false
+                    }
+                    if (this.SessionSnapshotContains(currentTargets, session["id"])) {
+                        this.LastRunRetryable := true
+                        this.LastRunMessage := "local session did not acknowledge the warning; no session was closed"
+                        this.LastRunFailureCode := "STATION_SESSION_ACKNOWLEDGEMENT_REQUIRED"
+                        LS_LogWarning("Session guard: local-session acknowledgement was declined, timed out, or unavailable")
+                        return false
+                    }
+                    continue
+                }
+                session["guardAcknowledged"] := true
+                this.LastRunAcknowledgedSessions += 1
+            }
+        } else if (notify) {
+            for session in targets {
+                if (!this.NotifySession(session, message, grace))
+                    this.LastRunWarning := true
             }
         }
 
         LS_LogInfo(Format("Session guard: waiting {1} seconds before forced logoff", grace))
-        this.WaitForGrace(grace)
+        remainingGrace := localOnly ? Max(0, Ceil((guardDeadline - A_TickCount) / 1000)) : grace
+        if (remainingGrace > 0)
+            this.WaitForGrace(remainingGrace)
         if (options.Has("abortOnLocalMode") && options["abortOnLocalMode"] && LS_Status.IsLocalModeEnabled()) {
             LS_LogInfo("Session guard: local mode became active during grace period; no sessions were evicted")
+            this.LastRunRetryable := true
+            this.LastRunFailureCode := "STATION_LOCAL_MODE_ACTIVE"
             return false
         }
         if (localOnly) {
@@ -54,20 +139,29 @@ class LS_SessionGuard {
                 currentTargets := this.FindConflictingSessions(guardUser, true)
             } catch as e {
                 LS_LogWarning("Session guard: unable to recheck local sessions - " . e.Message)
+                this.LastRunRetryable := true
+                this.LastRunFailureCode := "STATION_SESSION_QUERY_FAILED"
                 return false
             }
             if (!this.SameSessionSnapshot(targets, currentTargets)) {
                 LS_LogInfo("Session guard: local sessions changed during grace period; no sessions were evicted")
+                this.LastRunRetryable := true
+                this.LastRunFailureCode := "STATION_SESSION_CHANGED"
                 return false
             }
         }
 
         result := true
-        for session in targets {
+        releaseStarted := false
+        releaseTargets := localOnly ? currentTargets : targets
+        for session in releaseTargets {
             if (options.Has("abortOnLocalMode") && options["abortOnLocalMode"] && LS_Status.IsLocalModeEnabled()) {
                 LS_LogInfo("Session guard: local mode became active during session release")
+                this.LastRunRetryable := !releaseStarted
                 return false
             }
+            releaseStarted := true
+            this.LastRunRetryable := false
             if (!this.LogoffSession(session, force))
                 result := false
         }
@@ -81,35 +175,54 @@ class LS_SessionGuard {
             ; Prepare considers every physical-console session, including one
             ; signed in as LABUSER. The managed account exemption applies only
             ; to the general guard, where its remote lab session is expected.
-            if (!localOnly && this.EqualsUser(session["user"], guardUser))
-                continue
-            state := StrLower(session["state"])
-            if (state = "disc" || state = "down" || (state = "" && session["user"] = ""))
-                continue
-            if (localOnly && StrLower(Trim(session["session"])) != "console")
-                continue
+            if (localOnly) {
+                if (!LS_Status.IsPrepareLocalSession(session))
+                    continue
+            } else {
+                if (this.EqualsUser(session["user"], guardUser))
+                    continue
+                state := StrLower(session["state"])
+                if (state = "disc" || state = "down" || (state = "" && session["user"] = ""))
+                    continue
+            }
             targets.Push(session)
         }
         return targets
     }
 
     static SameSessionSnapshot(before, after) {
-        if (before.Length != after.Length)
+        if (after.Length > before.Length)
             return false
-        currentById := Map()
-        for session in after
-            currentById[session["id"]] := session
+        originalById := Map()
         for session in before {
             id := session["id"]
-            if (!currentById.Has(id))
+            if (originalById.Has(id))
                 return false
-            current := currentById[id]
-            if (!this.EqualsUser(current["user"], session["user"])
-                || StrLower(current["session"]) != StrLower(session["session"])
-                || StrLower(current["state"]) != StrLower(session["state"]))
+            originalById[id] := session
+        }
+        currentById := Map()
+        for session in after {
+            id := session["id"]
+            if (currentById.Has(id) || !originalById.Has(id))
+                return false
+            currentById[id] := session
+        }
+        for id, current in currentById {
+            original := originalById[id]
+            if (!this.EqualsUser(current["user"], original["user"])
+                || StrLower(current["session"]) != StrLower(original["session"])
+                || StrLower(current["state"]) != StrLower(original["state"]))
                 return false
         }
         return true
+    }
+
+    static SessionSnapshotContains(sessions, sessionId) {
+        for session in sessions {
+            if (session["id"] = sessionId)
+                return true
+        }
+        return false
     }
 
     static WaitForGrace(seconds) {
@@ -155,10 +268,37 @@ class LS_SessionGuard {
         sessionId := session["id"]
         if (!sessionId || sessionId = "") {
             LS_LogWarning("Session guard: unable to notify session with empty ID")
-            return
+            return false
         }
         cmd := Format('msg {1} /time:{2} "{3}"', sessionId, timeout, text)
-        LS_RunCommand(cmd, "Notify session " . session["id"])
+        return LS_RunCommand(cmd, "Notify session " . session["id"]) = 0
+    }
+
+    static ConfirmSession(session, message, timeout) {
+        sessionId := session["id"]
+        if (!RegExMatch(sessionId, "^\d+$") || timeout < 1)
+            return false
+        title := "Lab Station reservation"
+        body := message . "`n`nSave your work, then choose Yes to allow your session to close after the grace period. Choose No or leave unanswered to keep your session open and cancel Prepare."
+        response := 0
+        try {
+            shown := DllCall("Wtsapi32\WTSSendMessageW",
+                "Ptr", 0,
+                "UInt", sessionId + 0,
+                "Str", title,
+                "UInt", StrLen(title) * 2,
+                "Str", body,
+                "UInt", StrLen(body) * 2,
+                "UInt", 0x00050034,
+                "UInt", timeout,
+                "UInt*", &response,
+                "Int", 1,
+                "Int")
+        } catch as e {
+            LS_LogWarning("Session guard: could not display a confirmation dialog for session " . sessionId . " - " . e.Message)
+            return false
+        }
+        return shown && response = 6
     }
 
     static LogoffSession(session, force := true) {
@@ -188,6 +328,10 @@ class LS_SessionGuard {
             event["grace"] := session["guardGrace"]
         if (session.Has("guardMessage"))
             event["message"] := session["guardMessage"]
+        if (session.Has("guardAcknowledged"))
+            event["acknowledged"] := session["guardAcknowledged"]
+        if (session.Has("guardBypassed"))
+            event["guardBypassed"] := session["guardBypassed"]
         event["source"] := "session-guard"
         LS_ServiceState.RecordForcedLogoff(event)
         this.AppendAuditEvent(event)

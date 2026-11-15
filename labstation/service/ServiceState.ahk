@@ -15,7 +15,7 @@ class LS_ServiceState {
 
     static RecordReleaseSession(success, details := Map()) {
         record := Map("success", success)
-        this.CopyIfPresent(record, details, ["durationMs", "user", "rebootRequested", "rebootTimeout"])
+        this.CopyIfPresent(record, details, ["durationMs", "user", "rebootRequested", "rebootScheduled", "rebootTimeout", "rebootDeferred", "rebootReason"])
         return this.WriteSection("release-session", record)
     }
 

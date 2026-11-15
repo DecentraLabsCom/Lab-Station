@@ -321,9 +321,18 @@ RunWorkspaceLifecycleSmokeTest() {
             "modal tab change keeps the dialog visible")
         TestAssert(!DllCall("IsWindowEnabled", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"),
             "modal tab change does not strand the disabled app behind another tab")
-        ControlClick("Continue", "ahk_id " . modalDialogHwnd)
+        ; ControlClick can inject its mouse event before the owned popup has
+        ; become the active hosted window. Trigger the real button control
+        ; directly so this lifecycle test does not depend on desktop timing.
+        continueButtonHwnd := 0
+        try continueButtonHwnd := ControlGetHwnd("Continue", "ahk_id " . modalDialogHwnd)
+        TestAssert(continueButtonHwnd != 0, "modal dialog exposes its Continue button")
+        if (continueButtonHwnd)
+            DllCall("SendMessageW", "Ptr", continueButtonHwnd, "UInt", 0x00F5, "UPtr", 0, "Ptr", 0, "Ptr") ; BM_CLICK
         modalClosedDeadline := A_TickCount + 3000
-        while (DllCall("IsWindow", "Ptr", modalDialogHwnd, "Int") && A_TickCount < modalClosedDeadline)
+        while ((DllCall("IsWindow", "Ptr", modalDialogHwnd, "Int")
+            || !DllCall("IsWindowEnabled", "Ptr", WORKSPACE_APPS[1]["hwnd"], "Int"))
+            && A_TickCount < modalClosedDeadline)
             Sleep(25)
         TestAssert(!DllCall("IsWindow", "Ptr", modalDialogHwnd, "Int"),
             "closing the modal dialog destroys its auxiliary window")

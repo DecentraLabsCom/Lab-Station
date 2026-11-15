@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+## [3.7.0] - 2026-11-15
+
+### Changed
+- Require each eligible local session to confirm the Windows Prepare dialog
+  before eviction; declining, timing out, or suppressing the dialog while a
+  session remains active aborts Prepare before cleanup. `--no-guard` remains
+  the explicit admin bypass.
+
+### Fixed
+- Keep AutoAdminLogon disabled for dedicated and hybrid profiles, including
+  setup of stations with legacy stored credentials.
+- Restrict Release to remote LABUSER RDP sessions, preserve console sessions,
+  and defer requested reboots while a physical user remains active.
+- Keep Release from signaling machine-wide AppControl while terminating FMU
+  Executor sessions and clearing its temporary state on both Station platforms.
+- Retry expired-lease Release only after known pre-effect failures; require
+  reconciliation after partial cleanup or an unknown operation outcome on both
+  Station platforms.
+- Restore local instructor sign-in when changing Windows from dedicated to
+  hybrid, while preserving the Gateway WinRM account's interactive-logon deny.
+
 ## [3.6.0-preview.10] - 2026-11-14
 
 ### Changed
@@ -15,8 +38,6 @@
 ### Changed
 - Align Windows reservation session preparation, release cleanup, and lease expiration with Linux Station behavior.
 - Report physical-lab readiness consistently with Linux Station telemetry.
-
-## [Unreleased]
 
 ## [3.6.0-preview.8] - 2026-11-10
 

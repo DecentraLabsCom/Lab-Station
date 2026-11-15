@@ -27,8 +27,8 @@ authority for remote reservations and the per-host trust decision.
 
 | Profile | Intended use |
 |---|---|
-| `server` | Dedicated remote laboratory workstation. The setup wizard can configure LABUSER autologon and the locked-down station flow. |
-| `hybrid` | Workstation shared with an instructor. It does not configure LABUSER autologon and can protect local sessions during remote reservations. |
+| `server` | Dedicated remote laboratory workstation. LABUSER is used for remote sessions; AutoAdminLogon remains disabled and the profile applies dedicated restrictions. |
+| `hybrid` | Workstation shared with an instructor. AutoAdminLogon remains disabled, and local sessions can be protected during remote reservations. |
 
 The optional FMU Executor can accompany either profile. See
 [FMU execution](#optional-fmu-execution).
@@ -95,7 +95,7 @@ test, and release instructions are in
 |---|---|
 | Shared station navigation | [Documentation contents](SUMMARY.md) |
 | WinRM, Gateway trust, and commands | [WinRM command contract](docs/winrm-command-contract.md) |
-| Windows firewall, autologon, and LABUSER restrictions | [Windows security hardening](docs/windows-security-hardening.md) |
+| Windows firewall, AutoAdminLogon cleanup, and LABUSER restrictions | [Windows security hardening](docs/windows-security-hardening.md) |
 | Status, heartbeat, and schemas | [Status and heartbeat contract](docs/status-and-heartbeat.md), [status JSON schema](docs/status-json-schema.md), [heartbeat schema](docs/heartbeat-schema.md) |
 | Shared instructor workstations | [Hybrid operations](docs/hybrid-operations.md) |
 | RemoteApp launch behavior | [AppControl](remote-app/README.md) and [Windows configuration](remote-app/windows-configuration.md) |

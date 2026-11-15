@@ -49,6 +49,7 @@ RunCommandQueueTests() {
         TestInvalidNumericOptionProducesHardFailureAndArchive()
         TestInvalidBooleanOptionProducesHardFailureAndArchive()
         TestExtractOptionsParsesSupportedValues()
+        TestLifecycleQueueUsesAdministrativeLeaseGuards()
         TestUnsupportedCommandProducesHardFailure()
     } catch as err {
         CQ_Fail("Unhandled command-queue test exception: " . err.Message)
@@ -67,6 +68,25 @@ RunCommandQueueTests() {
 
     LS_TestOutput("CommandQueueTests passed`n")
     ExitApp(0)
+}
+
+TestLifecycleQueueUsesAdministrativeLeaseGuards() {
+    source := FileRead(A_ScriptDir . "\..\service\CommandQueue.ahk", "UTF-8")
+    prepareStart := InStr(source, 'case "prepare-session":')
+    releaseStart := InStr(source, 'case "release-session":')
+    statusStart := InStr(source, 'case "status-json":')
+    if (!prepareStart || !releaseStart || !statusStart || prepareStart >= releaseStart || releaseStart >= statusStart) {
+        CQ_Assert(false, "command queue exposes separate lifecycle command branches")
+        return
+    }
+    prepareBranch := SubStr(source, prepareStart, releaseStart - prepareStart)
+    releaseBranch := SubStr(source, releaseStart, statusStart - releaseStart)
+    CQ_Assert(InStr(prepareBranch, "ExecuteAdministrativePrepare") > 0
+        && !InStr(prepareBranch, "LS_SessionManager.PrepareSession"),
+        "queued Prepare passes through the administrative lease guard")
+    CQ_Assert(InStr(releaseBranch, "ExecuteAdministrativeRelease") > 0
+        && !InStr(releaseBranch, "LS_SessionManager.ReleaseSession"),
+        "queued Release passes through the administrative lease guard")
 }
 
 TestValidCommandProducesResultAndArchive() {

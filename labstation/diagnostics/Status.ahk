@@ -564,13 +564,13 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             }
         }
         info["hasOtherUsers"] := info["otherUsers"].Length > 0
-        info["localSessionActive"] := info["hasOtherUsers"]
         summary := this.BuildSessionSummary(entries, target)
         summary["queryOk"] := queryOk
         if (!queryOk)
             summary["kind"] := "unknown"
         for key, value in summary
             info[key] := value
+        info["localSessionActive"] := summary["localSessionActive"]
         return info
     }
 
@@ -578,6 +578,7 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         summary := Map(
             "active", false,
             "kind", "none",
+            "localSessionActive", false,
             "labUserActive", false,
             "labUserRemoteActive", false,
             "localUserActive", false,
@@ -589,6 +590,8 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         hasOtherRemote := false
 
         for entry in entries {
+            if (this.IsPrepareLocalSession(entry))
+                summary["localSessionActive"] := true
             if (!this.IsActiveSession(entry))
                 continue
 
@@ -631,6 +634,15 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             summary["kind"] := "unknown"
         }
         return summary
+    }
+
+    static IsPrepareLocalSession(entry) {
+        if (!entry.Has("session") || StrLower(Trim(entry["session"])) != "console")
+            return false
+        state := StrLower(Trim(entry.Has("state") ? entry["state"] : ""))
+        if (state = "disc" || state = "down")
+            return false
+        return state != "" || (entry.Has("user") && entry["user"] != "")
     }
 
     static IsActiveSession(entry) {
@@ -774,13 +786,9 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         if (data["legacyAppControlAutostart"])
             issues.Push("Legacy AppControl autostart must be removed")
         autoLogon := data["policy"]["autoLogon"]
-        if (dedicated && !autoLogon["enabled"])
-            issues.Push("AutoAdminLogon disabled")
-        if (dedicated && !autoLogon["userMatches"])
-            issues.Push("Autologon user mismatch")
-        if (dedicated && !autoLogon["secretStored"])
-            issues.Push("Autologon LSA secret not stored")
-        if (dedicated && autoLogon["plaintextPasswordPresent"])
+        if (autoLogon["enabled"] || autoLogon["secretStored"])
+            issues.Push("AutoAdminLogon must be disabled and its stored credential removed")
+        if (autoLogon["plaintextPasswordPresent"])
             issues.Push("Plaintext Winlogon DefaultPassword value is present")
         rds := data["policy"]["remoteDesktopUsers"]
         if (!rds["labUserPresent"])

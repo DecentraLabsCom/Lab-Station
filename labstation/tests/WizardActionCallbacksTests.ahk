@@ -56,6 +56,8 @@ errors := []
 try {
     serverSteps := LS_WizardServerSteps()
     CheckSteps("server", serverSteps, 9, &errors)
+    if (serverSteps.Length > 0 && !InStr(StrLower(serverSteps[1]["label"]), "no autologon"))
+        errors.Push("server: setup must keep AutoAdminLogon disabled")
 } catch as e {
     errors.Push("server: exception while building steps - " . e.Message)
 }
@@ -114,7 +116,8 @@ labUserConsoleEntries := []
 labUserConsoleEntries.Push(Map("user", "LABUSER", "session", "console", "id", "1", "state", "Activo"))
 labUserConsole := LS_Status.BuildSessionSummary(labUserConsoleEntries, "LABUSER")
 if (!labUserConsole["active"] || !labUserConsole["labUserActive"] || labUserConsole["labUserRemoteActive"]
-    || labUserConsole["remoteSessionActive"] || labUserConsole["kind"] != "labuser-local") {
+    || labUserConsole["remoteSessionActive"] || !labUserConsole["localSessionActive"]
+    || labUserConsole["kind"] != "labuser-local") {
     errors.Push("status: a local LABUSER session must be classified separately from remote LABUSER")
 }
 
@@ -122,14 +125,24 @@ labUserRemoteEntries := []
 labUserRemoteEntries.Push(Map("user", "LABUSER", "session", "rdp-tcp#1", "id", "7", "state", "Active"))
 labUserRemote := LS_Status.BuildSessionSummary(labUserRemoteEntries, "LABUSER")
 if (!labUserRemote["active"] || !labUserRemote["labUserActive"] || !labUserRemote["labUserRemoteActive"]
-    || !labUserRemote["remoteSessionActive"] || labUserRemote["kind"] != "labuser-remote") {
+    || !labUserRemote["remoteSessionActive"] || labUserRemote["localSessionActive"]
+    || labUserRemote["kind"] != "labuser-remote") {
     errors.Push("status: a remote LABUSER session must imply an active LABUSER session")
+}
+
+otherRemoteEntries := []
+otherRemoteEntries.Push(Map("user", "instructor", "session", "rdp-tcp#2", "id", "8", "state", "Active"))
+otherRemote := LS_Status.BuildSessionSummary(otherRemoteEntries, "LABUSER")
+if (!otherRemote["remoteSessionActive"] || otherRemote["localSessionActive"] || otherRemote["localUserActive"]
+    || otherRemote["kind"] != "remote-user") {
+    errors.Push("status: another user's RDP session must not be classified as a local session")
 }
 
 disconnectedEntries := []
 disconnectedEntries.Push(Map("user", "LABUSER", "session", "rdp-tcp#1", "id", "7", "state", "Disc"))
 disconnected := LS_Status.BuildSessionSummary(disconnectedEntries, "LABUSER")
-if (disconnected["active"] || disconnected["labUserActive"] || disconnected["remoteSessionActive"]) {
+if (disconnected["active"] || disconnected["labUserActive"] || disconnected["remoteSessionActive"]
+    || disconnected["localSessionActive"]) {
     errors.Push("status: disconnected sessions must not be reported as active")
 }
 
@@ -138,7 +151,8 @@ mixedEntries.Push(Map("user", "LABUSER", "session", "rdp-tcp#1", "id", "7", "sta
 mixedEntries.Push(Map("user", "alice", "session", "console", "id", "2", "state", "Active"))
 mixed := LS_Status.BuildSessionSummary(mixedEntries, "LABUSER")
 if (!mixed["active"] || !mixed["labUserActive"] || !mixed["labUserRemoteActive"]
-    || !mixed["localUserActive"] || !mixed["remoteSessionActive"] || mixed["kind"] != "mixed") {
+    || !mixed["localUserActive"] || !mixed["localSessionActive"] || !mixed["remoteSessionActive"]
+    || mixed["kind"] != "mixed") {
     errors.Push("status: simultaneous remote LABUSER and local user sessions must be mixed")
 }
 
@@ -378,6 +392,42 @@ sampleSummary := LS_Status.BuildSummary(statusFixture)
 if (sampleSummary["state"] != "ready" || sampleSummary["issues"].Length != 0) {
     errors.Push("status: another logged-on user must not create a needs-action issue")
 }
+
+dedicatedStatusFixture := Map(
+    "stationProfile", "server",
+    "identity", Map("labUserExists", true),
+    "firewall", Map("rdpReady", true),
+    "remoteAppEnabled", true,
+    "winrm", Map("ready", true),
+    "legacyAppControlAutostart", false,
+    "policy", Map(
+        "autoLogon", Map("enabled", false, "userMatches", false, "secretStored", false, "plaintextPasswordPresent", false),
+        "remoteDesktopUsers", Map("labUserPresent", true, "otherMembers", []),
+        "denyInteractive", Map("configured", true, "labUserDenied", false)
+    ),
+    "sessions", Map("hasOtherUsers", false)
+)
+dedicatedSummary := LS_Status.BuildSummary(dedicatedStatusFixture)
+if (dedicatedSummary["state"] != "ready" || dedicatedSummary["issues"].Length != 0)
+    errors.Push("status: dedicated readiness must accept AutoAdminLogon being disabled")
+
+dedicatedPolicy := dedicatedStatusFixture["policy"]
+dedicatedAutologon := dedicatedPolicy["autoLogon"]
+dedicatedAutologon["enabled"] := true
+enabledAutologonSummary := LS_Status.BuildSummary(dedicatedStatusFixture)
+autologonFlagged := false
+for issue in enabledAutologonSummary["issues"] {
+    if (issue = "AutoAdminLogon must be disabled and its stored credential removed")
+        autologonFlagged := true
+}
+if (!autologonFlagged)
+    errors.Push("status: readiness must flag AutoAdminLogon when it is enabled")
+
+accountSource := FileRead(A_ScriptDir "\..\system\AccountManager.ahk", "UTF-8")
+if InStr(accountSource, "ConfigureAutologon")
+    errors.Push("account: station account setup must not expose AutoAdminLogon configuration")
+if !InStr(accountSource, "LS_AutologonManager.Disable()")
+    errors.Push("account: station account setup must remove legacy AutoAdminLogon credentials")
 
 statusFixture["fmuExecutor"] := Map("available", true, "tokenConfigured", false, "running", false)
 sampleReadiness := LS_Status.BuildCapabilityReadiness(statusFixture)

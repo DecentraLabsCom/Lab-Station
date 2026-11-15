@@ -6,9 +6,9 @@
 
 ;@Ahk2Exe-SetMainIcon img\favicon.ico
 ;@Ahk2Exe-SetName LabStationPanel
-;@Ahk2Exe-SetVersion 3.6.0
-;@Ahk2Exe-SetFileVersion 3.6.0
-;@Ahk2Exe-SetProductVersion 3.6.0
+;@Ahk2Exe-SetVersion 3.7.0
+;@Ahk2Exe-SetFileVersion 3.7.0
+;@Ahk2Exe-SetProductVersion 3.7.0
 
 TryLaunch() {
     exePath := A_ScriptDir "\LabStation.exe"

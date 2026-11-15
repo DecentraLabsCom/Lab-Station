@@ -23,7 +23,11 @@ LS_RunSetupWizard() {
         LS_LogInfo("Setup wizard cancelled before profile selection")
         return false
     }
-    LS_WizardSaveProfile(mode)
+    if (!LS_WizardSaveProfile(mode)) {
+        LS_LogError("Setup wizard stopped because the selected station profile could not be saved safely")
+        MsgBox "The selected station profile could not be applied safely.`n`nCheck " . LAB_STATION_LOG . " for details.", "Lab Station Setup", "OK Iconx"
+        return false
+    }
     LS_LogInfo("Setup wizard profile selected: " . mode)
     if (!LS_FirewallManager.ConfigureGatewayScopes()) {
         LS_LogError("Setup wizard stopped because the Gateway firewall scopes were not configured")
@@ -75,12 +79,12 @@ LS_WizardSelectMode() {
     profileGui.SetFont("s10 cFFFFFF")
     serverBtn := profileGui.AddButton("x20 y90 w300 h36", "Dedicated Lab Server")
     profileGui.SetFont("s8 cC08A2B")
-    profileGui.AddText("x20 y130 w300", "Full lockdown: LABUSER autologon + restricted mode")
+    profileGui.AddText("x20 y130 w300", "Dedicated remote station; restricted LABUSER, no autologon")
     
     profileGui.SetFont("s10 cFFFFFF")
     hybridBtn := profileGui.AddButton("x20 y160 w300 h36", "Hybrid Lab Station")
     profileGui.SetFont("s8 cC08A2B")
-    profileGui.AddText("x20 y200 w300", "LABUSER without autologon, shared with local users")
+    profileGui.AddText("x20 y200 w300", "Shared with instructors; LABUSER has no autologon")
 
     result := ""
     serverBtn.OnEvent("Click", (*) => (result := "server", profileGui.Destroy()))
@@ -95,8 +99,26 @@ LS_WizardSelectMode() {
 }
 
 LS_WizardSaveProfile(mode) {
+    previousProfile := ""
+    hybridRestrictionsRestored := false
+    profileWriteAttempted := false
+    profileRolledBack := false
     try {
         EnsureDir(LAB_STATION_DATA_DIR)
+        previousProfile := Trim(IniRead(LAB_STATION_PROFILE_FILE, "Station", "Profile", ""))
+        if (mode = "hybrid") {
+            if (!LS_AccountManager.RestoreHybridInteractiveLogon(
+                LS_AccountManager.DefaultUser,
+                LS_WinRM.DefaultGatewayUser
+            )) {
+                if (previousProfile = "server" && !LS_AccountManager.ConfigureDenyInteractiveLogon(LS_AccountManager.DefaultUser))
+                    LS_LogError("Unable to restore dedicated interactive-logon restrictions after hybrid migration failed")
+                return false
+            }
+            hybridRestrictionsRestored := true
+        }
+
+        profileWriteAttempted := true
         IniWrite(mode, LAB_STATION_PROFILE_FILE, "Station", "Profile")
         evictionPolicy := Trim(IniRead(LAB_STATION_PROFILE_FILE, "Station", "AllowLocalSessionEviction", ""))
         if (evictionPolicy = "")
@@ -105,13 +127,29 @@ LS_WizardSaveProfile(mode) {
         return true
     } catch as e {
         LS_LogWarning("Unable to save station profile: " . e.Message)
+        if (profileWriteAttempted) {
+            try {
+                if (previousProfile = "")
+                    IniDelete(LAB_STATION_PROFILE_FILE, "Station", "Profile")
+                else
+                    IniWrite(previousProfile, LAB_STATION_PROFILE_FILE, "Station", "Profile")
+                currentProfile := Trim(IniRead(LAB_STATION_PROFILE_FILE, "Station", "Profile", ""))
+                profileRolledBack := currentProfile = previousProfile
+            } catch as rollbackError {
+                LS_LogError("Unable to roll back station profile after save failure: " . rollbackError.Message)
+            }
+        }
+        if (hybridRestrictionsRestored && profileRolledBack && previousProfile = "server"
+            && !LS_AccountManager.ConfigureDenyInteractiveLogon(LS_AccountManager.DefaultUser)) {
+            LS_LogError("Unable to restore dedicated interactive-logon restrictions after profile save failed")
+        }
         return false
     }
 }
 
 LS_WizardServerSteps() {
     return [
-        Map("label", "Create/configure LABUSER + scoped RDP + LSA-backed Autologon + RemoteApp restrictions", "action", (*) => LS_WizardAccountServer()),
+        Map("label", "Create/configure LABUSER + scoped RDP + RemoteApp restrictions (no autologon)", "action", (*) => LS_WizardAccountServer()),
         Map("label", "Remove legacy AppControl autostart; launch it from the Gateway Remote App connection", "action", (*) => LS_WizardClearLegacyAppControlAutostart()),
         Map("label", "Place AppControl in the remote-app launcher directory", "action", (*) => LS_WizardEnsureRemoteAppLauncher()),
         Map("label", "Create protected RemoteApp workspace configuration store", "action", (*) => LS_RemoteAppWorkspaceStore.Ensure()),
@@ -155,7 +193,7 @@ LS_WizardDiagnostics() {
 LS_WizardAccountServer() {
     pass := ""
     if (LS_AccountManager.Setup("", &pass)) {
-        LS_WizardShowAccountInfo(pass, true)
+        LS_WizardShowAccountInfo(pass)
         return true
     }
     return false
@@ -164,19 +202,15 @@ LS_WizardAccountServer() {
 LS_WizardAccountHybrid() {
     pass := ""
     if (LS_AccountManager.EnsureAccount("", &pass)) {
-        LS_WizardShowAccountInfo(pass, false)
+        LS_WizardShowAccountInfo(pass)
         return true
     }
     return false
 }
 
-LS_WizardShowAccountInfo(password, autologon := false) {
+LS_WizardShowAccountInfo(password) {
     text := "User: " . LS_AccountManager.DefaultUser . "`nPassword: " . password
-    if (autologon) {
-        text .= "`nAutologon enabled. Store the credentials safely."
-    } else {
-        text .= "`nUse these credentials when Lab Gateway prepares remote sessions."
-    }
+    text .= "`nAutologon is disabled. Use these credentials when Lab Gateway prepares remote sessions."
     MsgBox text, "Lab Station", "OK Iconi"
 }
 

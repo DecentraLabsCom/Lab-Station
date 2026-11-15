@@ -17,17 +17,23 @@ RunSessionGuardTests()
 
 class RecordingSessionGuard extends LS_SessionGuard {
     static recordedSessions := []
+    static sessionsAfterGrace := false
     static shouldQueryFail := false
     static waits := []
     static notifications := []
+    static notificationResult := true
+    static acknowledgementResult := true
     static logoffs := []
     static logoffResult := true
 
-    static Reset(sessions := []) {
+    static Reset(sessions := [], afterGrace := false) {
         this.recordedSessions := sessions
+        this.sessionsAfterGrace := afterGrace
         this.shouldQueryFail := false
         this.waits := []
         this.notifications := []
+        this.notificationResult := true
+        this.acknowledgementResult := true
         this.logoffs := []
         this.logoffResult := true
     }
@@ -40,6 +46,8 @@ class RecordingSessionGuard extends LS_SessionGuard {
 
     static WaitForGrace(seconds) {
         this.waits.Push(seconds)
+        if (IsObject(this.sessionsAfterGrace))
+            this.recordedSessions := this.sessionsAfterGrace
     }
 
     static NotifySession(session, message, timeout) {
@@ -48,6 +56,17 @@ class RecordingSessionGuard extends LS_SessionGuard {
             "message", message,
             "timeout", timeout
         ))
+        return this.notificationResult
+    }
+
+    static ConfirmSession(session, message, timeout) {
+        this.notifications.Push(Map(
+            "id", session["id"],
+            "message", message,
+            "timeout", timeout,
+            "confirmation", true
+        ))
+        return this.acknowledgementResult
     }
 
     static LogoffSession(session, force := true) {
@@ -62,8 +81,14 @@ RunSessionGuardTests() {
 
     try {
         TestFiltersSessionsAndUsesGraceOptions()
+        TestVoluntaryLogoutDuringGraceIsAcceptedAndOnlyRemainingSessionsAreLoggedOff()
+        TestChangedSessionInventoryIsRetryableBeforeLogoff()
+        TestLocalEvictionRequiresAcknowledgement()
+        TestLocalEvictionWaitsAfterAcknowledgement()
+        TestLocalEvictionRefusesWhenNotificationIsDisabled()
         TestNoConflictingSessionsDoesNotWaitOrLogoff()
         TestNotificationCanBeDisabled()
+        TestNotificationFailureIsReportedAsWarning()
         TestLogoffFailureIsReportedAfterAllTargetsAreAttempted()
         TestSessionQueryFailureIsReported()
         TestSessionOutputParsing()
@@ -85,6 +110,72 @@ RunSessionGuardTests() {
 
     LS_TestOutput("SessionGuardTests passed`n")
     ExitApp(0)
+}
+
+TestVoluntaryLogoutDuringGraceIsAcceptedAndOnlyRemainingSessionsAreLoggedOff() {
+    RecordingSessionGuard.Reset([
+        Session("teacher", "console", "7", "Active"),
+        Session("student", "console", "8", "Active")
+    ], [Session("student", "console", "8", "Active")])
+
+    result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 30, "localOnly", true))
+
+    LS_TestAssert(result, "a user voluntarily signing out during the warning period does not abort preparation")
+    LS_TestAssert(RecordingSessionGuard.logoffs.Length = 1 && RecordingSessionGuard.logoffs[1]["id"] = "8",
+        "the guard logs off only sessions still present after the warning period")
+    LS_TestAssert(LS_SessionGuard.SameSessionSnapshot([
+        Session("teacher", "console", "7", "Active")
+    ], []), "a missing original session is accepted as a voluntary sign-out")
+}
+
+TestChangedSessionInventoryIsRetryableBeforeLogoff() {
+    RecordingSessionGuard.Reset([
+        Session("teacher", "console", "7", "Active")
+    ], [
+        Session("teacher", "console", "7", "Active"),
+        Session("new-user", "console", "9", "Active")
+    ])
+
+    result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 30, "localOnly", true))
+
+    LS_TestAssert(!result, "a new local session during grace refuses preparation")
+    LS_TestAssert(RecordingSessionGuard.LastRunRetryable, "inventory refusal before logoff is safe to retry")
+    LS_TestAssert(RecordingSessionGuard.logoffs.Length = 0, "no session is logged off after inventory changes")
+}
+
+TestLocalEvictionRequiresAcknowledgement() {
+    RecordingSessionGuard.Reset([Session("teacher", "console", "7", "Active")])
+    RecordingSessionGuard.acknowledgementResult := false
+
+    result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 30, "localOnly", true))
+
+    LS_TestAssert(!result, "a local session that declines or misses the prompt is not evicted")
+    LS_TestAssert(RecordingSessionGuard.LastRunRetryable, "missing acknowledgement leaves Prepare retryable before effects")
+    LS_TestAssert(RecordingSessionGuard.logoffs.Length = 0, "no local session is logged off without acknowledgement")
+    LS_TestAssert(RecordingSessionGuard.notifications.Length = 1 && RecordingSessionGuard.notifications[1]["confirmation"],
+        "local eviction uses an explicit confirmation prompt")
+}
+
+TestLocalEvictionWaitsAfterAcknowledgement() {
+    RecordingSessionGuard.Reset([Session("teacher", "console", "7", "Active")])
+
+    result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 30, "localOnly", true))
+
+    LS_TestAssert(result, "acknowledged local session is eligible for eviction after the grace period")
+    LS_TestAssert(RecordingSessionGuard.waits.Length = 1 && RecordingSessionGuard.waits[1] = 30,
+        "acknowledgement does not shorten the configured grace period")
+    LS_TestAssert(RecordingSessionGuard.logoffs.Length = 1, "only the acknowledged session is logged off")
+}
+
+TestLocalEvictionRefusesWhenNotificationIsDisabled() {
+    RecordingSessionGuard.Reset([Session("teacher", "console", "7", "Active")])
+
+    result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 30, "localOnly", true, "notify", false))
+
+    LS_TestAssert(!result && RecordingSessionGuard.LastRunRetryable,
+        "a silent local eviction fails safely unless the guard is explicitly bypassed")
+    LS_TestAssert(RecordingSessionGuard.notifications.Length = 0 && RecordingSessionGuard.logoffs.Length = 0,
+        "Prepare does not evict a local user after a silent countdown")
 }
 
 TestFiltersSessionsAndUsesGraceOptions() {
@@ -138,6 +229,17 @@ TestNotificationCanBeDisabled() {
     LS_TestAssert(RecordingSessionGuard.waits[1] = 45, "session guard preserves grace values above the minimum")
     LS_TestAssert(RecordingSessionGuard.notifications.Length = 0, "session guard skips notifications when disabled")
     LS_TestAssert(RecordingSessionGuard.logoffs.Length = 1, "session guard still logs off when notification is disabled")
+}
+
+TestNotificationFailureIsReportedAsWarning() {
+    RecordingSessionGuard.Reset([Session("teacher", "console", "7", "Active")])
+    RecordingSessionGuard.notificationResult := false
+
+    result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 30))
+
+    LS_TestAssert(result, "a failed warning delivery does not block session preparation")
+    LS_TestAssert(RecordingSessionGuard.LastRunWarning, "a failed warning delivery is surfaced as an operational warning")
+    LS_TestAssert(RecordingSessionGuard.logoffs.Length = 1, "the guard still releases the session after warning delivery fails")
 }
 
 TestLogoffFailureIsReportedAfterAllTargetsAreAttempted() {

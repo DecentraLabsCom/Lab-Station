@@ -67,9 +67,8 @@ class LS_CommandQueue {
         try {
             switch cmd["name"] {
                 case "prepare-session":
-                    success := LS_SessionManager.PrepareSession(cmd["options"])
-                    message := success ? "Prepare-session completed" : "Prepare-session reported warnings"
-                    return this.ResultState(success, success ? 0 : 1, message)
+                    result := LS_LeaseDispatcher.ExecuteAdministrativePrepare(cmd["options"])
+                    return this.ResultState(result["exitCode"] < 2, result["exitCode"], result["message"])
                 case "release-session":
                     result := LS_LeaseDispatcher.ExecuteAdministrativeRelease(cmd["options"])
                     return this.ResultState(result["exitCode"] < 2, result["exitCode"], result["message"])
@@ -80,8 +79,11 @@ class LS_CommandQueue {
                     return this.ResultState(success, success ? 0 : 2, message)
                 case "session-guard":
                     guard := LS_SessionGuard.Run(cmd["options"])
-                    message := guard ? "Session guard completed" : "Session guard reported warnings"
-                    return this.ResultState(guard, guard ? 0 : 1, message)
+                    exitCode := guard ? (LS_SessionGuard.LastRunWarning ? 1 : 0) : 1
+                    message := exitCode = 0 ? "Session guard completed"
+                        : exitCode = 1 ? "Session guard completed with warnings"
+                        : "Session guard failed"
+                    return this.ResultState(exitCode < 2, exitCode, message)
                 case "reboot-if-needed":
                     outcome := LS_Recovery.RebootIfNeeded(cmd["options"])
                     success := outcome.Has("success") ? outcome["success"] : outcome["rebooted"]

@@ -24,7 +24,7 @@ class LS_Recovery {
         timeout := options.Has("timeout") ? options["timeout"] : 20
         user := options.Has("user") ? options["user"] : ""
         this.CloseControllerProcesses()
-        this.LogoffLabUser(user)
+        this.LogoffRemoteLabUser(user)
         rebooted := this.TriggerReboot(timeout)
         joinedReasons := LS_StrJoin(reasons, ", ")
         message := rebooted
@@ -53,8 +53,8 @@ class LS_Recovery {
         return LS_SessionManager.CloseControllerProcesses()
     }
 
-    static LogoffLabUser(user := "") {
-        return LS_SessionManager.LogoffLabUser(user)
+    static LogoffRemoteLabUser(user := "") {
+        return LS_SessionManager.LogoffRemoteLabUser(user)
     }
 
     static TriggerReboot(timeout := 0) {
@@ -79,8 +79,6 @@ class LS_Recovery {
         if (!status["remoteAppEnabled"])
             reasons.Push("remoteapp-disabled")
         policy := status.Has("policy") ? status["policy"] : Map()
-        if (!isHybrid && policy.Has("autoLogon") && !policy["autoLogon"]["enabled"])
-            reasons.Push("autologon-disabled")
         if (policy.Has("remoteDesktopUsers")) {
             rds := policy["remoteDesktopUsers"]
             if (!isHybrid && rds.Has("otherMembers") && rds["otherMembers"].Length > 0)
@@ -90,13 +88,17 @@ class LS_Recovery {
     }
 
     static HasRecoverableStatusIssue(status) {
-        if (!status.Has("legacyAppControlAutostart") || !status["legacyAppControlAutostart"])
+        if (!status.Has("summary"))
             return true
         summary := status["summary"]
         if (!summary.Has("issues") || !IsObject(summary["issues"]))
             return true
+        if (summary["issues"].Length = 0)
+            return true
         for issue in summary["issues"] {
-            if (issue != "Legacy AppControl autostart must be removed")
+            if (issue != "Legacy AppControl autostart must be removed"
+                && issue != "AutoAdminLogon must be disabled and its stored credential removed"
+                && issue != "Plaintext Winlogon DefaultPassword value is present")
                 return true
         }
         return false

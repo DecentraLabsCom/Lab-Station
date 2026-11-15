@@ -36,7 +36,7 @@ class RecordingRecovery extends LS_Recovery {
         return true
     }
 
-    static LogoffLabUser(user := "") {
+    static LogoffRemoteLabUser(user := "") {
         this.calls.Push(Map("name", "logoff", "user", user))
         return true
     }
@@ -56,6 +56,8 @@ RunRecoveryTests() {
         TestFailedRebootIsReportedAndRecorded()
         TestForcedRecoveryShortCircuitsStatusReasons()
         TestReasonsAreDistinctAndCaseInsensitive()
+        TestDedicatedRecoveryDoesNotRequireAutologon()
+        TestAutologonIssueDoesNotTriggerReboot()
         TestHybridProfileAllowsAdditionalRemoteDesktopUsers()
         TestLegacyAppControlAutostartDoesNotTriggerReboot()
     } catch as err {
@@ -131,6 +133,42 @@ TestReasonsAreDistinctAndCaseInsensitive() {
 
     LS_TestAssert(reasons.Length = 2, "recovery removes duplicate and empty reasons")
     LS_TestAssert(reasons[1] = "RemoteApp-Disabled" && reasons[2] = "Other-users-active", "recovery preserves the first spelling of each reason")
+}
+
+TestDedicatedRecoveryDoesNotRequireAutologon() {
+    status := Map(
+        "stationProfile", "server",
+        "summary", Map("state", "ready", "issues", []),
+        "sessions", Map("hasOtherUsers", false),
+        "remoteAppEnabled", true,
+        "legacyAppControlAutostart", false,
+        "policy", Map(
+            "autoLogon", Map("enabled", false, "secretStored", false),
+            "remoteDesktopUsers", Map("otherMembers", [])
+        )
+    )
+
+    reasons := LS_Recovery.ResolveReasons(status, Map())
+
+    LS_TestAssert(reasons.Length = 0, "dedicated recovery accepts AutoAdminLogon being disabled")
+}
+
+TestAutologonIssueDoesNotTriggerReboot() {
+    status := Map(
+        "stationProfile", "server",
+        "summary", Map("state", "needs-action", "issues", ["AutoAdminLogon must be disabled and its stored credential removed"]),
+        "sessions", Map("hasOtherUsers", false),
+        "remoteAppEnabled", true,
+        "legacyAppControlAutostart", false,
+        "policy", Map(
+            "autoLogon", Map("enabled", true, "secretStored", true),
+            "remoteDesktopUsers", Map("otherMembers", [])
+        )
+    )
+
+    reasons := LS_Recovery.ResolveReasons(status, Map())
+
+    LS_TestAssert(reasons.Length = 0, "recovery does not reboot to fix an AutoAdminLogon policy issue")
 }
 
 TestHybridProfileAllowsAdditionalRemoteDesktopUsers() {

@@ -30,23 +30,16 @@ policy must be corrected by the Windows administrator.
 The source lists are stored as non-secret values under
 `HKLM\SOFTWARE\DecentraLabs\Lab Station\NetworkAccess`.
 
-## LABUSER autologon
+## AutoAdminLogon remains disabled
 
-The dedicated `server` profile stores the autologon credential as the Windows
-LSA private secret named `DefaultPassword`, using `LsaStorePrivateData`. The
-Winlogon registry key keeps the username and computer name but does not keep a
-`DefaultPassword` value. If storing or verifying the secret fails, Lab Station
-leaves AutoAdminLogon disabled and removes the partial secret and plaintext
-value. Microsoft notes that a plaintext `DefaultPassword` registry value can
-be read by users with registry access in its [automatic logon guidance](https://learn.microsoft.com/en-us/troubleshoot/windows-server/user-profiles-and-logon/turn-on-automatic-logon).
-Lab Station uses the Windows
-[LsaStorePrivateData API](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-lsastoreprivatedata)
-for that secret name; this is the autologon secret mechanism used by Windows.
+Neither the dedicated `server` profile nor the shared `hybrid` profile enables
+automatic sign-in. Account setup explicitly disables AutoAdminLogon and removes
+both the Winlogon `DefaultPassword` value and the `DefaultPassword` LSA secret,
+including credentials left by an older installation. Diagnostics report a
+station issue if automatic sign-in or either stored credential remains.
 
-This is the Windows secret store used for this autologon flow. Local
-administrators and the operating system retain administrative access to the
-machine; the setting is not intended to protect a station from a local
-administrator.
+LABUSER is still available for Gateway-managed RDP sessions; it is not signed
+into the physical console automatically.
 
 ## Dedicated-profile RemoteApp restrictions
 
@@ -75,6 +68,31 @@ and the applications installed on the station.
 Lab Station does not disable CMD globally because AppControl uses `cmd.exe`
 for process cleanup. The hybrid profile leaves these LABUSER shell policies
 unchanged because it shares the workstation with local users.
+
+## Switching from dedicated to hybrid
+
+The dedicated profile also assigns `SeDenyInteractiveLogonRight` to the SID of
+each local account except LABUSER and built-in exemptions. When the setup
+wizard switches to hybrid, it removes explicit denial entries for current local
+account SIDs so instructors can sign in at the console. The policy does not
+record which account entries came from the dedicated profile, so this also
+removes a separately configured denial for one of those local accounts. It
+preserves group and unrecognized entries, LABUSER, and the Lab Gateway WinRM
+account (identified by its configured name or its Lab Station description), so
+an existing interactive-logon denial on the WinRM account remains in place.
+
+The policy update must succeed before the wizard saves the hybrid profile. If
+the update fails, the profile is left unchanged; if saving the profile fails,
+the wizard rolls the profile back and reapplies the dedicated account denials
+when the previous profile was dedicated.
+Selecting hybrid again also runs this cleanup, which repairs stations where an
+older setup saved `hybrid` before clearing the dedicated account denials.
+
+This cleanup only removes entries for known local account SIDs. A remaining
+group denial can still prevent a user who belongs to that group from signing in;
+Windows applies a deny right even when an allow right also applies. Review
+machine or domain policy if a local instructor account remains blocked. See
+Microsoft's [Deny log on locally policy](https://learn.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/deny-log-on-locally).
 
 The Guacamole RemoteApp connection should continue to launch the configured
 AppControl entry. The Windows RemoteApp policy

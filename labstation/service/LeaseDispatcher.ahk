@@ -93,14 +93,17 @@ class LS_LeaseDispatcher {
                 return this.ErrorResult(request, "STATION_LEASE_CONFLICT", "an active lease must be prepared by its reservation flow")
 
             started := A_TickCount
-            successful := LS_SessionManager.PrepareSession(options)
-            exitCode := successful ? 0 : LS_SessionManager.LastPrepareExitCode
+            successful := LS_SessionManager.PrepareSession(options, true)
+            exitCode := LS_SessionManager.LastPrepareExitCode
             if (exitCode < 1 && !successful)
-                exitCode := 1
-            message := exitCode = 0 ? "station prepared"
+                exitCode := 2
+            message := LS_SessionManager.LastPrepareMessage != "" ? LS_SessionManager.LastPrepareMessage
+                : exitCode = 0 ? "station prepared"
                 : exitCode = 1 ? "Prepare-session finished with warnings"
-                : "Prepare-session was refused"
-            result := this.Result(request, exitCode, message, Map("administrative", true), message,
+                : "Prepare-session failed or was refused"
+            metadata := Map("administrative", true)
+            this.MergeMetadata(metadata, LS_SessionManager.LastPrepareMetadata)
+            result := this.Result(request, exitCode, message, metadata, message,
                 exitCode >= 2 ? message : "")
             result["durationMs"] := A_TickCount - started
             return result
@@ -134,10 +137,17 @@ class LS_LeaseDispatcher {
                 return this.ErrorResult(request, "STATION_LEASE_CONFLICT", "an active lease must be released by its reservation flow")
 
             started := A_TickCount
+            LS_SessionManager.LastReleaseExitCode := 0
             successful := LS_SessionManager.ReleaseSession(options)
-            exitCode := successful ? 0 : 1
-            message := successful ? "station released" : "Release-session finished with warnings"
-            result := this.Result(request, exitCode, message, Map("administrative", true), message, successful ? "" : message)
+            exitCode := LS_SessionManager.LastReleaseExitCode
+            if (!successful && exitCode < 2)
+                exitCode := 2
+            message := LS_SessionManager.LastReleaseMessage != "" ? LS_SessionManager.LastReleaseMessage
+                : successful ? (exitCode = 0 ? "station released" : "station released with warnings")
+                : "Release-session failed or was refused"
+            metadata := Map("administrative", true)
+            this.MergeMetadata(metadata, LS_SessionManager.LastReleaseMetadata)
+            result := this.Result(request, exitCode, message, metadata, message, successful ? "" : message)
             result["durationMs"] := A_TickCount - started
             return result
         } finally {
@@ -172,6 +182,9 @@ class LS_LeaseDispatcher {
                 return
 
             active := state["active"]
+            wasRecoveryRequired := active.Has("state") && active["state"] = "recovery-required"
+            wasInterruptedRelease := active.Has("state") && (active["state"] = "expiring"
+                || active["state"] = "releasing" || active["state"] = "preparing")
             for key in ["kind", "leaseId", "generation", "notBefore", "expiresAt"] {
                 if (active.Has(key))
                     continue
@@ -221,23 +234,29 @@ class LS_LeaseDispatcher {
                 return
             }
             operations := state["operations"]
-            expiryOperationId := "lease-expiry-" . generation
             journalChanged := false
+            uncertainOperation := false
             for operationId, operation in operations {
-                if (operation["leaseId"] != leaseId || operation["generation"] != generation
-                    || operation["state"] != "processing")
+                if (operation["leaseId"] != leaseId || operation["generation"] != generation)
                     continue
-                recoveryRequest := Map("id", operationId, "command", operation["command"])
-                operation["state"] := "recovery-required"
-                operation["updatedAt"] := this.TimestampUtc()
-                operation["result"] := this.ErrorResult(recoveryRequest,
-                    "STATION_OPERATION_RECOVERY_REQUIRED", "operation was interrupted before lease expiry cleanup")
-                operations[operationId] := operation
-                journalChanged := true
+                if (operation["state"] = "processing") {
+                    recoveryRequest := Map("id", operationId, "command", operation["command"])
+                    operation["state"] := "recovery-required"
+                    operation["updatedAt"] := this.TimestampUtc()
+                    operation["result"] := this.ErrorResult(recoveryRequest,
+                        "STATION_OPERATION_RECOVERY_REQUIRED", "operation outcome is unknown after interruption; operator reconciliation is required")
+                    operations[operationId] := operation
+                    journalChanged := true
+                    uncertainOperation := true
+                } else if (operation["state"] = "recovery-required") {
+                    result := operation.Has("result") && Type(operation["result"]) = "Map" ? operation["result"] : Map()
+                    metadata := result.Has("metadata") && Type(result["metadata"]) = "Map" ? result["metadata"] : Map()
+                    if (!metadata.Has("code") || metadata["code"] = "STATION_OPERATION_RECOVERY_REQUIRED")
+                        uncertainOperation := true
+                }
             }
 
-            ; An expired lease must be releasable even when the last operation
-            ; stopped between its durable journal writes.
+            ; Keep admission closed while an expired lease waits for cleanup or reconciliation.
             if (!active.Has("state") || active["state"] != "recovery-required") {
                 active["state"] := "recovery-required"
                 active["updatedAt"] := this.TimestampUtc()
@@ -252,9 +271,30 @@ class LS_LeaseDispatcher {
                     return
                 }
             }
-            if (operations.Has(expiryOperationId)) {
+            if (uncertainOperation) {
                 if (journalChanged)
-                    LS_LogWarning("A prior lease-expiry operation has an uncertain outcome; station admission remains closed")
+                    LS_LogWarning("A lease operation has an uncertain outcome; station admission remains closed for operator reconciliation")
+                return
+            }
+            expiryOperationId := "lease-expiry-" . generation
+            if (wasInterruptedRelease || (wasRecoveryRequired && !operations.Has(expiryOperationId)
+                && !this.LeaseReleaseFailuresAreRetryable(operations, leaseId, generation))) {
+                reason := wasInterruptedRelease
+                    ? "expired lease has an interrupted release without a durable result"
+                    : "expired lease has no persisted retryable Release result"
+                try {
+                    this.RecordExpiryReconciliationRequired(state, active, reason)
+                } catch as e {
+                    LS_LogWarning("Lease expiry watchdog could not record recovery state: " . e.Message)
+                    return
+                }
+                LS_LogWarning("Expired lease requires operator reconciliation for generation " . generation . ": " . reason)
+                return
+            }
+            expiryOperationId := this.NextLeaseExpiryOperationId(operations, leaseId, generation)
+            if (expiryOperationId = "") {
+                if (journalChanged)
+                    LS_LogWarning("A prior lease-expiry attempt is not safe to retry; station admission remains closed for operator reconciliation")
                 return
             }
 
@@ -283,15 +323,89 @@ class LS_LeaseDispatcher {
             )
             result := IsSet(sessionExecutor) ? this.ExecuteLocked(request, sessionExecutor) : this.ExecuteLocked(request)
             if (result["exitCode"] >= 2) {
-                LS_LogWarning("Lease expiry cleanup requires operator reconciliation for generation " . generation)
+                if (result.Has("metadata") && Type(result["metadata"]) = "Map"
+                    && result["metadata"].Has("retryable") && result["metadata"]["retryable"] = true)
+                    LS_LogWarning("Lease expiry cleanup failed before effects; a later watchdog pass will retry generation " . generation)
+                else
+                    LS_LogWarning("Lease expiry cleanup requires operator reconciliation for generation " . generation)
             } else if (result["exitCode"] = 1) {
-                LS_LogWarning("Expired lease cleanup was incomplete; station admission remains closed for generation " . generation)
+                LS_LogWarning("Expired reservation lease released with warnings for generation " . generation)
             } else {
                 LS_LogInfo("Expired reservation lease released for generation " . generation)
             }
         } finally {
             DllCall("ReleaseMutex", "Ptr", mutex)
             DllCall("CloseHandle", "Ptr", mutex)
+        }
+    }
+
+    static LeaseReleaseFailuresAreRetryable(operations, leaseId, generation) {
+        found := false
+        for _, operation in operations {
+            if (Type(operation) != "Map")
+                return false
+            if (!operation.Has("leaseId") || operation["leaseId"] != leaseId
+                || !operation.Has("generation") || operation["generation"] != generation
+                || !operation.Has("command") || operation["command"] != "release-session")
+                continue
+            if (!operation.Has("state") || operation["state"] != "completed"
+                || !operation.Has("result") || Type(operation["result"]) != "Map")
+                return false
+            result := operation["result"]
+            if (!result.Has("exitCode") || result["exitCode"] < 2 || !result.Has("metadata")
+                || Type(result["metadata"]) != "Map" || !result["metadata"].Has("retryable")
+                || result["metadata"]["retryable"] != true)
+                return false
+            found := true
+        }
+        return found
+    }
+
+    static RecordExpiryReconciliationRequired(state, active, reason) {
+        updatedAt := this.TimestampUtc()
+        active["state"] := "recovery-required"
+        active["updatedAt"] := updatedAt
+        state["active"] := active
+        operations := state["operations"]
+        markerId := "lease-expiry-recovery-" . active["generation"]
+        if (!operations.Has(markerId)) {
+            request := Map("id", markerId, "command", "release-session")
+            result := this.ErrorResult(request, "STATION_OPERATION_RECOVERY_REQUIRED", reason)
+            operations[markerId] := Map(
+                "state", "recovery-required",
+                "command", "release-session",
+                "leaseId", active["leaseId"],
+                "generation", active["generation"],
+                "updatedAt", updatedAt,
+                "result", result
+            )
+            state["operations"] := operations
+        }
+        this.SaveState(state)
+    }
+
+    static NextLeaseExpiryOperationId(operations, leaseId, generation) {
+        attempt := 1
+        Loop {
+            operationId := attempt = 1 ? "lease-expiry-" . generation
+                : "lease-expiry-" . generation . "-retry-" . attempt
+            if (StrLen(operationId) > 96)
+                return ""
+            if (!operations.Has(operationId))
+                return operationId
+            operation := operations[operationId]
+            if (Type(operation) != "Map" || !operation.Has("leaseId") || operation["leaseId"] != leaseId
+                || !operation.Has("generation") || operation["generation"] != generation
+                || !operation.Has("command") || operation["command"] != "release-session"
+                || !operation.Has("state") || operation["state"] != "completed"
+                || !operation.Has("result") || Type(operation["result"]) != "Map")
+                return ""
+            result := operation["result"]
+            if (!result.Has("exitCode") || result["exitCode"] < 2 || !result.Has("metadata")
+                || Type(result["metadata"]) != "Map" || !result["metadata"].Has("retryable")
+                || result["metadata"]["retryable"] != true)
+                return ""
+            attempt += 1
         }
     }
 
@@ -468,6 +582,14 @@ class LS_LeaseDispatcher {
         }
 
         started := A_TickCount
+        LS_SessionManager.LastReleaseExitCode := 0
+        LS_SessionManager.LastReleaseRetryable := false
+        LS_SessionManager.LastPrepareExitCode := 0
+        LS_SessionManager.LastPrepareRetryable := false
+        LS_SessionManager.LastPrepareMessage := ""
+        LS_SessionManager.LastPrepareMetadata := Map()
+        LS_SessionManager.LastReleaseMessage := ""
+        LS_SessionManager.LastReleaseMetadata := Map()
         try {
             if IsSet(sessionExecutor)
                 successful := sessionExecutor.Call(command, request["args"])
@@ -478,20 +600,62 @@ class LS_LeaseDispatcher {
             successful := false
         }
         exitCode := successful ? 0 : 1
-        if (!successful && command = "prepare-session" && LS_SessionManager.LastPrepareExitCode >= 2)
-            exitCode := 2
-        leaseState := command = "prepare-session" ? (successful ? "active" : "recovery-required") : (successful ? "released" : "recovery-required")
-        message := successful ? (command = "prepare-session" ? "session prepared" : "session released")
-            : exitCode >= 2 ? "session preparation refused" : "session operation completed with warnings"
+        if (command = "prepare-session") {
+            if (successful)
+                exitCode := LS_SessionManager.LastPrepareExitCode
+            else if (LS_SessionManager.LastPrepareExitCode >= 2)
+                exitCode := LS_SessionManager.LastPrepareExitCode
+            if (!successful && exitCode < 2)
+                exitCode := 2
+        } else {
+            exitCode := LS_SessionManager.LastReleaseExitCode
+            if (!successful && exitCode < 2)
+                exitCode := 2
+        }
+        if (command = "prepare-session" && !successful && LS_SessionManager.LastPrepareRetryable) {
+            message := LS_SessionManager.LastPrepareMessage != "" ? LS_SessionManager.LastPrepareMessage
+                : "prepare was refused before changing station sessions"
+            result := this.ErrorResult(request, "STATION_PREPARE_REFUSED", message)
+            this.MergeMetadata(result["metadata"], LS_SessionManager.LastPrepareMetadata)
+            result["metadata"]["retryable"] := true
+            state.Delete("active")
+            operations.Delete(operationId)
+            try {
+                this.SaveState(state)
+            } catch {
+                return this.ErrorResult(request, "STATION_JOURNAL_UNAVAILABLE", "refused prepare could not be rolled back")
+            }
+            return result
+        }
+        completed := exitCode < 2
+        leaseState := command = "prepare-session" ? (completed ? "active" : "recovery-required") : (completed ? "released" : "recovery-required")
+        message := completed
+            ? (command = "prepare-session"
+                ? (LS_SessionManager.LastPrepareMessage != "" ? LS_SessionManager.LastPrepareMessage
+                    : (exitCode = 0 ? "session prepared" : "session prepared with warnings"))
+                : (LS_SessionManager.LastReleaseMessage != "" ? LS_SessionManager.LastReleaseMessage
+                    : (exitCode = 0 ? "session released" : "session released with warnings")))
+            : command = "prepare-session"
+                ? (LS_SessionManager.LastPrepareMessage != "" ? LS_SessionManager.LastPrepareMessage : "session preparation requires recovery")
+                : (LS_SessionManager.LastReleaseMessage != "" ? LS_SessionManager.LastReleaseMessage : "session release requires recovery")
         if (exitCode >= 2) {
             context := request["context"]
             lease := Map("leaseId", context["leaseId"], "generation", assignedGeneration,
                 "state", leaseState, "expiresAt", context["expiresAt"])
-            result := this.Result(request, exitCode, message, Map("lease", lease), "", message)
+            metadata := Map("lease", lease)
+            if (command = "prepare-session")
+                this.MergeMetadata(metadata, LS_SessionManager.LastPrepareMetadata)
+            else
+                this.MergeMetadata(metadata, LS_SessionManager.LastReleaseMetadata)
+            result := this.Result(request, exitCode, message, metadata, "", message)
         } else {
             result := this.SuccessResult(request, assignedGeneration, leaseState, message)
             result["exitCode"] := exitCode
             result["outcome"] := exitCode = 0 ? "success" : "warning"
+            if (command = "prepare-session")
+                this.MergeMetadata(result["metadata"], LS_SessionManager.LastPrepareMetadata)
+            else
+                this.MergeMetadata(result["metadata"], LS_SessionManager.LastReleaseMetadata)
         }
         result["durationMs"] := Max(1, A_TickCount - started)
         if (result["metadata"].Has("lease"))
@@ -503,7 +667,7 @@ class LS_LeaseDispatcher {
         if (command = "prepare-session") {
             state["active"]["state"] := leaseState
             state["active"]["updatedAt"] := operation["updatedAt"]
-        } else if (successful) {
+        } else if (completed) {
             released := state["active"]
             released["state"] := "released"
             released["updatedAt"] := operation["updatedAt"]
@@ -709,6 +873,14 @@ class LS_LeaseDispatcher {
             "metadata", metadata,
             "options", Map()
         )
+    }
+
+    static MergeMetadata(target, source) {
+        if (!IsObject(source) || Type(source) != "Map")
+            return target
+        for key, value in source
+            target[key] := value
+        return target
     }
 
     static ParseUtc(value) {

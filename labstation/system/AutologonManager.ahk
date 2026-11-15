@@ -1,5 +1,5 @@
 ; ============================================================================
-; Lab Station - Secure Windows AutoAdminLogon configuration
+; Lab Station - Windows AutoAdminLogon cleanup and diagnostics
 ; ============================================================================
 #Requires AutoHotkey v2.0
 #Include ..\core\Config.ahk
@@ -8,48 +8,6 @@
 
 class LS_AutologonManager {
     static SecretName := "DefaultPassword"
-
-    static Configure(user, password, domain := "") {
-        if (!LS_EnsureAdmin())
-            return false
-        if (!user || user = "")
-            user := "LABUSER"
-        if (!password || password = "") {
-            LS_LogError("Password required to configure AutoAdminLogon")
-            return false
-        }
-        if (domain = "")
-            domain := A_ComputerName
-
-        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-        if (!this.Disable())
-            return false
-
-        try {
-            if (!this.StoreSecret(password))
-                throw Error("LsaStorePrivateData failed to store the AutoAdminLogon secret")
-            RegWrite(user, "REG_SZ", key, "DefaultUserName")
-            RegWrite(domain, "REG_SZ", key, "DefaultDomainName")
-            RegWrite("1", "REG_DWORD", key, "ForceAutoLogon")
-            RegWrite("0", "REG_DWORD", key, "DisableCAD")
-            if (!this.HasSecret())
-                throw Error("The AutoAdminLogon LSA secret could not be verified")
-            RegWrite("1", "REG_SZ", key, "AutoAdminLogon")
-
-            if (!this.IsEnabledForUser(user))
-                throw Error("AutoAdminLogon verification failed")
-
-            LS_LogInfo("AutoAdminLogon configured with the Windows LSA secret store")
-            return true
-        } catch as e {
-            try RegWrite("0", "REG_SZ", key, "AutoAdminLogon")
-            try RegWrite("0", "REG_DWORD", key, "ForceAutoLogon")
-            try this.RemoveWinlogonPassword(key)
-            try this.DeleteSecret()
-            LS_LogError("Unable to configure secure AutoAdminLogon: " . e.Message)
-            return false
-        }
-    }
 
     static Disable() {
         if (!LS_EnsureAdmin())
@@ -104,20 +62,6 @@ class LS_AutologonManager {
         }
     }
 
-    static IsEnabledForUser(user) {
-        key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-        try {
-            enabled := RegRead(key, "AutoAdminLogon")
-            configuredUser := RegRead(key, "DefaultUserName")
-            return (enabled = 1 || enabled = "1")
-                && StrLower(configuredUser) = StrLower(user)
-                && !this.HasWinlogonPassword()
-                && this.HasSecret()
-        } catch {
-            return false
-        }
-    }
-
     static RemoveWinlogonPassword(key := "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon") {
         try RegDelete(key, "DefaultPassword")
         return !this.HasWinlogonPassword()
@@ -146,25 +90,6 @@ class LS_AutologonManager {
         } finally {
             if (privateData)
                 DllCall("Advapi32\LsaFreeMemory", "Ptr", privateData, "UInt")
-            DllCall("Advapi32\LsaClose", "Ptr", policy, "UInt")
-        }
-    }
-
-    static StoreSecret(value) {
-        policy := this.OpenPolicy(0x0020) ; POLICY_CREATE_SECRET
-        key := this.MakeLsaString(this.SecretName)
-        secret := this.MakeLsaString(value)
-        try {
-            status := DllCall(
-                "Advapi32\LsaStorePrivateData",
-                "Ptr", policy,
-                "Ptr", key["layout"].Ptr,
-                "Ptr", secret["layout"].Ptr,
-                "UInt"
-            )
-            return status = 0
-        } finally {
-            this.ZeroBuffer(secret["data"])
             DllCall("Advapi32\LsaClose", "Ptr", policy, "UInt")
         }
     }
@@ -219,7 +144,4 @@ class LS_AutologonManager {
             NumPut("UChar", 0, address, A_Index - 1)
     }
 
-    static ZeroBuffer(buffer) {
-        this.ZeroMemory(buffer.Ptr, buffer.Size)
-    }
 }

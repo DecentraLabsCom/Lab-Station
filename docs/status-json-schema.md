@@ -43,7 +43,7 @@ need and tolerate additional properties.
 | `readiness` | object | Capability-specific readiness for `physicalLab`, `wake` and `fmu`. |
 | `summary` | object | Aggregated readiness result and issue list. |
 | `operations` | object | Recent service operations and their outcomes. |
-| `localSessionActive` | boolean | Whether a local or console user other than the lab user is active. |
+| `localSessionActive` | boolean | Whether any interactive physical-console session is active, including LABUSER; remote RDP sessions are excluded regardless of account. |
 | `localModeEnabled` | boolean | Whether the station is marked for local-only use. |
 
 ## Optional diagnostic fields
@@ -55,7 +55,7 @@ The status document can also include the following diagnostic blocks:
 | `identity` | Lab account and local profile information. |
 | `firewall` | Whether inbound traffic defaults to Block, RDP/WinRM rules match their configured Gateway sources, and WinRM HTTP/5985 is blocked. |
 | `biosChecklist` | BIOS/UEFI Wake-on-LAN checks shown to the operator. |
-| `policy` | Autologon, Remote Desktop Users, interactive-logon policy state and the configured `allowLocalSessionEviction` policy. Autologon diagnostics report whether the LSA secret exists and whether a plaintext Winlogon password value is present; they never include the credential. |
+| `policy` | AutoAdminLogon, Remote Desktop Users, interactive-logon policy state and the configured `allowLocalSessionEviction` policy. Readiness expects AutoAdminLogon disabled and flags either a remaining LSA secret or plaintext Winlogon password; diagnostics never include the credential. |
 | `sessions` | Current sessions and the typed active-session summary. |
 | `fmuExecutor` | FMU Executor availability, endpoint health, local process state and configured port. Secrets are represented only by boolean state. |
 | `lastForcedLogoff` | The latest forced-logoff record, when one exists. |
@@ -80,7 +80,9 @@ from the primary capability. Consumers needing a particular capability should
 read its `readiness` entry.
 
 The `sessions` object reports the Windows session classification used by the
-Gateway. `active` means that at least one active session is present. `kind` is
+Gateway. `localSessionActive` means that an interactive physical-console
+session exists, regardless of account; this is the same signal used by Prepare
+and the Gateway's dedicated-profile precheck. `active` means that at least one active session is present. `kind` is
 `none`, `labuser-local`, `labuser-remote`, `local-user`, `remote-user`,
 `mixed`, or `unknown`. `labUserActive` includes both local and remote LABUSER
 sessions; `labUserRemoteActive` is the narrower remote-LABUSER signal;

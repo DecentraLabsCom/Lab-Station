@@ -20,8 +20,12 @@ are refreshed once per minute, independently of queue processing.
 The setup wizard installs and starts the background task. It checks lease
 expiry on each service-loop iteration; the loop sleeps five seconds between
 iterations, so a long-running queued command can delay the next check. Keep the
-task running while reservation leases are active. If cleanup fails, the
-station remains closed to new leases and records a recovery-required state.
+task running while reservation leases are active. The expiry watchdog retries a
+completed Release failure only when it is explicitly marked `retryable`, which
+is limited to failures before any session or FMU cleanup starts; it records
+each retry under a new operation ID. Partial cleanup failures and interrupted
+operations with unknown outcomes keep the station closed in
+`recovery-required` for operator reconciliation.
 
 ## Input format
 
@@ -52,9 +56,18 @@ Supported `name` values and their options are:
 Boolean values may be `yes`/`no`, `true`/`false`, `on`/`off`, `1`/`0`.
 Numeric values must be non-negative integers. Unknown command names produce a
 hard-failure result and are still archived.
-For hybrid Prepare, `guard=no` suppresses the warning and grace period, then
-immediately evicts an eligible local console session when eviction is enabled.
-It does not bypass the profile or local-session policy.
+For hybrid Prepare, `guard=no` is an explicit administrative bypass: it skips
+the graphical acknowledgement and grace period, then immediately evicts an
+eligible local console session when eviction is enabled. Without that bypass,
+each local session that remains active must affirmatively acknowledge its
+dialog. A session that signs out during the prompt is already released; a
+declined, timed-out, suppressed, or unavailable prompt for an active session
+makes Prepare fail before logoff or cleanup. The bypass does not override the
+profile or local-session policy.
+
+Queued Prepare and Release use the same administrative lease admission as the
+direct operator commands. They refuse while a reservation or demo lease is
+active; lease-bound work must use its matching reservation flow.
 
 ## Result format
 
@@ -89,8 +102,8 @@ Queue results use these meanings:
 | `exitCode` | Meaning |
 | --- | --- |
 | `0` | Completed successfully. |
-| `1` | Completed with an operational warning, for example a session cleanup step did not fully succeed. |
-| `2` | Invalid, unsupported, or failed command. |
+| `1` | Completed with a nonfatal operational warning, such as a standalone session-guard notice failure or a deferred Release reboot. |
+| `2` | Invalid, unsupported, refused, or incomplete command. Failed Prepare cleanup and Release session termination require recovery. |
 
 The result file is the source of truth for the asynchronous operation. Do not
 infer completion from the input file disappearing: the service archives input

@@ -5,9 +5,9 @@
 #SingleInstance Force
 
 ;@Ahk2Exe-SetName LabStation
-;@Ahk2Exe-SetVersion 3.6.0
-;@Ahk2Exe-SetFileVersion 3.6.0
-;@Ahk2Exe-SetProductVersion 3.6.0
+;@Ahk2Exe-SetVersion 3.7.0
+;@Ahk2Exe-SetFileVersion 3.7.0
+;@Ahk2Exe-SetProductVersion 3.7.0
 
 #Include core\Config.ahk
 #Include core\Logger.ahk
@@ -129,7 +129,7 @@ LS_ShowHelp() {
         "  LabStation.exe tray                 # Tray UI" . "`n" .
         "  LabStation.exe service [install|uninstall|start|stop]" . "`n" .
         "  LabStation.exe launch-app-control [args...]" . "`n" .
-        "  LabStation.exe account [create|autologon|lockdown|setup] [user] [password]" . "`n" .
+        "  LabStation.exe account [create|lockdown|setup] [user] [password]" . "`n" .
         "  LabStation.exe session guard [--grace=120] [--user=LABUSER]" . "`n" .
         "  LabStation.exe prepare-session [--user=LABUSER] [--reboot]" . "`n" .
         "  LabStation.exe release-session [--user=LABUSER] [--reboot]" . "`n" .
@@ -279,7 +279,7 @@ LS_HandleServiceCommand(args) {
 
 LS_HandleAccountCommand(args) {
     if (args.Length = 0) {
-        LS_ShowMessage("Usage: LabStation.exe account [create|autologon|lockdown|setup] [user] [password]", "Lab Station", "OK Iconi")
+        LS_ShowMessage("Usage: LabStation.exe account [create|lockdown|setup] [user] [password]", "Lab Station", "OK Iconi")
         return 2
     }
     action := StrLower(args[1])
@@ -295,14 +295,6 @@ LS_HandleAccountCommand(args) {
                 LS_ShowMessage("Account could not be created/updated", "Lab Station", "OK Iconx")
                 return 1
             }
-        case "autologon":
-            if (!LS_AccountManager.ConfigureAutologon(user, password)) {
-                LS_ShowMessage("Autologon could not be configured", "Lab Station", "OK Iconx")
-                return 1
-            } else {
-                LS_ShowMessage("Autologon configured", "Lab Station", "OK Iconi")
-                return 0
-            }
         case "lockdown":
             if (!LS_AccountManager.ApplyLockdown(user)) {
                 LS_ShowMessage("Lockdown could not be applied", "Lab Station", "OK Iconx")
@@ -314,7 +306,7 @@ LS_HandleAccountCommand(args) {
         case "setup":
             pass := password
             if (LS_AccountManager.Setup(user, &pass)) {
-                LS_ShowMessage(Format("Account + Autologon ready. User: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi")
+                LS_ShowMessage(Format("Account ready (autologon disabled). User: {1}`nPassword: {2}", (user && user != "") ? user : LS_AccountManager.DefaultUser, pass), "Lab Station", "OK Iconi")
                 return 0
             } else {
                 LS_ShowMessage("Account setup failed", "Lab Station", "OK Iconx")
@@ -433,6 +425,10 @@ LS_HandleSessionCommand(args) {
 LS_RunSessionGuard(args := []) {
     opts := LS_ParseGuardOptions(args)
     if (LS_SessionGuard.Run(opts)) {
+        if (LS_SessionGuard.LastRunWarning) {
+            LS_ShowMessage("Session guard completed with warnings (see log)", "Lab Station", "OK Iconx")
+            return 1
+        }
         LS_ShowMessage("Local sessions cleared", "Lab Station", "OK Iconi")
         return 0
     } else {
