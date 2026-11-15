@@ -26,7 +26,7 @@
       "description": "Telemetry contract version. Current value is 2.0.0."
     },
     "timestamp": {"type": "string", "format": "date-time"},
-    "stationProfile": {"type": "string", "enum": ["server", "hybrid"]},
+    "stationProfile": {"type": "string", "enum": ["server", "hybrid"], "description": "Legacy Windows v2 profile value; server corresponds to canonical Station Contract v3 profile dedicated."},
     "identity": {"type": "object", "additionalProperties": true},
     "remoteAppEnabled": {"type": "boolean"},
     "winrm": {"$ref": "#/definitions/object"},

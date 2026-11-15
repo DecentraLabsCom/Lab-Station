@@ -128,7 +128,7 @@ class LS_Status {
         lines.Push("RDP firewall scope: " . (data["firewall"]["rdpReady"] ? "OK" : "MISSING"))
         lines.Push("WinRM firewall scope: " . (data["winrm"]["firewallEnabled"] ? "OK" : "MISSING"))
         lines.Push("WinRM: " . (data["winrm"]["ready"] ? "OK" : "MISSING"))
-        lines.Push("Profile: " . data["stationProfile"])
+        lines.Push("Profile: " . data["profile"])
         lines.Push(data["legacyAppControlAutostart"]
             ? "AppControl launch: LEGACY AUTOSTART (REMOVE)"
             : "AppControl launch: GUACAMOLE REMOTE APP")

@@ -34,7 +34,7 @@ need and tolerate additional properties.
 | --- | --- | --- |
 | `schemaVersion` | string | Legacy telemetry contract version, `2.x`. |
 | `timestamp` | date-time string | UTC timestamp for the status collection. |
-| `stationProfile` | `server` or `hybrid` | Operating profile selected for the station. |
+| `stationProfile` | `server` or `hybrid` | Legacy Windows v2 profile value; `server` corresponds to canonical Station Contract v3 `profile: dedicated`. |
 | `remoteAppEnabled` | boolean | Whether the RemoteApp policy is enabled. |
 | `winrm` | object | WinRM readiness and diagnostic details. |
 | `legacyAppControlAutostart` | boolean | Whether the obsolete AppControl Windows autostart entry is still present and must be removed. |

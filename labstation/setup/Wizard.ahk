@@ -77,17 +77,18 @@ LS_WizardSelectMode() {
     profileGui.AddText("x20 yp+30", "Choose the operating mode for this lab station.")
 
     profileGui.SetFont("s10 cFFFFFF")
-    serverBtn := profileGui.AddButton("x20 y90 w300 h36", "Dedicated Lab Server")
+    dedicatedBtn := profileGui.AddButton("x20 y90 w300 h36", "Dedicated Lab Station")
     profileGui.SetFont("s8 cC08A2B")
     profileGui.AddText("x20 y130 w300", "Dedicated remote station; restricted LABUSER, no autologon")
     
     profileGui.SetFont("s10 cFFFFFF")
     hybridBtn := profileGui.AddButton("x20 y160 w300 h36", "Hybrid Lab Station")
     profileGui.SetFont("s8 cC08A2B")
-    profileGui.AddText("x20 y200 w300", "Shared with instructors; LABUSER has no autologon")
+    profileGui.AddText("x20 y200 w300", "Shared with local users; LABUSER has no autologon")
 
     result := ""
-    serverBtn.OnEvent("Click", (*) => (result := "server", profileGui.Destroy()))
+    ; Keep the legacy internal profile value; Station Contract v3 reports it as "dedicated".
+    dedicatedBtn.OnEvent("Click", (*) => (result := "server", profileGui.Destroy()))
     hybridBtn.OnEvent("Click", (*) => (result := "hybrid", profileGui.Destroy()))
     profileGui.OnEvent("Close", (*) => (result := "cancel", profileGui.Destroy()))
 

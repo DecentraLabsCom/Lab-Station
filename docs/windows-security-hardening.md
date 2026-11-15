@@ -32,7 +32,7 @@ The source lists are stored as non-secret values under
 
 ## AutoAdminLogon remains disabled
 
-Neither the dedicated `server` profile nor the shared `hybrid` profile enables
+Neither the `dedicated` profile nor the shared `hybrid` profile enables
 automatic sign-in. Account setup explicitly disables AutoAdminLogon and removes
 both the Winlogon `DefaultPassword` value and the `DefaultPassword` LSA secret,
 including credentials left by an older installation. Diagnostics report a
@@ -43,7 +43,7 @@ into the physical console automatically.
 
 ## Dedicated-profile RemoteApp restrictions
 
-The dedicated `server` profile writes these settings to the `LABUSER` user
+The `dedicated` profile writes these settings to the `LABUSER` user
 profile only:
 
 - Hide Run, Control Panel, and drive letters in Explorer.
@@ -74,7 +74,7 @@ unchanged because it shares the workstation with local users.
 The dedicated profile also assigns `SeDenyInteractiveLogonRight` to the SID of
 each local account except LABUSER and built-in exemptions. When the setup
 wizard switches to hybrid, it removes explicit denial entries for current local
-account SIDs so instructors can sign in at the console. The policy does not
+account SIDs so local users can sign in at the console. The policy does not
 record which account entries came from the dedicated profile, so this also
 removes a separately configured denial for one of those local accounts. It
 preserves group and unrecognized entries, LABUSER, and the Lab Gateway WinRM
@@ -91,7 +91,7 @@ older setup saved `hybrid` before clearing the dedicated account denials.
 This cleanup only removes entries for known local account SIDs. A remaining
 group denial can still prevent a user who belongs to that group from signing in;
 Windows applies a deny right even when an allow right also applies. Review
-machine or domain policy if a local instructor account remains blocked. See
+machine or domain policy if a local user account remains blocked. See
 Microsoft's [Deny log on locally policy](https://learn.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/deny-log-on-locally).
 
 The Guacamole RemoteApp connection should continue to launch the configured

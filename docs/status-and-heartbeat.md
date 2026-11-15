@@ -3,7 +3,8 @@
 Lab Station exposes a persisted status document and a heartbeat envelope. New
 Windows releases emit Station Contract v3 (`schemaVersion: 3.0.0`) in both
 documents. The Gateway retains the documented Windows v2 compatibility
-normalizer for older installations.
+normalizer for older installations. In v2, `stationProfile: server` maps to the
+canonical v3 profile `dedicated`.
 
 | Document | Location or command | Behavior |
 | --- | --- | --- |

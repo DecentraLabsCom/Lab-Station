@@ -1,6 +1,6 @@
-# Operational rules for hybrid stations (instructors)
+# Operational rules for hybrid stations (local users)
 
-This document summarizes what to expect when a station can be used both locally (instructor in the classroom) and remotely (reservation via Lab Gateway).
+This document summarizes what to expect when a station can be used both locally (by students, instructors, or other on-site users) and remotely (reservation via Lab Gateway).
 
 ## 1. Key principles
 
@@ -12,7 +12,7 @@ This document summarizes what to expect when a station can be used both locally 
   sign-out. A decline, timeout, unavailable dialog, or suppressed notification
   aborts Prepare before logoff and cleanup while the session remains active; a
   user who signs out during the dialog is already released.
-- If an instructor signs out during the remaining grace period, Prepare accepts
+- If a local user signs out during the remaining grace period, Prepare accepts
   that voluntary sign-out and only considers sessions still present for
   eviction. A new or changed local session during the grace period causes
   Prepare to refuse before it logs off any session.
@@ -25,7 +25,7 @@ This document summarizes what to expect when a station can be used both locally 
 
 ## 2. Recommended flow
 
-1. **Instructor in local mode**
+1. **Local user on site**
    - They can sign in with their usual account; the hybrid profile does not configure LABUSER autologon.
    - If a remote reservation prompt appears, they can decline or keep the
      session open to cancel Prepare. To proceed, they save their work and
@@ -34,7 +34,7 @@ This document summarizes what to expect when a station can be used both locally 
    - Lab Gateway runs `prepare-session` (via WinRM or queue). This command now invokes `session guard` automatically.
    - After eviction, Prepare clears LABUSER's temporary files, cache, Recent items, Downloads and `Documents\LabStationScratch`, restarts an installed FMU Executor to terminate its sessions, and removes its temporary work state.
 3. **Remote reservation in progress**
-   - Lab Gateway connects using LABUSER, which is a Remote Desktop Users account but is not automatically logged on by the hybrid profile. The instructor should not sign in while remote reservations are active.
+   - Lab Gateway connects using LABUSER, which is a Remote Desktop Users account but is not automatically logged on by the hybrid profile. Local users should not sign in while remote reservations are active.
 4. **Reservation end**
    - `release-session` signs out only LABUSER's remote RDP sessions, preserving a physical console session even when it also uses LABUSER. It does not reboot unless `--reboot` is explicitly supplied; a requested reboot is deferred while a local console session remains active.
 
@@ -44,7 +44,7 @@ This document summarizes what to expect when a station can be used both locally 
   first confirmation dialog through forced logoff (90 seconds by default;
   values below 30 are clamped to 30). Confirmation time counts against it.
 - `prepare-session --guard-message="text"`: custom text shown to the
-  instructor.
+  local user.
 - `prepare-session --guard-silent` or `--guard-notify=no`: suppresses the
   confirmation dialog. If a local session is active, Prepare fails safely
   before logoff or cleanup.
@@ -71,7 +71,7 @@ dedicated profile, where Prepare always refuses an unexpected local session.
 ## 4. "Local mode" signaling
 
 - The backend or the desktop panel can create `labstation/data/local-mode.flag`
-  when an instructor declares exclusive in-person use. Local mode is only
+  when a local user declares exclusive in-person use. Local mode is only
   available for the hybrid profile and expires after eight hours unless it is
   disabled earlier. Lab Station and Lab Gateway both block preparation while
   the flag is active. Enabling local mode also requires a successful session
@@ -92,7 +92,7 @@ capture it.
 
 *The desktop panel exposes local-mode status alongside the station health summary.*
 
-## 5. Best practices for instructors
+## 5. Best practices for local users
 
 - Follow the schedule/calendar published by Lab Gateway.
 - Save work frequently when a reservation start is approaching.
