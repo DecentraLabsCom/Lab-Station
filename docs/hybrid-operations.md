@@ -4,24 +4,32 @@ This document summarizes what to expect when a station can be used both locally 
 
 ## 1. Key principles
 
-- Remote reservations require a clean remote session. Prepare considers every active local console session, including one signed in as LABUSER. Dedicated stations refuse them; hybrid stations evict them only when `AllowLocalSessionEviction` is enabled in `labstation/data/station-profile.ini` (defaults to `true`).
-- Prepare shows a Windows session dialog to each eligible local user. Each user
+- Remote reservations require a clean remote session. Prepare considers every active local console session, including one signed in as LABUSER. Dedicated stations warn every local session and hand off automatically after the grace period, without an accept/decline prompt. Hybrid stations use the confirmation flow below and evict sessions only when `AllowLocalSessionEviction` is enabled in `labstation/data/station-profile.ini` (defaults to `true`).
+- On Hybrid, Prepare shows a Windows session dialog to each eligible local
+  user. Each user
   must confirm that their work is saved before Prepare may close the session.
   The 90-second default grace deadline starts with the dialog (30-second
   minimum); after confirmation, the remaining time is left for voluntary
   sign-out. A decline, timeout, unavailable dialog, or suppressed notification
   aborts Prepare before logoff and cleanup while the session remains active; a
   user who signs out during the dialog is already released.
-- If a local user signs out during the remaining grace period, Prepare accepts
+- On Hybrid, if a local user signs out during the remaining grace period, Prepare accepts
   that voluntary sign-out and only considers sessions still present for
   eviction. A new or changed local session during the grace period causes
   Prepare to refuse before it logs off any session.
-- `--no-guard` is an explicit administrative bypass that skips confirmation and
-  grace, then immediately evicts an eligible local session when policy allows.
-  `--guard-notify=no` does not bypass the confirmation requirement and fails
-  safely if a local session is active.
+- On Hybrid, `--no-guard` is an explicit administrative bypass that skips
+  confirmation and grace, then immediately evicts an eligible local session
+  when policy allows. On Dedicated, `--no-guard` and `--guard-notify=no` do not
+  suppress the warning or grace period; local users cannot decline the
+  reservation handoff.
 - All forced logoffs are recorded in `labstation/labstation.log` and `data/telemetry/session-guard-events.jsonl`, and the latest event is reflected in `status.json`.
-- Dedicated stations refuse preparation if an unexpected interactive user is active; they do not log that user out automatically.
+- Dedicated local-session handoffs apply to every account, including a local
+  administrator session. If Windows cannot send any local session its warning,
+  Prepare fails before logoff. Dedicated stations do not support local mode.
+- Remote sessions under accounts other than LABUSER are not currently included
+  in Prepare's handoff. Shared FMU Executor cleanup may affect their work; do not
+  assume concurrent remote-account use is isolated. See the [WinRM command
+  contract](winrm-command-contract.md) for the command boundary.
 
 ## 2. Recommended flow
 
@@ -36,22 +44,22 @@ This document summarizes what to expect when a station can be used both locally 
 3. **Remote reservation in progress**
    - Lab Gateway connects using LABUSER, which is a Remote Desktop Users account but is not automatically logged on by the hybrid profile. Local users should not sign in while remote reservations are active.
 4. **Reservation end**
-   - `release-session` signs out only LABUSER's remote RDP sessions, preserving a physical console session even when it also uses LABUSER. It does not reboot unless `--reboot` is explicitly supplied; a requested reboot is deferred while a local console session remains active.
+   - The matching reservation `release-session` signs out only LABUSER's remote RDP sessions, preserving a physical console session even when it also uses LABUSER. Administrative Release is rejected while a remote LABUSER session is active without a lease, because the Station cannot prove that it is unreserved. Release does not reboot unless `--reboot` is explicitly supplied; a requested reboot is deferred while a local console session remains active.
 
 ## 3. Grace parameters and messages
 
-- `prepare-session --guard-grace=<seconds>`: total deadline from showing the
-  first confirmation dialog through forced logoff (90 seconds by default;
-  values below 30 are clamped to 30). Confirmation time counts against it.
+- `prepare-session --guard-grace=<seconds>`: total handoff deadline (90 seconds
+  by default; values below 30 are clamped to 30). On Hybrid it starts with the
+  first confirmation dialog; on Dedicated it starts with the informational
+  warning. Confirmation time counts against the Hybrid deadline.
 - `prepare-session --guard-message="text"`: custom text shown to the
   local user.
-- `prepare-session --guard-silent` or `--guard-notify=no`: suppresses the
-  confirmation dialog. If a local session is active, Prepare fails safely
-  before logoff or cleanup.
-- `prepare-session --no-guard`: explicit administrative bypass that skips
-  confirmation and grace, then immediately evicts eligible local console
-  sessions if hybrid eviction is enabled. It does not let Prepare continue
-  with a conflicting session still active.
+- `prepare-session --guard-silent` or `--guard-notify=no`: on Hybrid, suppresses
+  the confirmation prompt and Prepare fails safely if a local session remains.
+  On Dedicated, these options do not suppress the informational warning.
+- `prepare-session --no-guard`: on Hybrid, explicitly skips confirmation and
+  grace, then immediately evicts eligible local console sessions if hybrid
+  eviction is enabled. Dedicated always warns and waits its grace period.
 - `session guard --grace=<seconds>` and `session guard --message="text"` are
   the corresponding options when invoking the guard directly. Use
   `session guard --silent` or `--no-notify` for a silent direct invocation.
@@ -65,26 +73,29 @@ and `notify` instead.
 Set `[Station] AllowLocalSessionEviction=false` in
 `labstation/data/station-profile.ini` to make hybrid Prepare fail safely while
 a local console session is active. The default is `true`, matching Linux's
-`station.allow_local_session_eviction` setting. The setting has no effect on a
-dedicated profile, where Prepare always refuses an unexpected local session.
+`station.allow_local_session_eviction` setting. The setting affects Hybrid
+only; Dedicated always warns and hands off every remaining local session.
 
 ## 4. "Local mode" signaling
 
 - The backend or the desktop panel can create `labstation/data/local-mode.flag`
   when a local user declares exclusive in-person use. Local mode is only
   available for the hybrid profile and expires after eight hours unless it is
-  disabled earlier. Lab Station and Lab Gateway both block preparation while
-  the flag is active. Enabling local mode also requires a successful session
-  inventory and no active reservation or remote LABUSER session.
-- A marker with an invalid or unrecognized timestamp remains active until an
-  operator clears it. Its file modification time is not used to infer expiry.
+  disabled earlier. Lab Station and Lab Gateway both block Hybrid preparation
+  while the flag is active. Enabling local mode also requires a successful
+  session inventory and no active reservation or remote LABUSER session.
+- On Hybrid, a marker with an invalid or unrecognized timestamp remains active
+  until an operator clears it. Its file modification time is not used to infer
+  expiry. Dedicated reports local mode disabled and clears or ignores stale
+  markers.
 - `status.json`/`telemetry/heartbeat.json` expose `localModeEnabled` so
   dashboards can reflect the state. The flag is checked by both the Station
   command and Gateway operator paths.
 
-The same state is visible in the Lab Station desktop panel. The **Local mode
-(on-site)** action toggles the flag, and the status report shows whether the
-station is currently reserved for local use. The screenshot is illustrative;
+The same state is visible in the Lab Station desktop panel on Hybrid stations.
+The **Local mode (on-site)** action toggles the flag; on Dedicated it is
+disabled because local mode is unsupported. The status report shows whether a
+Hybrid station is currently reserved for local use. The screenshot is illustrative;
 the displayed host and health values are taken from the workstation used to
 capture it.
 
@@ -96,14 +107,14 @@ capture it.
 
 - Follow the schedule/calendar published by Lab Gateway.
 - Save work frequently when a reservation start is approaching.
-- Use the Gateway power action when the station should be powered off; `release-session` ends remote LABUSER RDP sessions but does not reboot by default.
+- Use the Gateway power action when the station should be powered off; a matching reservation-bound `release-session` ends its remote LABUSER RDP session but does not reboot by default. Administrative Release cannot close an active remote LABUSER session without a lease.
 - Report recurring eviction messages so reservation windows can be tuned.
 
 ## 6. Suggested messaging
 
 Poster or email copy:
 
-> “This station is part of the remote lab. When you see a warning that a reservation is about to begin, save your work and log out. After ~90 seconds the session will close automatically to allow remote access.”
+> “This station may receive a remote reservation. If you are using it, save your work and choose whether to hand it off when prompted. If you allow the handoff, sign out during the grace period if you can. Declining or not responding keeps your session open and cancels the handoff, which may delay remote access.”
 
 These rules help hybrid stations keep sessions clean without ruling out occasional in-class use.
 
@@ -119,6 +130,7 @@ with `localModeEnabled`, `summary.ready`, and `lastForcedLogoff` from the
 status/heartbeat contracts. `sessions.localSessionActive` means that any
 interactive physical-console session exists, including LABUSER; remote RDP
 sessions are excluded regardless of account. Windows and Linux use that same
-meaning for the dedicated Prepare precheck and station execution. Lab Station
-refuses `prepare-session` while the local-mode flag is active and refuses to
-enable the flag during an active reservation or remote LABUSER session.
+meaning for the Station agent's Dedicated handoff and Hybrid confirmation
+policy. Lab Station refuses Hybrid `prepare-session` while local mode is active,
+reports local mode disabled on Dedicated, and refuses to enable local mode
+during an active reservation or remote LABUSER session.

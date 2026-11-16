@@ -27,7 +27,7 @@ authority for remote reservations and the per-host trust decision.
 
 | Profile | Intended use |
 |---|---|
-| `dedicated` | Remote laboratory workstation. LABUSER is used for remote sessions; AutoAdminLogon remains disabled and the profile applies dedicated restrictions. |
+| `dedicated` | Remote laboratory workstation. LABUSER is used for remote sessions; AutoAdminLogon remains disabled and local mode is unavailable. Prepare warns all local sessions, then hands the station to the reservation after the grace period without asking for confirmation. If a warning cannot be sent, Prepare leaves sessions open and fails safely. |
 | `hybrid` | Workstation shared with local users. AutoAdminLogon remains disabled, and local sessions can be protected during remote reservations. |
 
 The optional FMU Executor can accompany either profile. See

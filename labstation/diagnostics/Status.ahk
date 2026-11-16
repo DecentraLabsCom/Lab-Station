@@ -575,6 +575,7 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     }
 
     static BuildSessionSummary(entries, target) {
+        remoteLabUserSessionIds := []
         summary := Map(
             "active", false,
             "kind", "none",
@@ -584,6 +585,7 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             "localUserActive", false,
             "remoteSessionActive", false
         )
+        summary["remoteLabUserSessionIds"] := remoteLabUserSessionIds
         hasLabUserLocal := false
         hasLabUserRemote := false
         hasOtherLocal := false
@@ -592,6 +594,9 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         for entry in entries {
             if (this.IsPrepareLocalSession(entry))
                 summary["localSessionActive"] := true
+            if (this.EqualsUser(entry["user"], target) && this.IsRemoteSession(entry)
+                && StrLower(Trim(entry.Has("state") ? entry["state"] : "")) != "down")
+                remoteLabUserSessionIds.Push(entry["id"])
             if (!this.IsActiveSession(entry))
                 continue
 
@@ -701,6 +706,20 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
     }
 
     static IsLocalModeEnabled() {
+        if (this.GetStationProfile() != "hybrid") {
+            legacyFlag := LAB_STATION_LEGACY_DATA_DIR != ""
+                ? LAB_STATION_LEGACY_DATA_DIR "\local-mode.flag"
+                : ""
+            for path in [LAB_STATION_LOCAL_MODE_FLAG, legacyFlag] {
+                if (path = "" || !FileExist(path))
+                    continue
+                try {
+                    FileDelete(path)
+                } catch {
+                }
+            }
+            return false
+        }
         if (this.IsLocalModeFlagActive(LAB_STATION_LOCAL_MODE_FLAG))
             return true
         legacyFlag := LAB_STATION_LEGACY_DATA_DIR != ""

@@ -29,10 +29,13 @@ class LS_SessionGuard {
         notify := !options.Has("notify") || options["notify"]
         force := !options.Has("force") || options["force"]
         localOnly := options.Has("localOnly") && options["localOnly"]
+        allowRemoteLabUserSessionIds := options.Has("allowRemoteLabUserSessionIds")
+            ? options["allowRemoteLabUserSessionIds"] : []
+        requireAcknowledgement := options.Has("acknowledge") ? options["acknowledge"] : localOnly
         message := options.Has("message") && options["message"] != "" ? options["message"] : this.BuildDefaultMessage(grace)
 
         try {
-            targets := this.FindConflictingSessions(guardUser, localOnly)
+            targets := this.FindConflictingSessions(guardUser, localOnly, allowRemoteLabUserSessionIds)
         } catch as e {
             LS_LogWarning("Session guard: unable to read sessions - " . e.Message)
             this.LastRunRetryable := true
@@ -52,7 +55,7 @@ class LS_SessionGuard {
 
         guardStarted := A_TickCount
         guardDeadline := guardStarted + grace * 1000
-        if (localOnly) {
+        if (localOnly && requireAcknowledgement) {
             if (!notify) {
                 this.LastRunRetryable := true
                 this.LastRunMessage := "local-session acknowledgement is required, but the confirmation dialog is disabled; no session was closed. Enable it or use --no-guard as an explicit bypass."
@@ -64,7 +67,7 @@ class LS_SessionGuard {
                 remainingMs := guardDeadline - A_TickCount
                 if (remainingMs <= 0) {
                     try {
-                        currentTargets := this.FindConflictingSessions(guardUser, true)
+                        currentTargets := this.FindConflictingSessions(guardUser, true, allowRemoteLabUserSessionIds)
                     } catch as e {
                         this.LastRunRetryable := true
                         this.LastRunMessage := "session inventory unavailable after the confirmation deadline; no session was closed"
@@ -90,7 +93,7 @@ class LS_SessionGuard {
                 }
                 if (!this.ConfirmSession(session, message, Ceil(remainingMs / 1000))) {
                     try {
-                        currentTargets := this.FindConflictingSessions(guardUser, true)
+                        currentTargets := this.FindConflictingSessions(guardUser, true, allowRemoteLabUserSessionIds)
                     } catch as e {
                         this.LastRunRetryable := true
                         this.LastRunMessage := "session inventory unavailable after the confirmation dialog; no session was closed"
@@ -119,8 +122,16 @@ class LS_SessionGuard {
             }
         } else if (notify) {
             for session in targets {
-                if (!this.NotifySession(session, message, grace))
+                if (!this.NotifySession(session, message, grace)) {
                     this.LastRunWarning := true
+                    if (options.Has("requireNotice") && options["requireNotice"]) {
+                        this.LastRunRetryable := true
+                        this.LastRunMessage := "unable to notify a local session; no session was closed"
+                        this.LastRunFailureCode := "STATION_SESSION_NOTIFICATION_FAILED"
+                        LS_LogWarning("Session guard: unable to notify every local session; refusing automatic handoff")
+                        return false
+                    }
+                }
             }
         }
 
@@ -136,7 +147,7 @@ class LS_SessionGuard {
         }
         if (localOnly) {
             try {
-                currentTargets := this.FindConflictingSessions(guardUser, true)
+                currentTargets := this.FindConflictingSessions(guardUser, true, allowRemoteLabUserSessionIds)
             } catch as e {
                 LS_LogWarning("Session guard: unable to recheck local sessions - " . e.Message)
                 this.LastRunRetryable := true
@@ -150,6 +161,9 @@ class LS_SessionGuard {
                 return false
             }
         }
+        if (options.Has("abortOnRemoteLabUser") && options["abortOnRemoteLabUser"]
+            && this.AbortForRemoteLabUser(LS_AccountManager.DefaultUser, false, allowRemoteLabUserSessionIds))
+            return false
 
         result := true
         releaseStarted := false
@@ -160,6 +174,9 @@ class LS_SessionGuard {
                 this.LastRunRetryable := !releaseStarted
                 return false
             }
+            if (options.Has("abortOnRemoteLabUser") && options["abortOnRemoteLabUser"]
+                && this.AbortForRemoteLabUser(LS_AccountManager.DefaultUser, releaseStarted, allowRemoteLabUserSessionIds))
+                return false
             releaseStarted := true
             this.LastRunRetryable := false
             if (!this.LogoffSession(session, force))
@@ -168,15 +185,52 @@ class LS_SessionGuard {
         return result
     }
 
-    static FindConflictingSessions(guardUser := "", localOnly := false) {
+    static AbortForRemoteLabUser(guardUser, releaseStarted, allowRemoteLabUserSessionIds := []) {
+        try {
+            sessions := LS_SessionManager.GetPrepareRemoteLabUserSessions(guardUser)
+            for session in sessions {
+                id := session.Has("id") ? Trim(session["id"]) : ""
+                allowed := false
+                if (IsObject(allowRemoteLabUserSessionIds) && Type(allowRemoteLabUserSessionIds) = "Array") {
+                    for allowedId in allowRemoteLabUserSessionIds {
+                        if (id != "" && id = Trim(allowedId)) {
+                            allowed := true
+                            break
+                        }
+                    }
+                }
+                if (!allowed) {
+                    this.LastRunRetryable := !releaseStarted
+                    this.LastRunMessage := "a remote LABUSER session without Gateway authorization became active during the handoff"
+                    this.LastRunFailureCode := "STATION_REMOTE_SESSION_ACTIVE"
+                    LS_LogInfo("Session guard: an unapproved remote LABUSER session appeared before session release")
+                    return true
+                }
+            }
+            return false
+        } catch as e {
+            this.LastRunRetryable := !releaseStarted
+            this.LastRunMessage := "session inventory became unavailable before local session release"
+            this.LastRunFailureCode := "STATION_SESSION_QUERY_FAILED"
+            LS_LogWarning("Session guard: unable to verify remote LABUSER state before local session release - " . e.Message)
+            return true
+        }
+    }
+
+    static FindConflictingSessions(guardUser := "", localOnly := false, allowRemoteLabUserSessionIds := []) {
         guardUser := guardUser != "" ? guardUser : LS_AccountManager.DefaultUser
         targets := []
         for session in this.QuerySessions() {
             ; Prepare considers every physical-console session, including one
-            ; signed in as LABUSER. The managed account exemption applies only
-            ; to the general guard, where its remote lab session is expected.
+            ; signed in as LABUSER, plus only the remote LABUSER IDs authorized
+            ; by Gateway. The managed-account exemption applies to the general
+            ; guard, where its remote lab session is expected.
             if (localOnly) {
-                if (!LS_Status.IsPrepareLocalSession(session))
+                isLocal := LS_Status.IsPrepareLocalSession(session)
+                isAuthorizedRemote := this.IsAuthorizedRemoteLabUserSession(
+                    session, guardUser, allowRemoteLabUserSessionIds
+                )
+                if (!isLocal && !isAuthorizedRemote)
                     continue
             } else {
                 if (this.EqualsUser(session["user"], guardUser))
@@ -188,6 +242,22 @@ class LS_SessionGuard {
             targets.Push(session)
         }
         return targets
+    }
+
+    static IsAuthorizedRemoteLabUserSession(session, guardUser, allowIds) {
+        if (!IsObject(allowIds) || Type(allowIds) != "Array"
+            || !session.Has("id") || !session.Has("user")
+            || !this.EqualsUser(session["user"], guardUser)
+            || !LS_Status.IsRemoteSession(session))
+            return false
+        state := StrLower(Trim(session.Has("state") ? session["state"] : ""))
+        if (state = "down")
+            return false
+        for allowedId in allowIds {
+            if (Trim(session["id"]) = Trim(allowedId))
+                return true
+        }
+        return false
     }
 
     static SameSessionSnapshot(before, after) {

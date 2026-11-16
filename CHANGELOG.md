@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-11-16
+
+### Changed
+- Apply profile-specific Prepare handoffs: Hybrid requires confirmation when
+  session eviction is enabled; Dedicated warns, waits through the grace period,
+  and hands off without an accept/decline prompt.
+- Authorize residual remote LABUSER handoffs from Gateway reservation evidence
+  and exact OS session IDs; protect active reservation leases from unrelated
+  Prepare, Release, and local-mode actions.
+- Keep local mode Hybrid-only and disable its Panel control on Dedicated.
+
+### Fixed
+- Reconcile `recovery-required` leases with fresh lease-bound Release attempts,
+  preserving protected sessions and keeping lease admission closed until cleanup
+  succeeds.
+
 ## [3.7.0] - 2026-11-15
 
 ### Changed

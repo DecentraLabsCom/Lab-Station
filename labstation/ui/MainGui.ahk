@@ -6,8 +6,10 @@
 #Include ..\core\Logger.ahk
 #Include ..\core\Admin.ahk
 #Include ..\diagnostics\Status.ahk
+#Include ..\service\LeaseDispatcher.ahk
 #Include ..\service\Telemetry.ahk
 #Include ..\system\ServiceManager.ahk
+#Include ..\setup\Wizard.ahk
 #Include ConnectorsPanel.ahk
 
 ; Entry point for LabStation.exe gui
@@ -40,6 +42,7 @@ LS_BuildGui() {
     myGui.SetupChip := ""
     myGui.RefreshButton := ""
     myGui.LocalModeButton := ""
+    myGui.LocalModeAvailable := false
     myGui.ServiceStatusText := ""
     myGui.ServiceRestartButton := ""
     myGui.ConnectorsButton := ""
@@ -106,6 +109,7 @@ LS_BuildGui() {
 
     myGui.SetFont("s9 cFFFFFF")
     myGui.LocalModeButton := myGui.AddButton("x490 y200 w220 h34", "🔒 Enable local mode")
+    myGui.LocalModeButton.Enabled := false
     myGui.LocalModeButton.OnEvent("Click", LS_GuiToggleLocalMode_Handler)
 
     myGui.SetFont("s9 Bold c9CA3AF")
@@ -203,6 +207,7 @@ LS_GuiRefreshStatus(gui) {
     if (gui.HasProp("LocalModeButton") && gui.LocalModeButton) {
         gui.LocalModeButton.Text := localMode ? "🌐 Disable local mode" : "🔒 Enable local mode"
         hybridProfile := status.Has("stationProfile") && status["stationProfile"] = "hybrid"
+        gui.LocalModeAvailable := hybridProfile
         gui.LocalModeButton.Visible := hybridProfile || localMode
         if (gui.HasProp("LocalModeLabel") && gui.LocalModeLabel)
             gui.LocalModeLabel.Visible := hybridProfile || localMode
@@ -229,6 +234,8 @@ LS_GuiRefreshStatus(gui) {
 }
 
 LS_GuiBeginRefresh(gui) {
+    if (gui.HasProp("LocalModeAvailable"))
+        gui.LocalModeAvailable := false
     if (gui.HasProp("RefreshButton") && gui.RefreshButton) {
         gui.RefreshButton.Enabled := false
         gui.RefreshButton.Text := "Refreshing"
@@ -260,8 +267,12 @@ LS_GuiEndRefresh(gui) {
 
 LS_GuiSetQuickActionsEnabled(gui, enabled, includeService := true) {
     for propName in ["SetupButton", "LocalModeButton", "ConnectorsButton"] {
-        if (gui.HasProp(propName) && gui.%propName%)
-            gui.%propName%.Enabled := enabled
+        if (gui.HasProp(propName) && gui.%propName%) {
+            if (propName = "LocalModeButton")
+                gui.LocalModeButton.Enabled := enabled && gui.HasProp("LocalModeAvailable") && gui.LocalModeAvailable
+            else
+                gui.%propName%.Enabled := enabled
+        }
     }
     if (includeService && gui.HasProp("ServiceRestartButton") && gui.ServiceRestartButton)
         gui.ServiceRestartButton.Enabled := enabled

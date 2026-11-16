@@ -20,12 +20,19 @@ are refreshed once per minute, independently of queue processing.
 The setup wizard installs and starts the background task. It checks lease
 expiry on each service-loop iteration; the loop sleeps five seconds between
 iterations, so a long-running queued command can delay the next check. Keep the
-task running while reservation leases are active. The expiry watchdog retries a
-completed Release failure only when it is explicitly marked `retryable`, which
-is limited to failures before any session or FMU cleanup starts; it records
-each retry under a new operation ID. Partial cleanup failures and interrupted
-operations with unknown outcomes keep the station closed in
-`recovery-required` for operator reconciliation.
+task running while reservation leases are active. The expiry watchdog records
+each Release attempt under its own operation ID. Partial cleanup failures and
+interrupted operations with unknown outcomes keep the station closed in
+`recovery-required`; after expiry, a separate lease-bound Release reconciliation
+runs every 60 seconds until cleanup succeeds. A lease-bound Release failure
+can start this loop before expiry; a failed Prepare waits for reservation
+expiry before Release. A scheduled Gateway retry also uses a fresh lease-bound
+Release ID and protects local sessions before FMU cleanup. Neither reconciler
+replays the uncertain operation ID. Recovery waits for valid lease data, local
+mode off, and a known session inventory.
+Hybrid waits while any local user session is active; both profiles wait for
+active non-LABUSER sessions. Dedicated may continue past a local LABUSER
+session. Invalid lease identity or journal state requires operator repair.
 
 ## Input format
 

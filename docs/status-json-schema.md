@@ -81,15 +81,19 @@ read its `readiness` entry.
 
 The `sessions` object reports the Windows session classification used by the
 Gateway. `localSessionActive` means that an interactive physical-console
-session exists, regardless of account; this is the same signal used by Prepare
-and the Gateway's dedicated-profile precheck. `active` means that at least one active session is present. `kind` is
-`none`, `labuser-local`, `labuser-remote`, `local-user`, `remote-user`,
+session exists, regardless of account. Prepare and the Gateway's
+status validation use this summary; the Station uses the complete live
+inventory during Prepare, and the profile determines whether and how sessions
+are handed off. `active` means that at least one active session is present.
+`kind` is `none`, `labuser-local`, `labuser-remote`, `local-user`, `remote-user`,
 `mixed`, or `unknown`. `labUserActive` includes both local and remote LABUSER
 sessions; `labUserRemoteActive` is the narrower remote-LABUSER signal;
 therefore `labUserRemoteActive` implies `labUserActive`. `remoteSessionActive`
 means that any active remote Windows session exists and must not be confused
 with the identity of the platform user or reservation owner. `queryOk` reports
-whether Lab Station could query Windows sessions.
+whether Lab Station could query Windows sessions. `remoteLabUserSessionIds`
+contains the OS IDs for remote LABUSER sessions, including disconnected RDP
+sessions, so Gateway can authorize a specific unreserved-session handoff.
 
 ## Stable nested fields
 

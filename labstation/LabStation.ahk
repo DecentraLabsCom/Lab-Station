@@ -5,9 +5,9 @@
 #SingleInstance Force
 
 ;@Ahk2Exe-SetName LabStation
-;@Ahk2Exe-SetVersion 3.7.0
-;@Ahk2Exe-SetFileVersion 3.7.0
-;@Ahk2Exe-SetProductVersion 3.7.0
+;@Ahk2Exe-SetVersion 3.8.0
+;@Ahk2Exe-SetFileVersion 3.8.0
+;@Ahk2Exe-SetProductVersion 3.8.0
 
 #Include core\Config.ahk
 #Include core\Logger.ahk
@@ -393,6 +393,11 @@ LS_ParseSessionOptions(args) {
             opts["guardGrace"] := mg[1] + 0
         } else if RegExMatch(arg, "^--guard-message=(.+)$", &mm) {
             opts["guardMessage"] := mm[1]
+        } else if RegExMatch(arg, "^--unreserved-remote-labuser-sessions=(.+)$", &mr) {
+            if (opts.Has("unreservedRemoteLabUserSessionIds")
+                || !RegExMatch(mr[1], "^[A-Za-z0-9][A-Za-z0-9_.:-]*(,[A-Za-z0-9][A-Za-z0-9_.:-]*){0,31}$"))
+                throw Error("remote LABUSER session authorization is invalid")
+            opts["unreservedRemoteLabUserSessionIds"] := StrSplit(mr[1], ",")
         } else if (lower = "--guard-silent" || lower = "--guard-notify=no") {
             opts["guardNotify"] := false
         } else if (lower = "--guard-notify" || lower = "--guard-notify=yes") {
