@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [3.8.0] - 2026-11-16
+## [3.8.0] - 2026-11-17
 
 ### Changed
 - Apply profile-specific Prepare handoffs: Hybrid requires confirmation when

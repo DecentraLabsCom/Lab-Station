@@ -66,7 +66,7 @@ class LS_SessionManager {
                 : "unexpected local interactive session on dedicated station"
             return this.RecordPrepareFailure(started, user, reason, true)
         }
-        if (localSessionDecision = "evict") {
+        if (localSessionDecision = "evict" || localSessionDecision = "notify-evict") {
             if (profile = "dedicated" || profile = "server") {
                 if (!this.RunSessionGuard(options, true, true)) {
                     message := this.LastPrepareMessage != "" ? this.LastPrepareMessage : "session guard failed"
@@ -199,7 +199,7 @@ class LS_SessionManager {
         if (localSessionCount <= 0)
             return "continue"
         if (profile = "dedicated" || profile = "server")
-            return "evict"
+            return "notify-evict"
         if (profile = "hybrid" && allowEviction)
             return "evict"
         return "refuse"

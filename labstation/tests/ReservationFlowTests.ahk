@@ -304,7 +304,7 @@ TestPrepareLocalSessionPolicyMatchesSharedMatrix() {
     )
     LS_TestAssert(
         LS_SessionManager.PrepareLocalSessionDecision("dedicated", 1, false) = policy["dedicatedLocalSession"],
-        "dedicated stations refuse preparation while a local user is active"
+        "dedicated stations warn and automatically hand off active local users"
     )
     LS_TestAssert(
         LS_SessionManager.PrepareLocalSessionDecision("hybrid", 1, false) = policy["hybridLocalSessionWithoutAuthorization"],
