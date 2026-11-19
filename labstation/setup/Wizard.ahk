@@ -23,6 +23,10 @@ LS_RunSetupWizard() {
         LS_LogInfo("Setup wizard cancelled before profile selection")
         return false
     }
+    if (!LS_RegistryManager.EnsureRdpDisconnectedSessionLimit()) {
+        LS_LogError("Setup wizard stopped because the 180-second RDP disconnected-session safety limit could not be verified")
+        return false
+    }
     if (!LS_WizardSaveProfile(mode)) {
         LS_LogError("Setup wizard stopped because the selected station profile could not be saved safely")
         MsgBox "The selected station profile could not be applied safely.`n`nCheck " . LAB_STATION_LOG . " for details.", "Lab Station Setup", "OK Iconx"

@@ -55,10 +55,11 @@ The status document can also include the following diagnostic blocks:
 | `identity` | Lab account and local profile information. |
 | `firewall` | Whether inbound traffic defaults to Block, RDP/WinRM rules match their configured Gateway sources, and WinRM HTTP/5985 is blocked. |
 | `biosChecklist` | BIOS/UEFI Wake-on-LAN checks shown to the operator. |
-| `policy` | AutoAdminLogon, Remote Desktop Users, interactive-logon policy state and the configured `allowLocalSessionEviction` policy. Readiness expects AutoAdminLogon disabled and flags either a remaining LSA secret or plaintext Winlogon password; diagnostics never include the credential. |
+| `policy` | AutoAdminLogon, Remote Desktop Users, interactive-logon policy state, configured `allowLocalSessionEviction`, and effective RDP session limits. `rdpDisconnectedSession` reports `available`, `limitMs`, `source` (`server`, `groupPolicy`, or `default`), `sourceCode`, `ready`, and a display `message`; readiness requires exactly 180000 ms, leaving time after AppControl's 120-second reconnect grace for orderly closure. Readiness also expects AutoAdminLogon disabled and flags either a remaining LSA secret or plaintext Winlogon password; diagnostics never include credentials. |
 | `sessions` | Current sessions and the typed active-session summary. |
 | `fmuExecutor` | FMU Executor availability, endpoint health, local process state and configured port. Secrets are represented only by boolean state. |
 | `lastForcedLogoff` | The latest forced-logoff record, when one exists. |
+| `reservationDisconnectClose` | The latest Windows AppControl or Linux Station close result for a reservation, bound to its reservation key, laboratory, lease ID, and generation. It is published when orderly application/session cleanup completes and contains no secret values. |
 
 Unknown fields are allowed so that diagnostics can grow without invalidating
 consumers that only use the stable fields above.
@@ -91,7 +92,11 @@ sessions; `labUserRemoteActive` is the narrower remote-LABUSER signal;
 therefore `labUserRemoteActive` implies `labUserActive`. `remoteSessionActive`
 means that any active remote Windows session exists and must not be confused
 with the identity of the platform user or reservation owner. `queryOk` reports
-whether Lab Station could query Windows sessions. `remoteLabUserSessionIds`
+whether Lab Station could query Windows sessions. In Station Contract v3,
+`remoteClientConnected` reports an actively connected remote client and
+`remoteClientStateKnown` says whether that connection state was determined;
+they do not treat a disconnected desktop as a connected client.
+`remoteLabUserSessionIds`
 contains the OS IDs for remote LABUSER sessions, including disconnected RDP
 sessions, so Gateway can authorize a specific unreserved-session handoff.
 

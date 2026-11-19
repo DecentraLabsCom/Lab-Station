@@ -3,6 +3,7 @@
 ; ============================================================================
 ; Centralized configuration for AppControl
 ; ============================================================================
+#Include ..\..\labstation\core\RemoteSessionPolicy.ahk
 
 ; Configuration constants
 global POLL_INTERVAL_MS := 5000  ; Monitoring interval in milliseconds
@@ -11,6 +12,10 @@ global ACTIVATION_RETRIES := 3   ; Number of retries for window activation
 global VERBOSE_LOGGING  := false ; Set to true for detailed polling logs, false for events only
 global SILENT_ERRORS    := true  ; Set to true to suppress error MsgBox popups (log only)
 global PRODUCTION_MODE  := true ; Set to true to log only critical messages (errors, warnings, key events)
+global RDP_DISCONNECT_GRACE_MS := LAB_STATION_RDP_DISCONNECT_GRACE_SECONDS * 1000
+global CONTROLLER_DISCONNECT_GRACE_ACTIVE := false
+global CONTROLLER_DISCONNECT_GRACE_STARTED_TICK := 0
+global CONTROLLER_CLOSE_IN_PROGRESS := false
 
 ; Window management timings
 global WINDOW_STATE_TIMEOUT_MS := 1500      ; Max wait for minimize/restore/position operations
@@ -48,7 +53,7 @@ global customCloseY := 0
 global TEST_MODE := false
 
 ; RDP event monitoring
-global CloseOnEventIds := [23, 24, 39, 40]
+global RdpSessionEventIds := [23, 24, 25, 39, 40]
 global WTS_NOTIFICATIONS_ACTIVE := false  ; Track if WTS notifications are working
 
 ; Cooperative close handshake shared with the Lab Station service. The
@@ -63,6 +68,8 @@ global CONTROLLER_DATA_DIR := ControllerResolveDataDir()
 global CONTROLLER_PRESENCE_FILE := CONTROLLER_DATA_DIR "\controller-presence.txt"
 global CONTROLLER_CLOSE_REQUEST_FILE := CONTROLLER_DATA_DIR "\controller-close.request"
 global CONTROLLER_CLOSE_RESULT_FILE := CONTROLLER_DATA_DIR "\controller-close.result"
+global CONTROLLER_DISCONNECT_CLOSE_FILE := CONTROLLER_DATA_DIR "\reservation-disconnect-close.json"
+global CONTROLLER_LEASE_STATE_FILE := CONTROLLER_DATA_DIR "\reservation-lease-state.json"
 
 ControllerResolveDataDir() {
     local candidates, candidate

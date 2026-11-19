@@ -22,6 +22,58 @@ ControllerRegisterPresence() {
     OnExit(ControllerClearPresence)
 }
 
+ControllerRecordReservationDisconnectClose(success) {
+    global CONTROLLER_DISCONNECT_CLOSE_FILE, CONTROLLER_LEASE_STATE_FILE
+
+    try {
+        state := LS_ParseJson(FileRead(CONTROLLER_LEASE_STATE_FILE, "UTF-8"))
+    } catch {
+        Log("Could not read the active reservation lease after disconnect cleanup", "WARNING")
+        return false
+    }
+    if (Type(state) != "Map" || !state.Has("active") || Type(state["active"]) != "Map")
+        return false
+
+    lease := state["active"]
+    required := ["kind", "state", "reservationKey", "labId", "leaseId", "generation"]
+    for key in required {
+        if (!lease.Has(key))
+            return false
+    }
+    if (lease["kind"] != "reservation" || lease["state"] != "active"
+        || Type(lease["reservationKey"]) != "String" || lease["reservationKey"] = ""
+        || Type(lease["labId"]) != "String" || lease["labId"] = ""
+        || Type(lease["leaseId"]) != "String" || lease["leaseId"] = ""
+        || !IsInteger(lease["generation"]) || lease["generation"] < 1)
+        return false
+
+    completedAt := ControllerUtcTimestampMilliseconds()
+    record := Map(
+        "reservationKey", lease["reservationKey"],
+        "labId", lease["labId"],
+        "leaseId", lease["leaseId"],
+        "generation", lease["generation"],
+        "success", success,
+        "completedAt", completedAt,
+        "method", "app-control"
+    )
+    if (!ControllerWriteAtomic(CONTROLLER_DISCONNECT_CLOSE_FILE, LS_ToJson(record))) {
+        Log("Could not publish reservation disconnect-close completion", "WARNING")
+        return false
+    }
+    return true
+}
+
+ControllerUtcTimestampMilliseconds() {
+    stamp := A_NowUTC
+    millisecond := A_MSec
+    if (stamp != A_NowUTC) {
+        stamp := A_NowUTC
+        millisecond := A_MSec
+    }
+    return FormatTime(stamp, "yyyy-MM-ddTHH:mm:ss") . "." . Format("{:03}", millisecond) . "Z"
+}
+
 ControllerClearPresence(*) {
     global CONTROLLER_CLOSE_PRESENCE_TOKEN, CONTROLLER_PRESENCE_FILE
 
@@ -49,6 +101,8 @@ ControllerCheckCloseRequest(*) {
 
     if (CONTROLLER_CLOSE_REQUEST_HANDLED || !FileExist(CONTROLLER_CLOSE_REQUEST_FILE))
         return
+    if (CONTROLLER_CLOSE_IN_PROGRESS)
+        return
 
     try {
         token := Trim(FileRead(CONTROLLER_CLOSE_REQUEST_FILE, "UTF-8"))
@@ -68,15 +122,7 @@ ControllerCheckCloseRequest(*) {
     CONTROLLER_CLOSE_REQUEST_HANDLED := true
     Log("Cooperative controller close requested", "INFO")
 
-    success := false
-    try {
-        if (WORKSPACE_MODE)
-            success := ControllerCloseWorkspace("Lab Station release request")
-        else if (target != "")
-            success := ForceCloseWindow(target, 3)
-    } catch as e {
-        Log("Controller close failed: " . e.Message, "ERROR")
-    }
+    success := ControllerCloseManagedApps("Lab Station release request")
 
     ControllerWriteCloseResult(token, success)
     try FileDelete(CONTROLLER_CLOSE_REQUEST_FILE)
@@ -88,6 +134,31 @@ ControllerCheckCloseRequest(*) {
     }
 
     Log("Controlled lab application close did not complete; controller remains active", "ERROR")
+}
+
+ControllerCloseManagedApps(reason) {
+    global CONTROLLER_CLOSE_IN_PROGRESS, CONTROLLER_DISCONNECT_GRACE_ACTIVE
+    global WORKSPACE_MODE, target
+
+    if (CONTROLLER_CLOSE_IN_PROGRESS)
+        return false
+
+    CONTROLLER_CLOSE_IN_PROGRESS := true
+    CONTROLLER_DISCONNECT_GRACE_ACTIVE := false
+    SetTimer(ControllerDisconnectGraceExpired, 0)
+    success := false
+    try {
+        if (WORKSPACE_MODE)
+            success := ControllerCloseWorkspace(reason)
+        else if (target != "")
+            success := ForceCloseWindow(target, 3)
+    } catch as e {
+        Log("Controlled application close failed (" . reason . "): " . e.Message, "ERROR")
+    }
+
+    if (!success)
+        CONTROLLER_CLOSE_IN_PROGRESS := false
+    return success
 }
 
 ControllerCloseWorkspace(reason) {

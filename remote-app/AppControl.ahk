@@ -1,11 +1,14 @@
 ﻿; ============================================================================
 ; AppControl - Lab Application Controller for RDP Disconnect Handling
 ; ============================================================================
-; Manages one application or a manifest-driven workspace with automatic closure
-; on RDP disconnect or a Lab Station release request.
+; Manages one application or a manifest-driven workspace with a 120-second
+; reconnect grace after RDP disconnect and immediate cooperative release.
 ; ============================================================================
 
-#SingleInstance Force
+; Guacamole can launch the RemoteApp again when it reconnects to a disconnected
+; RDP session. Keep the original controller and its workspace alive in that
+; session instead of replacing it with a second launcher instance.
+#SingleInstance Ignore
 #Requires AutoHotkey v2.0
 ProcessSetPriority "High"
 

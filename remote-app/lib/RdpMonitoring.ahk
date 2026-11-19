@@ -9,7 +9,7 @@
 #Include CloseRequest.ahk
 
 ; Returns [EventRecordID, EventID] of the latest RDP events
-GetLatestRdpEventRecord(ids := [23, 24, 39, 40]) {
+GetLatestRdpEventRecord(ids := [23, 24, 25, 39, 40]) {
     record := QueryLatestRdpEventRecordViaApi(ids)
     if (record[1] != 0 || record[2] != 0)
         return record
@@ -159,9 +159,9 @@ QueryLatestRdpEventRecordViaWevtutil(ids) {
 
 ; Check for new RDP session events (fallback polling)
 CheckSessionEvents(*) {
-    global lastId, CloseOnEventIds, target, VERBOSE_LOGGING, WORKSPACE_MODE
+    global lastId, RdpSessionEventIds, VERBOSE_LOGGING, WORKSPACE_MODE
 
-    rec := GetLatestRdpEventRecord(CloseOnEventIds)
+    rec := GetLatestRdpEventRecord(RdpSessionEventIds)
     current := rec[1], evId := rec[2]
     
     if (VERBOSE_LOGGING) {
@@ -171,58 +171,108 @@ CheckSessionEvents(*) {
 
     if (current > 0 && current != lastId && evId > 0) {
         lastId := current
-        
-        if (WORKSPACE_MODE) {
-            Log("NEW EVENT DETECTED (Workspace)! Closing due to event ID: " . evId)
-            ControllerCloseWorkspace("RDP event " . evId)
-        } else {
-            Log("NEW EVENT DETECTED! Closing due to event ID: " . evId . " (RecordId " . current . ")")
-            ForceCloseWindow(target)
+
+        switch evId {
+            case 25:
+                ControllerCancelDisconnectGrace("RDP event 25")
+            case 24, 39, 40:
+                ControllerStartDisconnectGrace("RDP disconnect event " . evId)
+            case 23:
+                Log("RDP logoff event detected (RecordId " . current . ")", "INFO")
+                ControllerCloseForSessionEnd("RDP logoff event 23")
         }
-        ControllerClearPresence()
-        ExitApp
     }
 }
 
 ; Session change handler (WM_WTSSESSION_CHANGE)
 OnSessionChange(wParam, lParam, msg, hwnd) {
+    static WTS_REMOTE_CONNECT := 0x3
     static WTS_SESSION_REMOTE_DISCONNECT := 0x4
-    static WTS_SESSION_DISCONNECT := 0x5
     static WTS_SESSION_LOGOFF := 0x6
     static WTS_SESSION_LOCK := 0x7
 
-    global target, WORKSPACE_MODE
+    if (wParam = WTS_REMOTE_CONNECT) {
+        ControllerCancelDisconnectGrace("WTS remote reconnect")
+        return
+    }
 
-    if (wParam = WTS_SESSION_DISCONNECT
-     || wParam = WTS_SESSION_REMOTE_DISCONNECT
-     || wParam = WTS_SESSION_LOGOFF
-     || wParam = WTS_SESSION_LOCK) 
-    {
-        if (WORKSPACE_MODE) {
-            Log("WM_WTSSESSION_CHANGE (Workspace): early close on wParam=" . wParam)
-            ControllerCloseWorkspace("RDP session change " . wParam)
-        } else {
-            Log("WM_WTSSESSION_CHANGE: early close on wParam=" . wParam . " (pre-disconnect)")
-            ForceCloseWindow(target)
-        }
-        ControllerClearPresence()
-        ExitApp
+    if (wParam = WTS_SESSION_REMOTE_DISCONNECT) {
+        ControllerStartDisconnectGrace("WTS remote disconnect")
+        return
+    }
+
+    if (wParam = WTS_SESSION_LOGOFF || wParam = WTS_SESSION_LOCK) {
+        reason := wParam = WTS_SESSION_LOGOFF ? "Windows session logoff" : "Windows session lock"
+        ControllerCloseForSessionEnd(reason)
     }
 }
 
 ; Query end session handler (WM_QUERYENDSESSION - logoff/shutdown)
 OnQueryEndSession(wParam, lParam, msg, hwnd) {
-    global target, WORKSPACE_MODE
-    
-    if (WORKSPACE_MODE) {
-        Log("WM_QUERYENDSESSION (Workspace): attempting early close", "DEBUG")
-        ControllerCloseWorkspace("Windows session ending")
-    } else {
-        Log("WM_QUERYENDSESSION received: attempting early close", "DEBUG")
-        ForceCloseWindow(target)
+    ControllerCloseForSessionEnd("Windows session ending")
+}
+
+ControllerStartDisconnectGrace(reason) {
+    global CONTROLLER_DISCONNECT_GRACE_ACTIVE, CONTROLLER_CLOSE_IN_PROGRESS
+    global CONTROLLER_DISCONNECT_GRACE_STARTED_TICK
+    global RDP_DISCONNECT_GRACE_MS
+
+    if (CONTROLLER_CLOSE_IN_PROGRESS || CONTROLLER_DISCONNECT_GRACE_ACTIVE)
+        return
+
+    CONTROLLER_DISCONNECT_GRACE_ACTIVE := true
+    CONTROLLER_DISCONNECT_GRACE_STARTED_TICK := A_TickCount
+    SetTimer(ControllerDisconnectGraceExpired, -RDP_DISCONNECT_GRACE_MS)
+    Log(reason . "; keeping the lab workspace for " . (RDP_DISCONNECT_GRACE_MS // 1000)
+        . " seconds to allow the user to reconnect", "INFO")
+}
+
+ControllerCancelDisconnectGrace(reason) {
+    global CONTROLLER_DISCONNECT_GRACE_ACTIVE, CONTROLLER_CLOSE_IN_PROGRESS
+    global CONTROLLER_DISCONNECT_GRACE_STARTED_TICK, RDP_DISCONNECT_GRACE_MS
+
+    if (!CONTROLLER_DISCONNECT_GRACE_ACTIVE || CONTROLLER_CLOSE_IN_PROGRESS)
+        return
+
+    elapsedMs := A_TickCount - CONTROLLER_DISCONNECT_GRACE_STARTED_TICK
+    if (elapsedMs < 0)
+        elapsedMs += 4294967296
+    if (elapsedMs >= RDP_DISCONNECT_GRACE_MS) {
+        Log(reason . " arrived after the RDP reconnect grace expired; closing the controlled lab applications", "INFO")
+        ControllerDisconnectGraceExpired()
+        return
     }
+
+    SetTimer(ControllerDisconnectGraceExpired, 0)
+    CONTROLLER_DISCONNECT_GRACE_ACTIVE := false
+    CONTROLLER_DISCONNECT_GRACE_STARTED_TICK := 0
+    Log(reason . "; retained the existing lab workspace", "INFO")
+}
+
+ControllerDisconnectGraceExpired(*) {
+    global CONTROLLER_DISCONNECT_GRACE_ACTIVE, CONTROLLER_CLOSE_IN_PROGRESS
+    global CONTROLLER_DISCONNECT_GRACE_STARTED_TICK
+
+    if (!CONTROLLER_DISCONNECT_GRACE_ACTIVE || CONTROLLER_CLOSE_IN_PROGRESS)
+        return
+
+    CONTROLLER_DISCONNECT_GRACE_ACTIVE := false
+    CONTROLLER_DISCONNECT_GRACE_STARTED_TICK := 0
+    Log("RDP reconnection grace expired; closing the controlled lab applications", "INFO")
+    ControllerCloseForSessionEnd("RDP reconnection grace expired", true)
+}
+
+ControllerCloseForSessionEnd(reason, publishReservationDisconnectClose := false) {
+    global CONTROLLER_CLOSE_IN_PROGRESS
+
+    if (CONTROLLER_CLOSE_IN_PROGRESS)
+        return
+
+    success := ControllerCloseManagedApps(reason)
+    if (publishReservationDisconnectClose)
+        ControllerRecordReservationDisconnectClose(success)
     ControllerClearPresence()
-    ExitApp
+    ExitApp(success ? 0 : 1)
 }
 
 ; Setup RDP event monitoring (used by both modes)
@@ -247,8 +297,10 @@ SetupRdpMonitoring(hwnd) {
         WTS_NOTIFICATIONS_ACTIVE := false
         Log("WARNING: Could not register for session notifications - falling back to polling", "WARNING")
         
-        ; Initialize polling as fallback
-        lastId := 0
+        ; Set a baseline so an old event from before AppControl started is not
+        ; mistaken for a new disconnect.
+        baseline := GetLatestRdpEventRecord(RdpSessionEventIds)
+        lastId := baseline[1]
         SetTimer(CheckSessionEvents, POLL_INTERVAL_MS)
     }
 }

@@ -42,6 +42,7 @@ class LS_Status {
         data["summary"] := this.BuildSummary(data)
         ops := LS_ServiceState.GetOperationsSummary()
         data["operations"] := ops
+        data["reservationDisconnectClose"] := LS_ServiceState.ReadReservationDisconnectClose()
         data["lastForcedLogoff"] := ops.Has("lastForcedLogoff") ? ops["lastForcedLogoff"] : Map()
         data["localSessionActive"] := data["sessions"].Has("localSessionActive") ? data["sessions"]["localSessionActive"] : false
         data["localModeEnabled"] := this.IsLocalModeEnabled()
@@ -255,6 +256,7 @@ class LS_Status {
         policy["autoLogon"] := this.GetAutologonState(target)
         policy["remoteDesktopUsers"] := this.GetRemoteDesktopGroupState(target)
         policy["denyInteractive"] := this.GetDenyInteractiveState(target, rights)
+        policy["rdpDisconnectedSession"] := LS_RegistryManager.GetRdpDisconnectedSessionLimit()
         return policy
     }
 
@@ -566,6 +568,8 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
         info["hasOtherUsers"] := info["otherUsers"].Length > 0
         summary := this.BuildSessionSummary(entries, target)
         summary["queryOk"] := queryOk
+        summary["remoteClientConnected"] := summary["remoteSessionActive"]
+        summary["remoteClientStateKnown"] := queryOk
         if (!queryOk)
             summary["kind"] := "unknown"
         for key, value in summary
@@ -583,7 +587,9 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             "labUserActive", false,
             "labUserRemoteActive", false,
             "localUserActive", false,
-            "remoteSessionActive", false
+            "remoteSessionActive", false,
+            "remoteClientConnected", false,
+            "remoteClientStateKnown", false
         )
         summary["remoteLabUserSessionIds"] := remoteLabUserSessionIds
         hasLabUserLocal := false
@@ -800,6 +806,8 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("RDP firewall is not restricted to the configured Gateway sources")
         if (!data["remoteAppEnabled"])
             issues.Push("RemoteApp policy missing")
+        if (!data["policy"]["rdpDisconnectedSession"]["ready"])
+            issues.Push("RDP disconnected-session hard limit must be " . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS . " seconds")
         if (!data["winrm"]["ready"])
             issues.Push("WinRM not ready for Lab Gateway")
         if (data["legacyAppControlAutostart"])

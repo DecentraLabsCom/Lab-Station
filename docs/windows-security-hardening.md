@@ -99,6 +99,15 @@ AppControl entry. The Windows RemoteApp policy
 `fAllowUnlistedRemotePrograms=1` remains required for that launcher; Guacamole's
 connection configuration determines which RemoteApp command is started.
 
+AppControl keeps the managed applications open for a 120-second reconnection
+window, then closes them and records completion for Ops Worker. Setup sets and
+verifies Windows' disconnected-session hard limit at 180 seconds so that
+orderly close can finish before Windows terminates the session as a fallback.
+If a Group Policy controls a different disconnected-session limit, Lab Station
+leaves it untouched and reports that the policy must set `MaxDisconnectionTime`
+to `180000` ms. See the
+[RemoteApp Windows configuration guide](../remote-app/windows-configuration.md#disconnected-session-reconnection-window).
+
 ## Guacamole file transfer and local file permissions
 
 DecentraLabs RDP connections use Guacamole's `enable-drive` option to provide

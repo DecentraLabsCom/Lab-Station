@@ -2,8 +2,15 @@
 
 AppControl is the RemoteApp launcher bundled with Lab Station. It starts one
 lab application or a manifest-configured workspace of two to five applications,
-keeps their windows usable, and closes them when the RDP session ends or Lab
-Station requests a cooperative close.
+keeps their windows usable, and allows 120 seconds for an RDP reconnection
+before closing the controlled applications. A reconnect during that window
+keeps the existing workspace; Windows logoff/lock and a Lab Station release
+request close it immediately.
+
+After the 120-second grace expires, AppControl publishes a non-secret,
+reservation-bound close result in Station status. Windows retains the
+disconnected session for up to 180 seconds so that this orderly close can
+finish before the operating system's hard cleanup limit.
 
 Use this component directly when configuring an Apache Guacamole Remote App.
 For station setup, diagnostics, WinRM, Wake-on-LAN, and the background service,
@@ -184,13 +191,15 @@ Source defaults are in `remote-app\lib\Config.ahk`:
 | `POLL_INTERVAL_MS` | `5000` | Event-log polling fallback interval. |
 | `STARTUP_TIMEOUT` | `20` seconds | Maximum wait for an application window. |
 | `ACTIVATION_RETRIES` | `3` | Window activation retries. |
+| `RDP_DISCONNECT_GRACE_MS` | `120000` | Keep managed apps open for 120 seconds after RDP disconnect; reconnect cancels the timer. |
 | `AUTO_BROWSER_KIOSK` | `true` | Adds browser kiosk/private flags in single mode. |
 | `VERBOSE_LOGGING` | `false` | Adds detailed polling entries to the log. |
 | `SILENT_ERRORS` | `true` | Logs errors without opening error dialogs. |
 
-RDP session events use WTS notifications first and event IDs `23`, `24`, `39`,
-and `40` as the polling fallback. Change these defaults only when the target
-lab application or Windows image requires it.
+RDP session events use WTS notifications first and event IDs `23`, `24`, `25`,
+`39`, and `40` as the polling fallback. Event `25` cancels the disconnect
+grace after reconnection. Change these defaults only when the target lab
+application or Windows image requires it.
 
 ## Guacamole configuration
 

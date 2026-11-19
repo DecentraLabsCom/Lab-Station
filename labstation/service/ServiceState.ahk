@@ -53,6 +53,32 @@ class LS_ServiceState {
         return summary
     }
 
+    static ReadReservationDisconnectClose() {
+        global LAB_STATION_CONTROLLER_DISCONNECT_CLOSE_FILE
+        if (!FileExist(LAB_STATION_CONTROLLER_DISCONNECT_CLOSE_FILE))
+            return Map()
+        try {
+            record := LS_ParseJson(FileRead(LAB_STATION_CONTROLLER_DISCONNECT_CLOSE_FILE, "UTF-8"))
+        } catch {
+            return Map()
+        }
+        if (Type(record) != "Map")
+            return Map()
+        for key in ["reservationKey", "labId", "leaseId", "generation", "success", "completedAt", "method"] {
+            if (!record.Has(key))
+                return Map()
+        }
+        if (Type(record["reservationKey"]) != "String" || record["reservationKey"] = ""
+            || Type(record["labId"]) != "String" || record["labId"] = ""
+            || Type(record["leaseId"]) != "String" || record["leaseId"] = ""
+            || !IsInteger(record["generation"]) || record["generation"] < 1
+            || (record["success"] != true && record["success"] != false)
+            || Type(record["completedAt"]) != "String" || record["completedAt"] = ""
+            || record["method"] != "app-control")
+            return Map()
+        return record
+    }
+
     static WriteSection(section, record) {
         record := this.NormalizeRecord(record)
         for key, value in record {
