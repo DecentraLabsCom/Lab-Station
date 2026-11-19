@@ -9,10 +9,13 @@ global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-ReservationFlowTests-" A_TickCount
 global ORIGINAL_STATE_FILE := LAB_STATION_SERVICE_STATE_FILE
 global ORIGINAL_LOCAL_MODE_FLAG := LAB_STATION_LOCAL_MODE_FLAG
+global ORIGINAL_PROFILE_FILE := LAB_STATION_PROFILE_FILE
 
 DirCreate(TEST_ROOT)
 LAB_STATION_SERVICE_STATE_FILE := TEST_ROOT "\service-state.ini"
 LAB_STATION_LOCAL_MODE_FLAG := TEST_ROOT "\local-mode.flag"
+LAB_STATION_PROFILE_FILE := TEST_ROOT "\station-profile.ini"
+IniWrite("server", LAB_STATION_PROFILE_FILE, "Station", "Profile")
 
 RunReservationFlowTests()
 
@@ -31,8 +34,18 @@ class RecordingSessionManager extends LS_SessionManager {
     static prepareRemoteSessionSnapshots := []
     static prepareRemoteSessionSnapshotIndex := 0
 
-    static GetPrepareLocalSessions(managedUser) {
-        return []
+    static GetPrepareLocalSessions(managedUser, authorizedRemoteLabUserIds := []) {
+        sessions := []
+        for session in this.prepareRemoteSessions {
+            id := session.Has("id") ? Trim(session["id"]) : ""
+            for allowedId in authorizedRemoteLabUserIds {
+                if (id != "" && id = Trim(allowedId)) {
+                    sessions.Push(session)
+                    break
+                }
+            }
+        }
+        return sessions
     }
 
     static GetPrepareRemoteLabUserSessions(managedUser) {
@@ -62,8 +75,25 @@ class RecordingSessionManager extends LS_SessionManager {
         try FileDelete(LAB_STATION_SERVICE_STATE_FILE)
     }
 
-    static RunSessionGuard(options) {
+    static RunSessionGuard(options, localOnly := false, forceGuard := false) {
         this.calls.Push(Map("name", "guard", "options", options))
+        if (this.guardResult && options.Has("unreservedRemoteLabUserSessionIds")) {
+            allowedIds := options["unreservedRemoteLabUserSessionIds"]
+            remaining := []
+            for session in this.prepareRemoteSessions {
+                id := session.Has("id") ? Trim(session["id"]) : ""
+                authorized := false
+                for allowedId in allowedIds {
+                    if (id != "" && id = Trim(allowedId)) {
+                        authorized := true
+                        break
+                    }
+                }
+                if (!authorized)
+                    remaining.Push(session)
+            }
+            this.prepareRemoteSessions := remaining
+        }
         return this.guardResult
     }
 
@@ -140,13 +170,18 @@ class RecordingProfileCleaner extends LS_SessionManager {
 }
 
 class FailingInventorySessionManager extends LS_SessionManager {
-    static GetPrepareLocalSessions(managedUser) {
+    static GetPrepareRemoteLabUserSessions(managedUser) {
+        return []
+    }
+
+    static GetPrepareLocalSessions(managedUser, authorizedRemoteLabUserIds := []) {
         throw Error("synthetic session inventory failure")
     }
 }
 
 RunReservationFlowTests() {
-    global ORIGINAL_STATE_FILE, ORIGINAL_LOCAL_MODE_FLAG, LAB_STATION_SERVICE_STATE_FILE, LAB_STATION_LOCAL_MODE_FLAG, TEST_ROOT
+    global ORIGINAL_STATE_FILE, ORIGINAL_LOCAL_MODE_FLAG, ORIGINAL_PROFILE_FILE
+    global LAB_STATION_SERVICE_STATE_FILE, LAB_STATION_LOCAL_MODE_FLAG, LAB_STATION_PROFILE_FILE, TEST_ROOT
 
     try {
         TestPrepareSessionSuccess()
@@ -170,6 +205,7 @@ RunReservationFlowTests() {
 
     LAB_STATION_SERVICE_STATE_FILE := ORIGINAL_STATE_FILE
     LAB_STATION_LOCAL_MODE_FLAG := ORIGINAL_LOCAL_MODE_FLAG
+    LAB_STATION_PROFILE_FILE := ORIGINAL_PROFILE_FILE
     try DirDelete(TEST_ROOT, true)
 
     if (TEST_FAILURES > 0) {
@@ -275,11 +311,19 @@ TestLeasePrepareKeepsItsReservationFlow() {
         "state", "Active"
     )]
 
-    success := RecordingSessionManager.PrepareSession(Map("user", "LABUSER"))
+    success := RecordingSessionManager.PrepareSession(Map(
+        "user", "LABUSER",
+        "unreservedRemoteLabUserSessionIds", ["4"]
+    ))
 
     LS_TestAssert(success, "reservation Prepare keeps its existing lifecycle when LABUSER is connected")
-    LS_TestAssert(RecordingSessionManager.calls.Length > 0,
-        "reservation Prepare continues its configured cleanup flow")
+    AssertCallSequence([
+        "guard",
+        "close-controller",
+        "fmu-cleanup",
+        "clear-profile",
+        "reset-controller"
+    ], "reservation Prepare hands off the authorized remote session before cleanup")
 }
 
 TestPrepareSessionFailsClosedWhenSessionInventoryUnavailable() {

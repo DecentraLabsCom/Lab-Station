@@ -21,7 +21,7 @@ if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
 
 $testExitCode = [int]$process.ExitCode
 if ($testExitCode -ne 0) {
-    Write-Error "AutoHotkey test failed with exit code $testExitCode`: $resolvedTest"
+    Write-Host "AutoHotkey test failed with exit code $testExitCode`: $resolvedTest" -ForegroundColor Red
     exit $testExitCode
 }
 

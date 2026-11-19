@@ -380,6 +380,7 @@ statusFixture := Map(
     "winrm", Map("ready", true),
     "legacyAppControlAutostart", false,
     "policy", Map(
+        "rdpDisconnectedSession", Map("ready", true),
         "autoLogon", Map("enabled", false, "userMatches", false, "secretStored", false, "plaintextPasswordPresent", false),
         "remoteDesktopUsers", Map("labUserPresent", true, "otherMembers", []),
         "denyInteractive", Map("configured", false, "labUserDenied", false)
@@ -401,6 +402,7 @@ dedicatedStatusFixture := Map(
     "winrm", Map("ready", true),
     "legacyAppControlAutostart", false,
     "policy", Map(
+        "rdpDisconnectedSession", Map("ready", true),
         "autoLogon", Map("enabled", false, "userMatches", false, "secretStored", false, "plaintextPasswordPresent", false),
         "remoteDesktopUsers", Map("labUserPresent", true, "otherMembers", []),
         "denyInteractive", Map("configured", true, "labUserDenied", false)

@@ -4,6 +4,14 @@
 #Include ..\service\SessionGuard.ahk
 #Include ParityTestSupport.ahk
 
+class LS_SessionManager {
+    static remoteLabUserSessions := []
+
+    static GetPrepareRemoteLabUserSessions(managedUser) {
+        return this.remoteLabUserSessions
+    }
+}
+
 global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-SessionGuardTests-" A_TickCount
 global ORIGINAL_AUDIT_FILE := LAB_STATION_SESSION_AUDIT_FILE
@@ -214,7 +222,7 @@ TestNoConflictingSessionsDoesNotWaitOrLogoff() {
     result := RecordingSessionGuard.Run(Map("user", "LABUSER", "grace", 60))
 
     LS_TestAssert(result, "session guard succeeds when there are no conflicting sessions")
-    LS_TestAssert(matrix["sessionSafety"]["localSession"] = "protect-unless-authorized", "shared policy preserves a local user's own session")
+    LS_TestAssert(matrix["sessionSafety"]["localSession"] = "profile-specific", "shared policy uses the configured profile-specific local-session handoff")
     LS_TestAssert(RecordingSessionGuard.waits.Length = 0, "session guard does not wait without conflicting sessions")
     LS_TestAssert(RecordingSessionGuard.notifications.Length = 0, "session guard does not notify without conflicting sessions")
     LS_TestAssert(RecordingSessionGuard.logoffs.Length = 0, "session guard does not log off without conflicting sessions")

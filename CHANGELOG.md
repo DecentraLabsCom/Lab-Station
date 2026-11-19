@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-11-19
+
+### Added
+- Keep disconnected RDP workspaces available for a 120-second reconnect window
+  during reservations, then report the ordered AppControl close to Gateway.
+- Configure and verify a 180-second Windows disconnected-session limit so the
+  orderly application close can finish before the operating-system fallback.
+
 ## [3.8.0] - 2026-11-17
 
 ### Changed
