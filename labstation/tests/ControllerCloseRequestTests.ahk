@@ -3,7 +3,7 @@
 #Include ..\..\remote-app\lib\Config.ahk
 #Include ..\..\remote-app\lib\Utils.ahk
 #Include ..\..\remote-app\lib\WindowClosing.ahk
-#Include ..\..\remote-app\lib\CloseRequest.ahk
+#Include ..\..\remote-app\lib\RdpMonitoring.ahk
 #Include ..\service\SessionGuard.ahk
 #Include ..\service\FmuExecutor.ahk
 #Include ..\service\SessionManager.ahk

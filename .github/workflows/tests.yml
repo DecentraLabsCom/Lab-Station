@@ -176,6 +176,10 @@ jobs:
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\ControllerCloseRequestTests.ahk
 
+      - name: Run LabStation RDP disconnect grace tests
+        shell: powershell
+        run: .\scripts\run-ahk-test.ps1 labstation\tests\RdpMonitoringTests.ahk
+
       - name: Run LabStation command queue tests
         shell: powershell
         run: .\scripts\run-ahk-test.ps1 labstation\tests\CommandQueueTests.ahk
