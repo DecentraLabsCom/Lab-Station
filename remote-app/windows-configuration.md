@@ -28,20 +28,23 @@ Windows' disconnected-session hard limit is 240 seconds (`240000` milliseconds),
 leaving time for the Gateway retry before Windows terminates the session as a
 final fallback.
 
-The wizard uses Windows' `Win32_TSSessionSetting.TimeLimit` interface, then
-reads the effective `DisconnectedSessionLimit` back to confirm the result. If a
-Group Policy controls a different value, setup leaves it unchanged and stops.
-Have the policy administrator set `MaxDisconnectionTime` to `240000` ms in the
-controlling policy, then run Setup again. The standard policy editor's list may
-not include a four-minute choice, so a centrally managed policy may need an
-exact registry policy value instead. Microsoft documents the effective limit
-in milliseconds in the
+The wizard first uses Windows' `Win32_TSSessionSetting.TimeLimit` interface and
+reads the effective `DisconnectedSessionLimit` back to confirm the result. If
+that method does not apply the value and Group Policy is not already controlling
+it, Setup writes the local `MaxDisconnectionTime` policy value and verifies the
+effective setting again. If a Group Policy already controls a different value,
+Setup leaves it unchanged and stops. Have the policy administrator set
+`MaxDisconnectionTime` to `240000` ms in the controlling policy, then run Setup
+again. The standard policy editor's list may not include a four-minute choice,
+so a centrally managed policy may need an exact registry policy value instead.
+Microsoft documents the effective limit in milliseconds in the
 [`Win32_TSSessionSetting` reference](https://learn.microsoft.com/en-us/windows/win32/termserv/win32-tssessionsetting)
 and the policy registry path and units in its
 [RDS session-timeout troubleshooting guide](https://learn.microsoft.com/en-us/troubleshoot/windows-server/remote/troubleshoot-unexpected-rds-session-locks-or-disconnections).
 
 Run `LabStation.exe status-json` to inspect `policy.rdpDisconnectedSession`;
-`ready` is true only when Windows reports exactly `240000` ms. The report
+`limitMs` is a JSON number, including when Windows reports `0` for unlimited,
+and `ready` is true only when Windows reports exactly `240000` ms. The report
 includes the setting source but no credentials. `reservationDisconnectClose`
 contains the latest non-secret close result, bound to its reservation and
 Station lease generation.

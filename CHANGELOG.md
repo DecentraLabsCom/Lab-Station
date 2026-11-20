@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+- Preserve zero RDP disconnected-session limits as numeric JSON and let Setup
+  fall back to the local policy value when the WMI setter does not persist it.
+- Report the effective RDP limit and source when Setup cannot verify the
+  required safety window, and include the observed limit in readiness issues.
+
 ## [3.10.0] - 2026-11-20
 
 ### Changed

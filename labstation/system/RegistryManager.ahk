@@ -87,30 +87,48 @@ class LS_RegistryManager {
         script := "$ErrorActionPreference = 'Stop'`n"
             . "$setting = Get-CimInstance -Namespace 'root/CIMV2/TerminalServices' -ClassName Win32_TSSessionSetting | Where-Object { $_.TerminalName -eq 'RDP-Tcp' } | Select-Object -First 1`n"
             . "if ($null -eq $setting) { throw 'RDP-Tcp session settings were not found' }`n"
-            . "$result = Invoke-CimMethod -InputObject $setting -MethodName TimeLimit -Arguments @{ SessionLimitType = 'DisconnectedSessionLimit'; ValueLimit = [uint32]" . LAB_STATION_RDP_DISCONNECTED_LIMIT_MS . " }`n"
+            . "$result = Invoke-CimMethod -InputObject $setting -MethodName TimeLimit -Arguments @{ SessionLimitType = 'DisconnectedSessionLimit'; ValueLimit = [uint32]" . LAB_STATION_RDP_DISCONNECTED_LIMIT_MS . " } -ErrorAction Stop`n"
+            . "if ($null -eq $result -or $null -eq $result.ReturnValue) { throw 'TimeLimit returned no result code' }`n"
             . "if ([int]$result.ReturnValue -ne 0) { throw ('TimeLimit returned ' + $result.ReturnValue) }`n"
             . "$setting = Get-CimInstance -Namespace 'root/CIMV2/TerminalServices' -ClassName Win32_TSSessionSetting | Where-Object { $_.TerminalName -eq 'RDP-Tcp' } | Select-Object -First 1`n"
             . "Write-Output ('RDP_SESSION_LIMIT|' + [long]$setting.DisconnectedSessionLimit + '|' + [int]$setting.PolicySourceDisconnectedSessionLimit)"
-        capture := LS_RunPowerShellCapture(script, "Set RDP disconnected-session limit")
-        if (capture["exitCode"] != 0) {
-            detail := LS_CaptureDetail(capture)
-            LS_LogError("Cannot set the RDP disconnected-session limit"
+        setCapture := LS_RunPowerShellCapture(script, "Set RDP disconnected-session limit")
+        if (setCapture["exitCode"] != 0) {
+            detail := LS_CaptureDetail(setCapture)
+            LS_LogWarning("Win32_TSSessionSetting did not confirm the RDP disconnected-session limit"
                 . (detail != "" ? ": " . detail : ""))
-            MsgBox "Lab Station could not set the RDP disconnected-session limit to "
-                . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS . " seconds. Setup cannot continue; check the Lab Station log for details.", "Lab Station Setup", "OK Iconx"
-            return false
+        } else {
+            LS_LogInfo("Win32_TSSessionSetting response: " . Trim(setCapture["stdout"]))
         }
 
         verified := this.GetRdpDisconnectedSessionLimit()
+        if (verified["available"] && !verified["ready"] && verified["sourceCode"] != 1) {
+            if (this.SetLocalRdpDisconnectedSessionPolicy())
+                verified := this.GetRdpDisconnectedSessionLimit()
+        }
+
         if (!verified["available"] || !verified["ready"]) {
-            LS_LogError("RDP disconnected-session policy verification failed after setting " . LAB_STATION_RDP_DISCONNECTED_LIMIT_MS . " ms")
-            MsgBox "Windows did not report the required " . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS
-                . "-second RDP disconnected-session limit after the change. Setup cannot guarantee the cleanup safety window.`n`nCheck domain/local Group Policy and run LabStation status-json for diagnostics.", "Lab Station Setup", "OK Iconx"
+            actual := verified["message"] . " (source=" . verified["source"] . ")"
+            LS_LogError("RDP disconnected-session limit verification failed after WMI and local policy attempts; Windows reports " . actual)
+            MsgBox "Windows still reports " . actual . " after Lab Station attempted to set the disconnected-session limit to "
+                . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS . " seconds. Setup cannot guarantee the cleanup safety window.`n`nCheck the controlling Group Policy and the Lab Station log for details.", "Lab Station Setup", "OK Iconx"
             return false
         }
 
         LS_LogInfo("RDP disconnected-session limit set and verified: " . verified["limitMs"] . " ms")
         return true
+    }
+
+    static SetLocalRdpDisconnectedSessionPolicy() {
+        basePath := "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+        try {
+            RegWrite(LAB_STATION_RDP_DISCONNECTED_LIMIT_MS, "REG_DWORD", basePath, "MaxDisconnectionTime")
+            LS_LogWarning("Win32_TSSessionSetting did not apply the RDP disconnected-session limit; wrote the Lab Station local policy fallback")
+            return true
+        } catch as e {
+            LS_LogError("Cannot write the local RDP disconnected-session policy fallback: " . e.Message)
+            return false
+        }
     }
 
     static RemoveRunEntry(valueName) {

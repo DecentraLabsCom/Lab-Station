@@ -35,6 +35,11 @@ class LS_Status {
         data["biosChecklist"] := this.GetBiosChecklist()
         rights := this.GetSecurityRights()
         data["policy"] := this.GetPolicyInformation(data["identity"], rights)
+        rdpSessionLimit := data["policy"]["rdpDisconnectedSession"]
+        if (rdpSessionLimit["limitMs"] = 0)
+            rdpSessionLimit["limitMs"] := LS_JsonNumberValue(0)
+        if (rdpSessionLimit["sourceCode"] = 0)
+            rdpSessionLimit["sourceCode"] := LS_JsonNumberValue(0)
         data["policy"]["allowLocalSessionEviction"] := this.IsLocalSessionEvictionAllowed()
         data["sessions"] := this.GetSessionInformation(data["identity"])
         data["fmuExecutor"] := this.GetFmuExecutorStatus()
@@ -806,8 +811,12 @@ if (`$code -eq 0) {{ 'LABSTATION_USER_EXISTS' }}
             issues.Push("RDP firewall is not restricted to the configured Gateway sources")
         if (!data["remoteAppEnabled"])
             issues.Push("RemoteApp policy missing")
-        if (!data["policy"]["rdpDisconnectedSession"]["ready"])
-            issues.Push("RDP disconnected-session hard limit must be " . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS . " seconds")
+        rdpLimit := data["policy"]["rdpDisconnectedSession"]
+        if (!rdpLimit["ready"]) {
+            observedLimit := rdpLimit["available"] ? rdpLimit["message"] : "unavailable"
+            issues.Push("RDP disconnected-session hard limit is " . observedLimit . "; must be "
+                . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS . " seconds")
+        }
         if (!data["winrm"]["ready"])
             issues.Push("WinRM not ready for Lab Gateway")
         if (data["legacyAppControlAutostart"])
