@@ -415,8 +415,10 @@ TestReleaseSessionWithoutReboot() {
         "close-controller",
         "query-sessions",
         "logoff-remote",
+        "query-sessions",
+        "query-sessions",
         "fmu-cleanup"
-    ], "release-session attempts a controlled application close before logging off the remote lab-user session")
+    ], "release-session verifies the Dedicated local-session inventory before FMU cleanup")
     LS_TestAssert(RecordingSessionManager.LastReleaseMetadata["fmuCleanupCompleted"],
         "release-session records completed FMU cleanup")
 
@@ -437,6 +439,8 @@ TestReleaseSessionFallsBackToLogoffWhenAppControlCloseFails() {
         "close-controller",
         "query-sessions",
         "logoff-remote",
+        "query-sessions",
+        "query-sessions",
         "fmu-cleanup"
     ], "scheduled release uses session logoff as its fallback after the AppControl attempt")
 }
@@ -495,11 +499,13 @@ TestReleaseSessionWithReboot() {
         "close-controller",
         "query-sessions",
         "logoff-remote",
+        "query-sessions",
+        "query-sessions",
         "fmu-cleanup",
         "query-sessions",
         "reboot"
     ], "release-session reboots after confirming the local console is clear")
-    LS_TestAssert(RecordingSessionManager.calls[7]["timeout"] = 0, "release-session requests reboot only after the safe-session wait")
+    LS_TestAssert(RecordingSessionManager.calls[9]["timeout"] = 0, "release-session requests reboot only after the safe-session wait")
 
     state := LS_ServiceState.ReadSection("release-session")
     LS_TestAssert(state.Has("rebootRequested") && state["rebootRequested"], "release-session records the explicit reboot request")
@@ -508,7 +514,7 @@ TestReleaseSessionWithReboot() {
     LS_TestAssert(state.Has("rebootTimeout") && state["rebootTimeout"] = 15, "release-session records reboot timeout")
 }
 
-TestReleaseSessionDefersRebootForLocalConsoleUser() {
+TestReleaseSessionClosesDedicatedLocalUserButKeepsLocalLabUser() {
     RecordingSessionManager.Reset()
     RecordingSessionManager.releaseSessions.Push(Map(
         "user", "LABUSER",
@@ -529,15 +535,15 @@ TestReleaseSessionDefersRebootForLocalConsoleUser() {
         "rebootTimeout", 0
     ))
 
-    LS_TestAssert(success, "remote release succeeds when an instructor remains at the console")
-    LS_TestAssert(RecordingSessionManager.releaseSessions.Length = 2
+    LS_TestAssert(success, "release succeeds after closing the local instructor session")
+    LS_TestAssert(RecordingSessionManager.releaseSessions.Length = 1
         && RecordingSessionManager.releaseSessions[1]["user"] = "LABUSER"
         && RecordingSessionManager.releaseSessions[1]["session"] = "console"
-        && RecordingSessionManager.releaseSessions[2]["user"] = "Instructor",
-        "release-session preserves the local LABUSER and instructor console sessions")
-    LS_TestAssert(RecordingSessionManager.calls.Length = 6
-        && RecordingSessionManager.calls[6]["name"] = "query-sessions",
-        "release-session defers reboot while a physical console session remains")
+        && RecordingSessionManager.LastReleaseLocalSessionCount = 1,
+        "Dedicated Release closes local non-LABUSER sessions and preserves local LABUSER")
+    LS_TestAssert(RecordingSessionManager.calls.Length = 10
+        && RecordingSessionManager.calls[10]["name"] = "query-sessions",
+        "release-session defers reboot while the protected local LABUSER session remains")
     state := LS_ServiceState.ReadSection("release-session")
     LS_TestAssert(state.Has("rebootRequested") && state["rebootRequested"], "release-session records the explicit reboot request")
     LS_TestAssert(state.Has("rebootScheduled") && !state["rebootScheduled"], "deferred reboot is not reported as scheduled")
@@ -568,6 +574,8 @@ TestReleaseFMUCleanupFailureBlocksReboot() {
         "close-controller",
         "query-sessions",
         "logoff-remote",
+        "query-sessions",
+        "query-sessions",
         "fmu-cleanup"
     ], "release-session does not reboot after FMU cleanup fails")
     LS_TestAssert(RecordingSessionManager.LastReleaseMetadata["rebootDeferred"],

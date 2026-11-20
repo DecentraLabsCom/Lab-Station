@@ -27,12 +27,13 @@ interrupted operations with unknown outcomes keep the station closed in
 runs every 60 seconds until cleanup succeeds. A lease-bound Release failure
 can start this loop before expiry; a failed Prepare waits for reservation
 expiry before Release. A scheduled Gateway retry also uses a fresh lease-bound
-Release ID and protects local sessions before FMU cleanup. Neither reconciler
-replays the uncertain operation ID. Recovery waits for valid lease data, local
-mode off, and a known session inventory.
-Hybrid waits while any local user session is active; both profiles wait for
-active non-LABUSER sessions. Dedicated may continue past a local LABUSER
-session. Invalid lease identity or journal state requires operator repair.
+Release ID and applies the profile-specific local-session policy before FMU
+cleanup. Dedicated Release closes active local non-LABUSER console sessions;
+Hybrid recovery waits for local sessions to end. Neither reconciler replays the
+uncertain operation ID. Recovery waits for valid lease data, local mode off,
+and a known session inventory. Both profiles wait for active remote non-LABUSER
+sessions. Dedicated may continue past a local LABUSER session. Invalid lease
+identity or journal state requires operator repair.
 
 ## Input format
 

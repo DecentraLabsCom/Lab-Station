@@ -23,6 +23,7 @@ class LS_SessionManager {
     static LastReleaseMessage := ""
     static LastReleaseMetadata := Map()
     static LastReleaseSessionCount := 0
+    static LastReleaseLocalSessionCount := 0
 
     static PrepareSession(options := Map(), manualMaintenance := false) {
         this.LastPrepareExitCode := 0
@@ -264,6 +265,7 @@ class LS_SessionManager {
         this.LastReleaseMessage := "station released"
         this.LastReleaseMetadata := Map()
         this.LastReleaseSessionCount := 0
+        this.LastReleaseLocalSessionCount := 0
         LS_LogInfo("Release-session started")
         started := A_TickCount
         user := options.Has("user") ? options["user"] : ""
@@ -281,25 +283,39 @@ class LS_SessionManager {
         fmuCleanupAttempted := false
         fmuCleanupCompleted := false
         releaseBlockReason := ""
+        localReleaseCode := ""
+        localReleaseReason := ""
         ok := remoteSessionReleased
         if (!remoteSessionReleased) {
             this.LastReleaseExitCode := 2
             if (this.LastReleaseMessage = "station released")
                 this.LastReleaseMessage := "Release-session failed because a remote LABUSER session could not be released"
         } else {
-            if (protectLocalSessions)
+            if (LS_Status.GetStationProfile() = "dedicated" || LS_Status.GetStationProfile() = "server") {
+                localRelease := this.LogoffDedicatedLocalSessions()
+                this.LastReleaseLocalSessionCount := localRelease["count"]
+                if (!localRelease["ok"]) {
+                    ok := false
+                    this.LastReleaseExitCode := 2
+                    this.LastReleaseRetryable := localRelease["retryable"]
+                    localReleaseCode := localRelease["code"]
+                    localReleaseReason := localRelease["reason"]
+                    this.LastReleaseMessage := "Release-session could not close a dedicated local session: " . localReleaseReason
+                }
+            }
+            if (ok && protectLocalSessions)
                 releaseBlockReason := this.AutomaticExpiryReleaseBlockReason()
-            if (releaseBlockReason != "") {
+            if (ok && releaseBlockReason != "") {
                 ok := false
                 this.LastReleaseExitCode := 2
                 this.LastReleaseMessage := "Release-session paused because protected user activity appeared before FMU cleanup"
-            } else {
+            } else if (ok) {
                 fmuCleanupAttempted := true
                 fmuCleanupCompleted := this.CleanFmuExecutorState()
             }
             if (releaseBlockReason != "") {
                 LS_LogWarning("Automatic Release deferred before FMU cleanup: " . releaseBlockReason)
-            } else if (!fmuCleanupCompleted) {
+            } else if (fmuCleanupAttempted && !fmuCleanupCompleted) {
                 ok := false
                 this.LastReleaseExitCode := 2
                 this.LastReleaseMessage := "Release-session failed because FMU Executor sessions or temporary state could not be fully cleaned"
@@ -313,6 +329,7 @@ class LS_SessionManager {
             if (!ok) {
                 rebootDeferred := true
                 rebootReason := releaseBlockReason != "" ? releaseBlockReason
+                    : localReleaseReason != "" ? localReleaseReason
                     : remoteSessionReleased ? "FMU Executor cleanup failed" : "remote session release failed"
                 this.LastReleaseExitCode := 2
             } else if (rebootTimeout < 0 || rebootTimeout > 3600) {
@@ -346,11 +363,16 @@ class LS_SessionManager {
             "user", user,
             "fmuCleanupAttempted", fmuCleanupAttempted,
             "fmuCleanupCompleted", fmuCleanupCompleted,
+            "closedLocalSessions", this.LastReleaseLocalSessionCount,
             "retryable", this.LastReleaseRetryable
         )
         if (releaseBlockReason != "") {
             details["reason"] := releaseBlockReason
             details["code"] := "STATION_RELEASE_PROTECTED_SESSION_ACTIVE"
+        }
+        if (localReleaseReason != "") {
+            details["reason"] := localReleaseReason
+            details["code"] := localReleaseCode
         }
         if (options.Has("reboot")) {
             details["rebootRequested"] := options["reboot"]
@@ -363,6 +385,7 @@ class LS_SessionManager {
             details["rebootTimeout"] := rebootTimeout
         this.LastReleaseMetadata := Map(
             "closedLabuserSessions", this.LastReleaseSessionCount,
+            "closedLocalSessions", this.LastReleaseLocalSessionCount,
             "fmuCleanupAttempted", fmuCleanupAttempted,
             "fmuCleanupCompleted", fmuCleanupCompleted,
             "retryable", this.LastReleaseRetryable
@@ -370,6 +393,10 @@ class LS_SessionManager {
         if (releaseBlockReason != "") {
             this.LastReleaseMetadata["reason"] := releaseBlockReason
             this.LastReleaseMetadata["code"] := "STATION_RELEASE_PROTECTED_SESSION_ACTIVE"
+        }
+        if (localReleaseReason != "") {
+            this.LastReleaseMetadata["reason"] := localReleaseReason
+            this.LastReleaseMetadata["code"] := localReleaseCode
         }
         this.LastReleaseMetadata["rebootRequested"] := options.Has("reboot") && options["reboot"]
         this.LastReleaseMetadata["rebootScheduled"] := rebootScheduled
@@ -580,7 +607,7 @@ class LS_SessionManager {
                 continue
             }
             if (StrLower(sessionName) = "console") {
-                if (profile = "hybrid" || !LS_SessionGuard.EqualsUser(user, LS_AccountManager.DefaultUser))
+                if (profile = "hybrid" || user = "")
                     return "a protected local session is active"
                 continue
             }
@@ -599,6 +626,7 @@ class LS_SessionManager {
             "reason", reason,
             "retryable", true,
             "closedLabuserSessions", 0,
+            "closedLocalSessions", 0,
             "fmuCleanupAttempted", false,
             "fmuCleanupCompleted", false
         )
@@ -622,6 +650,80 @@ class LS_SessionManager {
             if (state = "disc" || state = "down" || (state = "" && (!session.Has("user") || session["user"] = "")))
                 continue
             result.Push(session)
+        }
+        return result
+    }
+
+    static GetDedicatedLocalReleaseSessions(sessions) {
+        result := []
+        for session in this.GetActiveConsoleSessions(sessions) {
+            if (!session.Has("user") || Trim(session["user"]) = ""
+                || LS_SessionGuard.EqualsUser(session["user"], LS_AccountManager.DefaultUser))
+                continue
+            result.Push(session)
+        }
+        return result
+    }
+
+    static LogoffDedicatedLocalSessions() {
+        result := Map("ok", true, "count", 0, "retryable", false, "code", "", "reason", "")
+        try {
+            targets := this.GetDedicatedLocalReleaseSessions(this.GetReleaseSessionInventory())
+        } catch as e {
+            result["ok"] := false
+            result["retryable"] := true
+            result["code"] := "STATION_SESSION_QUERY_FAILED"
+            result["reason"] := "session inventory is unavailable: " . e.Message
+            return result
+        }
+        for session in targets {
+            try {
+                latestTargets := this.GetDedicatedLocalReleaseSessions(this.GetReleaseSessionInventory())
+            } catch as e {
+                result["ok"] := false
+                result["retryable"] := true
+                result["code"] := "STATION_SESSION_QUERY_FAILED"
+                result["reason"] := "session inventory became unavailable before local logoff: " . e.Message
+                return result
+            }
+            if (!LS_SessionGuard.SameSessionSnapshot(targets, latestTargets)) {
+                result["ok"] := false
+                result["retryable"] := true
+                result["code"] := "STATION_SESSION_CHANGED"
+                result["reason"] := "local session inventory changed during Release"
+                return result
+            }
+            if (!LS_SessionGuard.SessionSnapshotContains(latestTargets, session["id"]))
+                continue
+            if (!this.LogoffRemoteSession(session)) {
+                result["ok"] := false
+                result["retryable"] := true
+                result["code"] := "STATION_SESSION_TERMINATION_FAILED"
+                result["reason"] := "unable to log off local user " . session["user"]
+                return result
+            }
+            result["count"] += 1
+        }
+
+        try {
+            remaining := this.GetDedicatedLocalReleaseSessions(this.GetReleaseSessionInventory())
+        } catch as e {
+            result["ok"] := false
+            result["retryable"] := true
+            result["code"] := "STATION_SESSION_QUERY_FAILED"
+            result["reason"] := "session inventory is unavailable after local logoff: " . e.Message
+            return result
+        }
+        if (!LS_SessionGuard.SameSessionSnapshot(targets, remaining)) {
+            result["ok"] := false
+            result["retryable"] := true
+            result["code"] := "STATION_SESSION_CHANGED"
+            result["reason"] := "local session inventory changed during Release"
+        } else if (remaining.Length > 0) {
+            result["ok"] := false
+            result["retryable"] := true
+            result["code"] := "STATION_SESSION_TERMINATION_FAILED"
+            result["reason"] := "a local non-LABUSER session remains active"
         }
         return result
     }
@@ -895,12 +997,12 @@ if (`$p) {{ `$p.LocalPath }}
             LS_LogWarning("Unable to log off active session for " . session["user"] . ": invalid session ID")
             return false
         }
-        exitCode := LS_RunCommand(Format("logoff {1}", sessionId), "Logoff remote LABUSER session " . sessionId)
+        exitCode := LS_RunCommand(Format("logoff {1}", sessionId), "Logoff session " . sessionId)
         if (exitCode != 0) {
-            LS_LogWarning("Unable to log off active session for " . session["user"] . " (exit=" . exitCode . ")")
+            LS_LogWarning("Unable to log off session for " . session["user"] . " (exit=" . exitCode . ")")
             return false
         }
-        LS_LogInfo("Remote LABUSER session " . sessionId . " logged off")
+        LS_LogInfo("Session " . sessionId . " logged off")
         return true
     }
 

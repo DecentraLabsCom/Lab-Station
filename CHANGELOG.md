@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-11-21
+
 ### Fixed
+- On Dedicated, release local non-LABUSER console sessions during both
+  reservation-bound and administrative Release while preserving local LABUSER.
 - Preserve zero RDP disconnected-session limits as numeric JSON and let Setup
   fall back to the local policy value when the WMI setter does not persist it.
 - Report the effective RDP limit and source when Setup cannot verify the

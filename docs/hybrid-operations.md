@@ -44,7 +44,7 @@ This document summarizes what to expect when a station can be used both locally 
 3. **Remote reservation in progress**
    - Lab Gateway connects using LABUSER, which is a Remote Desktop Users account but is not automatically logged on by the hybrid profile. Local users should not sign in while remote reservations are active.
 4. **Reservation end**
-   - The matching reservation `release-session` attempts the cooperative AppControl close, then signs out only LABUSER's remote RDP sessions, preserving a physical console session even when it also uses LABUSER. Gateway may use the same command for early disconnect cleanup; that path leaves the booking active for a later reconnect. Administrative Release is rejected while a remote LABUSER session is active without a lease, because the Station cannot prove that it is unreserved. Release does not reboot unless `--reboot` is explicitly supplied; a requested reboot is deferred while a local console session remains active.
+   - The matching reservation `release-session` attempts the cooperative AppControl close, then signs out LABUSER's remote RDP sessions. Dedicated also signs out active local console users other than LABUSER; Hybrid preserves its local console session, and a local LABUSER session remains signed in on either profile. Gateway may use the same command for early disconnect cleanup; that path leaves the booking active for a later reconnect. Administrative Release is rejected while a remote LABUSER session is active without a lease, because the Station cannot prove that it is unreserved. Release does not reboot unless `--reboot` is explicitly supplied; a requested reboot is deferred while a local console session remains active.
 
 ## 3. Grace parameters and messages
 
