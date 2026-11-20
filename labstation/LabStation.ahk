@@ -5,9 +5,9 @@
 #SingleInstance Force
 
 ;@Ahk2Exe-SetName LabStation
-;@Ahk2Exe-SetVersion 3.9.0
-;@Ahk2Exe-SetFileVersion 3.9.0
-;@Ahk2Exe-SetProductVersion 3.9.0
+;@Ahk2Exe-SetVersion 3.10.0
+;@Ahk2Exe-SetFileVersion 3.10.0
+;@Ahk2Exe-SetProductVersion 3.10.0
 
 #Include core\Config.ahk
 #Include core\Logger.ahk

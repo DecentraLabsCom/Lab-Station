@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-11-20
+
 ### Changed
 - Give reservation disconnect cleanup one local retry 25 seconds after its
   first attempt, matching Linux and preserving time for Gateway's 180-second
