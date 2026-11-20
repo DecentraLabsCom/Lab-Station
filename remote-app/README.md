@@ -8,9 +8,17 @@ keeps the existing workspace; Windows logoff/lock and a Lab Station release
 request close it immediately.
 
 After the 120-second grace expires, AppControl publishes a non-secret,
-reservation-bound close result in Station status. Windows retains the
-disconnected session for up to 180 seconds so that this orderly close can
-finish before the operating system's hard cleanup limit.
+reservation-bound close result in Station status. When the applications close
+and that result is published, AppControl also logs off its disconnected RDP
+desktop. If application close, result publication, or desktop logoff fails,
+AppControl keeps the disconnected desktop and makes one local retry 25 seconds
+after the first attempt began (normally about 145 seconds after disconnect).
+If the retry also fails, it leaves the desktop for the Gateway's
+`release-session` retry after 180 seconds. If the final success record cannot
+be written after Windows has accepted the logoff request, Gateway still
+performs that retry and the desktop may already be closing. Windows'
+240-second disconnected-session limit remains the final operating-system
+fallback.
 
 Use this component directly when configuring an Apache Guacamole Remote App.
 For station setup, diagnostics, WinRM, Wake-on-LAN, and the background service,
@@ -192,6 +200,7 @@ Source defaults are in `remote-app\lib\Config.ahk`:
 | `STARTUP_TIMEOUT` | `20` seconds | Maximum wait for an application window. |
 | `ACTIVATION_RETRIES` | `3` | Window activation retries. |
 | `RDP_DISCONNECT_GRACE_MS` | `120000` | Keep managed apps open for 120 seconds after RDP disconnect; reconnect cancels the timer. |
+| `RDP_DISCONNECT_CLOSE_RETRY_MS` | `25000` | Retry a failed reservation disconnect close once, 25 seconds after the first attempt began. |
 | `AUTO_BROWSER_KIOSK` | `true` | Adds browser kiosk/private flags in single mode. |
 | `VERBOSE_LOGGING` | `false` | Adds detailed polling entries to the log. |
 | `SILENT_ERRORS` | `true` | Logs errors without opening error dialogs. |

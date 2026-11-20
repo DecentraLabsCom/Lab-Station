@@ -7,6 +7,7 @@ global TEST_FAILURES := 0
 global TEST_ROOT := A_Temp "\LabStation-RdpMonitoringTests-" A_TickCount
 global ORIGINAL_DISCONNECT_CLOSE_FILE := CONTROLLER_DISCONNECT_CLOSE_FILE
 global ORIGINAL_LEASE_STATE_FILE := CONTROLLER_LEASE_STATE_FILE
+global PRODUCTION_MODE := true
 
 DirCreate(TEST_ROOT)
 CONTROLLER_DISCONNECT_CLOSE_FILE := TEST_ROOT "\reservation-disconnect-close.json"
@@ -74,17 +75,20 @@ RunDisconnectChildAndAssert(mode, expectedReason) {
     reportPath := TEST_ROOT "\" mode "-report.json"
     leasePath := TEST_ROOT "\" mode "-lease.json"
     markerPath := TEST_ROOT "\" mode "-close.txt"
+    logoffPath := TEST_ROOT "\" mode "-logoff.txt"
     try FileDelete(reportPath)
     try FileDelete(markerPath)
+    try FileDelete(logoffPath)
     FileAppend('{"active":{"kind":"reservation","state":"active","reservationKey":"reservation-1","labId":"42","leaseId":"lease-1","generation":7}}', leasePath, "UTF-8")
 
     childScript := A_ScriptDir "\RdpMonitoringDisconnectChild.ahk"
     command := '"' . A_AhkPath . '" /ErrorStdOut "' . childScript . '" "'
-        . mode . '" "' . reportPath . '" "' . leasePath . '" "' . markerPath . '"'
+        . mode . '" "' . reportPath . '" "' . leasePath . '" "' . markerPath . '" "' . logoffPath . '"'
     exitCode := RunWait(command, , "Hide")
     LS_TestAssert(exitCode = 0, mode . " child exits successfully after controlled close; exit=" . exitCode)
     LS_TestAssert(FileExist(reportPath), mode . " writes the reservation disconnect-close report")
     LS_TestAssert(FileExist(markerPath), mode . " invokes the controlled application close handler")
+    LS_TestAssert(FileExist(logoffPath), mode . " requests a test logoff through the injected handler")
 
     if (FileExist(reportPath)) {
         report := LS_ParseJson(FileRead(reportPath, "UTF-8"))

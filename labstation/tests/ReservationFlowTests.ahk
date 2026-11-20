@@ -193,6 +193,8 @@ RunReservationFlowTests() {
         TestPrepareLocalSessionPolicyMatchesSharedMatrix()
         TestPrepareCleanupClearsSharedEphemeralCategories()
         TestReleaseSessionWithoutReboot()
+        TestReleaseSessionFallsBackToLogoffWhenAppControlCloseFails()
+        TestDisconnectReleaseStopsWhenAppControlCloseFails()
         TestReleaseTargetsOnlyRemoteLabUserSessions()
         TestReleaseSessionWithReboot()
         TestReleaseSessionDefersRebootForLocalConsoleUser()
@@ -410,15 +412,53 @@ TestReleaseSessionWithoutReboot() {
     LS_TestAssert(success, "release-session succeeds without reboot")
     AssertCallSequence([
         "query-sessions",
+        "close-controller",
+        "query-sessions",
         "logoff-remote",
         "fmu-cleanup"
-    ], "release-session closes only the remote lab-user session by default")
+    ], "release-session attempts a controlled application close before logging off the remote lab-user session")
     LS_TestAssert(RecordingSessionManager.LastReleaseMetadata["fmuCleanupCompleted"],
         "release-session records completed FMU cleanup")
 
     state := LS_ServiceState.ReadSection("release-session")
     LS_TestAssert(state.Has("success") && state["success"], "release-session records success")
     LS_TestAssert(!state.Has("rebootRequested"), "release-session omits reboot metadata when not requested")
+}
+
+TestReleaseSessionFallsBackToLogoffWhenAppControlCloseFails() {
+    RecordingSessionManager.Reset()
+    RecordingSessionManager.closeResult := false
+
+    success := RecordingSessionManager.ReleaseSession(Map("user", "LABUSER"))
+
+    LS_TestAssert(success, "scheduled release continues with session logoff when AppControl close fails")
+    AssertCallSequence([
+        "query-sessions",
+        "close-controller",
+        "query-sessions",
+        "logoff-remote",
+        "fmu-cleanup"
+    ], "scheduled release uses session logoff as its fallback after the AppControl attempt")
+}
+
+TestDisconnectReleaseStopsWhenAppControlCloseFails() {
+    RecordingSessionManager.Reset()
+    RecordingSessionManager.closeResult := false
+    RecordingSessionManager.releaseSessions[1]["state"] := "Disc"
+
+    success := RecordingSessionManager.ReleaseSession(Map(
+        "user", "LABUSER",
+        "requireRdpDisconnected", true
+    ))
+
+    LS_TestAssert(!success, "disconnect release reports a failed controlled application close")
+    LS_TestAssert(RecordingSessionManager.LastReleaseRetryable,
+        "disconnect release keeps the lease available for a safe retry")
+    AssertCallSequence([
+        "query-sessions",
+        "query-sessions",
+        "close-controller"
+    ], "disconnect release does not log off or clean FMU state when AppControl close is unconfirmed")
 }
 
 TestReleaseTargetsOnlyRemoteLabUserSessions() {
@@ -452,12 +492,14 @@ TestReleaseSessionWithReboot() {
     LS_TestAssert(success, "release-session succeeds with reboot")
     AssertCallSequence([
         "query-sessions",
+        "close-controller",
+        "query-sessions",
         "logoff-remote",
         "fmu-cleanup",
         "query-sessions",
         "reboot"
     ], "release-session reboots after confirming the local console is clear")
-    LS_TestAssert(RecordingSessionManager.calls[5]["timeout"] = 0, "release-session requests reboot only after the safe-session wait")
+    LS_TestAssert(RecordingSessionManager.calls[7]["timeout"] = 0, "release-session requests reboot only after the safe-session wait")
 
     state := LS_ServiceState.ReadSection("release-session")
     LS_TestAssert(state.Has("rebootRequested") && state["rebootRequested"], "release-session records the explicit reboot request")
@@ -493,8 +535,8 @@ TestReleaseSessionDefersRebootForLocalConsoleUser() {
         && RecordingSessionManager.releaseSessions[1]["session"] = "console"
         && RecordingSessionManager.releaseSessions[2]["user"] = "Instructor",
         "release-session preserves the local LABUSER and instructor console sessions")
-    LS_TestAssert(RecordingSessionManager.calls.Length = 4
-        && RecordingSessionManager.calls[4]["name"] = "query-sessions",
+    LS_TestAssert(RecordingSessionManager.calls.Length = 6
+        && RecordingSessionManager.calls[6]["name"] = "query-sessions",
         "release-session defers reboot while a physical console session remains")
     state := LS_ServiceState.ReadSection("release-session")
     LS_TestAssert(state.Has("rebootRequested") && state["rebootRequested"], "release-session records the explicit reboot request")
@@ -522,6 +564,8 @@ TestReleaseFMUCleanupFailureBlocksReboot() {
         && !RecordingSessionManager.LastReleaseMetadata["fmuCleanupCompleted"],
         "release records FMU cleanup failure")
     AssertCallSequence([
+        "query-sessions",
+        "close-controller",
         "query-sessions",
         "logoff-remote",
         "fmu-cleanup"
@@ -557,9 +601,11 @@ TestReleaseSessionFailureStillRecordsFailure() {
 
     LS_TestAssert(!success, "release-session reports failure when logoff fails")
     LS_TestAssert(RecordingSessionManager.LastReleaseExitCode = 2, "failed remote-session release is a hard failure")
-    LS_TestAssert(!RecordingSessionManager.LastReleaseMetadata["retryable"],
-        "an attempted remote-session logoff failure requires reconciliation")
+    LS_TestAssert(RecordingSessionManager.LastReleaseMetadata["retryable"],
+        "a failed logoff can be retried after the remaining sessions are checked")
     AssertCallSequence([
+        "query-sessions",
+        "close-controller",
         "query-sessions",
         "logoff-remote"
     ], "release-session never reboots after remote logoff fails")

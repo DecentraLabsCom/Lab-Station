@@ -13,8 +13,12 @@ global VERBOSE_LOGGING  := false ; Set to true for detailed polling logs, false 
 global SILENT_ERRORS    := true  ; Set to true to suppress error MsgBox popups (log only)
 global PRODUCTION_MODE  := true ; Set to true to log only critical messages (errors, warnings, key events)
 global RDP_DISCONNECT_GRACE_MS := LAB_STATION_RDP_DISCONNECT_GRACE_SECONDS * 1000
+global RDP_DISCONNECT_CLOSE_RETRY_MS := LAB_STATION_RDP_DISCONNECT_CLOSE_RETRY_SECONDS * 1000
 global CONTROLLER_DISCONNECT_GRACE_ACTIVE := false
 global CONTROLLER_DISCONNECT_GRACE_STARTED_TICK := 0
+global CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING := false
+global CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS := 0
+global CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK := 0
 global CONTROLLER_CLOSE_IN_PROGRESS := false
 
 ; Window management timings

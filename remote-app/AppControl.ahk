@@ -34,6 +34,10 @@ try {
 #Include lib\SingleAppMode.ahk
 #Include lib\WorkspaceMode.ahk
 
+; Only the production AppControl runtime may request WTS logoff of its own
+; session. Tests leave this disabled and inject a non-destructive handler.
+global CONTROLLER_ALLOW_CURRENT_SESSION_LOGOFF := true
+
 global APP_VERSION := "3.0.0"
 Log("AppControl v" . APP_VERSION . " starting")
 

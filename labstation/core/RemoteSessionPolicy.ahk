@@ -3,10 +3,14 @@
 if (!IsSet(LAB_STATION_RDP_DISCONNECT_GRACE_SECONDS))
     LAB_STATION_RDP_DISCONNECT_GRACE_SECONDS := 120
 
-; Give AppControl time to close controlled applications after its reconnect
-; grace expires before Windows applies its disconnected-session hard limit.
+if (!IsSet(LAB_STATION_RDP_DISCONNECT_CLOSE_RETRY_SECONDS))
+    LAB_STATION_RDP_DISCONNECT_CLOSE_RETRY_SECONDS := 25
+
+; This is the final operating-system fallback. After the 120-second grace,
+; AppControl gets one local retry 25 seconds after its first close attempt;
+; the extra limit leaves time for Gateway retry if both local attempts fail.
 if (!IsSet(LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS))
-    LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS := LAB_STATION_RDP_DISCONNECT_GRACE_SECONDS + 60
+    LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS := LAB_STATION_RDP_DISCONNECT_GRACE_SECONDS + 120
 
 if (!IsSet(LAB_STATION_RDP_DISCONNECTED_LIMIT_MS))
     LAB_STATION_RDP_DISCONNECTED_LIMIT_MS := LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS * 1000

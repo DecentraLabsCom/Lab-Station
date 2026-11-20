@@ -9,6 +9,7 @@
 #Include Config.ahk
 #Include Utils.ahk
 #Include WindowClosing.ahk
+#Include ..\..\labstation\core\Json.ahk
 
 ControllerRegisterPresence() {
     global CONTROLLER_CLOSE_PRESENCE_TOKEN, CONTROLLER_DATA_DIR, CONTROLLER_PRESENCE_FILE
@@ -61,6 +62,117 @@ ControllerRecordReservationDisconnectClose(success) {
         Log("Could not publish reservation disconnect-close completion", "WARNING")
         return false
     }
+    return true
+}
+
+ControllerHasActiveReservationLease() {
+    global CONTROLLER_LEASE_STATE_FILE
+
+    try {
+        state := LS_ParseJson(FileRead(CONTROLLER_LEASE_STATE_FILE, "UTF-8"))
+    } catch {
+        return false
+    }
+    if (Type(state) != "Map" || !state.Has("active") || Type(state["active"]) != "Map")
+        return false
+
+    lease := state["active"]
+    required := ["kind", "state", "reservationKey", "labId", "leaseId", "generation"]
+    for key in required {
+        if (!lease.Has(key))
+            return false
+    }
+    return lease["kind"] = "reservation" && lease["state"] = "active"
+        && Type(lease["reservationKey"]) = "String" && lease["reservationKey"] != ""
+        && Type(lease["labId"]) = "String" && lease["labId"] != ""
+        && Type(lease["leaseId"]) = "String" && lease["leaseId"] != ""
+        && IsInteger(lease["generation"]) && lease["generation"] >= 1
+}
+
+ControllerCompleteReservationDisconnectClose(applicationsClosed, recordCloseFn, logoffSessionFn) {
+    if (!applicationsClosed) {
+        try recordCloseFn.Call(false)
+        return false
+    }
+
+    try {
+        ; Prove the result file is writable before asking Windows to log off.
+        ; A failed preflight leaves the desktop intact for Gateway retry.
+        if (!recordCloseFn.Call(false))
+            return false
+    } catch as e {
+        Log("Could not prepare reservation disconnect-close result: " . e.Message, "ERROR")
+        return false
+    }
+
+    try {
+        if (!logoffSessionFn.Call()) {
+            Log("Could not log off the disconnected RDP session after application cleanup", "ERROR")
+            return false
+        }
+    } catch as e {
+        Log("Could not log off the disconnected RDP session: " . e.Message, "ERROR")
+        return false
+    }
+
+    try {
+        if (!recordCloseFn.Call(true)) {
+            Log("The disconnected RDP session is closing, but Gateway close completion could not be published", "ERROR")
+            return false
+        }
+    } catch as e {
+        Log("The disconnected RDP session is closing, but Gateway close completion could not be published: " . e.Message, "ERROR")
+        return false
+    }
+
+    return true
+}
+
+ControllerLogoffCurrentSession() {
+    global LS_TEST_MODE
+    global CONTROLLER_ALLOW_CURRENT_SESSION_LOGOFF
+    global CONTROLLER_CURRENT_SESSION_LOGOFF_HANDLER
+
+    ; Tests and non-AppControl callers can provide a harmless substitute. A
+    ; production AppControl process must explicitly enable the real WTS call.
+    if (IsSet(CONTROLLER_CURRENT_SESSION_LOGOFF_HANDLER)
+        && IsObject(CONTROLLER_CURRENT_SESSION_LOGOFF_HANDLER)) {
+        try return !!CONTROLLER_CURRENT_SESSION_LOGOFF_HANDLER.Call()
+        catch as e {
+            Log("Injected RDP session logoff handler failed: " . e.Message, "ERROR")
+            return false
+        }
+    }
+
+    if (IsSet(LS_TEST_MODE) && LS_TEST_MODE) {
+        Log("Refusing real RDP session logoff in Lab Station test mode", "WARNING")
+        return false
+    }
+
+    if (!IsSet(CONTROLLER_ALLOW_CURRENT_SESSION_LOGOFF) || !CONTROLLER_ALLOW_CURRENT_SESSION_LOGOFF) {
+        Log("Refusing to log off the current RDP session because this process has not enabled that operation", "WARNING")
+        return false
+    }
+
+    try {
+        succeeded := DllCall(
+            "Wtsapi32\WTSLogoffSession",
+            "Ptr", 0,
+            "UInt", 0xFFFFFFFF,
+            "Int", false,
+            "Int"
+        )
+    } catch as e {
+        Log("Could not request logoff of the current RDP session: " . e.Message, "ERROR")
+        return false
+    }
+
+    if (!succeeded) {
+        Log("WTSLogoffSession failed for the current RDP session (Win32 error " . A_LastError . ")", "ERROR")
+        return false
+    }
+
+    Log("Requested logoff of the disconnected RDP session after successful application cleanup", "INFO")
     return true
 }
 
@@ -138,6 +250,7 @@ ControllerCheckCloseRequest(*) {
 
 ControllerCloseManagedApps(reason) {
     global CONTROLLER_CLOSE_IN_PROGRESS, CONTROLLER_DISCONNECT_GRACE_ACTIVE
+    global CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING
     global WORKSPACE_MODE, target
 
     if (CONTROLLER_CLOSE_IN_PROGRESS)
@@ -146,6 +259,8 @@ ControllerCloseManagedApps(reason) {
     CONTROLLER_CLOSE_IN_PROGRESS := true
     CONTROLLER_DISCONNECT_GRACE_ACTIVE := false
     SetTimer(ControllerDisconnectGraceExpired, 0)
+    CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING := false
+    SetTimer(ControllerReservationDisconnectCloseRetry, 0)
     success := false
     try {
         if (WORKSPACE_MODE)

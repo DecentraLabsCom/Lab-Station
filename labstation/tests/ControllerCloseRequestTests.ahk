@@ -26,6 +26,10 @@ RunControllerCloseRequestTests() {
         TestControllerPresenceParsing()
         TestControllerPresenceRejectsStaleMarker()
         TestControllerPresenceRejectsMalformedMarker()
+        TestReservationDisconnectCleanupRequiresCloseAndReportSuccess()
+        TestReservationDisconnectCleanupLogsOffOnlyAfterSuccessfulReport()
+        TestReservationDisconnectCleanupReportsLogoffFailure()
+        TestRealSessionLogoffIsDisabledInTestMode()
     } catch as err {
         LS_TestFail("Unhandled controller-close test exception: " . err.Message)
     }
@@ -87,4 +91,94 @@ TestControllerPresenceRejectsMalformedMarker() {
     LS_TestAssert(!presence["present"], "a malformed controller marker is not treated as active")
     LS_TestAssert(presence["stale"], "a malformed controller marker is reported as stale")
     LS_TestAssert(!FileExist(LAB_STATION_CONTROLLER_PRESENCE_FILE), "malformed controller marker is removed")
+}
+
+TestReservationDisconnectCleanupRequiresCloseAndReportSuccess() {
+    hooks := ControllerCloseTestHooks()
+    completed := ControllerCompleteReservationDisconnectClose(
+        false,
+        success => ControllerCloseTestRecord(hooks, success),
+        () => ControllerCloseTestLogoff(hooks)
+    )
+
+    LS_TestAssert(!completed, "failed application cleanup is not reported as a completed disconnect close")
+    LS_TestAssert(hooks["records"].Length = 1 && hooks["records"][1] = false,
+        "failed application cleanup publishes a failed close result")
+    LS_TestAssert(hooks["logoffCalls"] = 0,
+        "failed application cleanup leaves the disconnected desktop for Gateway retry")
+
+    hooks := ControllerCloseTestHooks()
+    hooks["recordResult"] := false
+    completed := ControllerCompleteReservationDisconnectClose(
+        true,
+        success => ControllerCloseTestRecord(hooks, success),
+        () => ControllerCloseTestLogoff(hooks)
+    )
+
+    LS_TestAssert(!completed, "a close result that could not be published is not complete")
+    LS_TestAssert(hooks["logoffCalls"] = 0,
+        "failure to publish the close result leaves the disconnected desktop for Gateway retry")
+}
+
+TestReservationDisconnectCleanupLogsOffOnlyAfterSuccessfulReport() {
+    hooks := ControllerCloseTestHooks()
+    completed := ControllerCompleteReservationDisconnectClose(
+        true,
+        success => ControllerCloseTestRecord(hooks, success),
+        () => ControllerCloseTestLogoff(hooks)
+    )
+
+    LS_TestAssert(completed, "successful application close, report and logoff complete the disconnect cleanup")
+    LS_TestAssert(hooks["records"].Length = 2 && hooks["records"][1] = false && hooks["records"][2] = true,
+        "successful application cleanup is reported only after the desktop logoff request")
+    LS_TestAssert(hooks["logoffCalls"] = 1,
+        "a successfully reported disconnect cleanup logs off the local RDP session")
+    LS_TestAssert(hooks["events"].Length = 3 && hooks["events"][1] = "record:false"
+        && hooks["events"][2] = "logoff" && hooks["events"][3] = "record:true",
+        "the status write is checked before logoff and success is published after it")
+}
+
+TestReservationDisconnectCleanupReportsLogoffFailure() {
+    hooks := ControllerCloseTestHooks()
+    hooks["logoffResult"] := false
+    completed := ControllerCompleteReservationDisconnectClose(
+        true,
+        success => ControllerCloseTestRecord(hooks, success),
+        () => ControllerCloseTestLogoff(hooks)
+    )
+
+    LS_TestAssert(!completed, "a failed desktop logoff does not report full disconnect cleanup")
+    LS_TestAssert(hooks["records"].Length = 1 && hooks["records"][1] = false,
+        "a failed desktop logoff leaves a retryable failure result")
+    LS_TestAssert(hooks["logoffCalls"] = 1,
+        "desktop logoff is attempted once after application close and report")
+    LS_TestAssert(hooks["events"].Length = 2 && hooks["events"][1] = "record:false"
+        && hooks["events"][2] = "logoff",
+        "a failed desktop logoff is never reported as successful")
+}
+
+TestRealSessionLogoffIsDisabledInTestMode() {
+    global CONTROLLER_ALLOW_CURRENT_SESSION_LOGOFF, CONTROLLER_CURRENT_SESSION_LOGOFF_HANDLER
+    CONTROLLER_ALLOW_CURRENT_SESSION_LOGOFF := true
+    CONTROLLER_CURRENT_SESSION_LOGOFF_HANDLER := ""
+
+    requested := ControllerLogoffCurrentSession()
+
+    LS_TestAssert(!requested, "test mode refuses the real WTS logoff API even if production opt-in is set")
+}
+
+ControllerCloseTestHooks() {
+    return Map("records", [], "events", [], "recordResult", true, "logoffCalls", 0, "logoffResult", true)
+}
+
+ControllerCloseTestRecord(hooks, success) {
+    hooks["records"].Push(success)
+    hooks["events"].Push("record:" . (success ? "true" : "false"))
+    return hooks["recordResult"]
+}
+
+ControllerCloseTestLogoff(hooks) {
+    hooks["logoffCalls"] += 1
+    hooks["events"].Push("logoff")
+    return hooks["logoffResult"]
 }

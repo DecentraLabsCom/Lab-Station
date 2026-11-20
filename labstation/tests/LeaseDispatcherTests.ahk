@@ -34,6 +34,7 @@ try {
     TestLeaseExpiryDoesNotReplayInterruptedCleanup()
     TestLeaseExpiryRequiresReconciliationForUnclassifiedRecoveryState()
     TestLeaseExpiryRetriesRecordedPreEffectReleaseFailure()
+    TestLeaseExpiryRetryPreservesDisconnectGuardUntilReservationEnd()
     TestOperationStatusReturnsPersistedResult()
 } catch as err {
     LS_TestFail("Unhandled lease-dispatch test exception: " . err.Message)
@@ -225,14 +226,15 @@ TestLeaseExpiryWatchdogReleasesExpiredLease() {
     )
     LS_LeaseDispatcher.SaveState(Map("nextGeneration", 7, "active", active, "operations", Map()))
 
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
     LS_TestAssert(policy["unexpiredLease"] = "retain", "shared policy retains a lease before expiry")
     LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 0, "watchdog leaves an unexpired lease untouched")
 
     active["expiresAt"] := FormatTime(DateAdd(now, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    active["notBefore"] := FormatTime(DateAdd(now, -3600, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
     LS_LeaseDispatcher.SaveState(Map("nextGeneration", 7, "active", active, "operations", Map()))
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
 
     state := LS_LeaseDispatcher.LoadState()
     LS_TestAssert(policy["expiredLease"] = "release", "shared policy releases an expired lease")
@@ -253,16 +255,17 @@ TestLeaseExpiryRetriesKnownPreEffectFailures() {
 
     LEASE_EXECUTOR_RESULT := false
     LEASE_EXECUTOR_RELEASE_RETRYABLE := true
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
     state := LS_LeaseDispatcher.LoadState()
     first := state["operations"]["lease-expiry-8"]["result"]
     LS_TestAssert(matrix["leaseExpiry"]["knownPreEffectFailure"] = "retry", "shared policy retries known pre-effect failures")
     LS_TestAssert(first["metadata"]["retryable"] && state["active"]["state"] = "recovery-required",
         "a known pre-effect failure is recorded while the expired lease remains locked")
 
+    AgeLeaseRecoveryRetry()
     LEASE_EXECUTOR_RESULT := true
     LEASE_EXECUTOR_RELEASE_RETRYABLE := false
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
     state := LS_LeaseDispatcher.LoadState()
     LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 2, "watchdog retries a known safe failure")
     LS_TestAssert(state["operations"].Has("lease-expiry-8-retry-2"), "retry attempt is durably recorded")
@@ -279,8 +282,8 @@ TestLeaseExpiryDoesNotRetryPartialCleanupFailure() {
 
     LEASE_EXECUTOR_RESULT := false
     LEASE_EXECUTOR_RELEASE_RETRYABLE := false
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
     state := LS_LeaseDispatcher.LoadState()
     LS_TestAssert(matrix["leaseExpiry"]["partialOrUnknownFailure"] = "recovery-required",
         "shared policy requires reconciliation after partial cleanup")
@@ -305,7 +308,7 @@ TestLeaseExpiryDoesNotReplayInterruptedCleanup() {
     operations := Map("lease-expiry-10", operation)
     LS_LeaseDispatcher.SaveState(Map("nextGeneration", 10, "active", active, "operations", operations))
 
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
     state := LS_LeaseDispatcher.LoadState()
     LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 0, "an interrupted expiry operation is not replayed")
     LS_TestAssert(state["operations"]["lease-expiry-10"]["state"] = "recovery-required",
@@ -321,8 +324,8 @@ TestLeaseExpiryRequiresReconciliationForUnclassifiedRecoveryState() {
     active["state"] := "recovery-required"
     LS_LeaseDispatcher.SaveState(Map("nextGeneration", 11, "active", active, "operations", Map()))
 
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
     state := LS_LeaseDispatcher.LoadState()
     LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 0, "a recovery lease without a recorded retryable Release is not retried")
     LS_TestAssert(state["operations"].Has("lease-expiry-recovery-11")
@@ -336,23 +339,94 @@ TestLeaseExpiryRetriesRecordedPreEffectReleaseFailure() {
     now := A_NowUTC
     active := ExpiredLease("lease-watchdog-recorded-retry", 12, now)
     active["state"] := "recovery-required"
+    active["updatedAt"] := FormatTime(DateAdd(now, -180, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
     failedResult := Map("exitCode", 2, "metadata", Map("code", "STATION_SESSION_QUERY_FAILED", "retryable", true))
     priorRelease := Map(
         "state", "completed",
         "command", "release-session",
         "leaseId", active["leaseId"],
         "generation", 12,
-        "updatedAt", FormatTime(now, "yyyy-MM-ddTHH:mm:ssZ"),
+        "updatedAt", FormatTime(DateAdd(now, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ"),
         "result", failedResult
     )
     operations := Map("gateway-release-12", priorRelease)
     LS_LeaseDispatcher.SaveState(Map("nextGeneration", 12, "active", active, "operations", operations))
 
-    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor)
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
     state := LS_LeaseDispatcher.LoadState()
     LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 1, "a recorded pre-effect release failure may be retried by expiry cleanup")
     LS_TestAssert(state["operations"].Has("lease-expiry-12"), "expiry cleanup persists a new release operation")
     LS_TestAssert(!state.Has("active"), "successful retry clears the expired lease")
+}
+
+TestLeaseExpiryRetryPreservesDisconnectGuardUntilReservationEnd() {
+    global LEASE_EXECUTOR_CALLS
+    ResetLeaseTestState()
+    now := A_NowUTC
+    active := ExpiredLease("lease-watchdog-disconnect-guard", 13, now)
+    active["state"] := "recovery-required"
+    active["expiresAt"] := FormatTime(DateAdd(now, 300, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    active["nextReconcileAt"] := FormatTime(DateAdd(now, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    active["updatedAt"] := FormatTime(DateAdd(now, -180, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    priorRequest := Map("command", "release-session", "args", ["--require-rdp-disconnected"])
+    failedResult := Map("exitCode", 2, "metadata", Map("code", "STATION_RDP_CLIENT_CONNECTED", "retryable", true))
+    priorRelease := Map(
+        "payload", LS_ToJson(priorRequest),
+        "state", "completed",
+        "command", "release-session",
+        "leaseId", active["leaseId"],
+        "generation", 13,
+        "updatedAt", FormatTime(DateAdd(now, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ"),
+        "result", failedResult
+    )
+    LS_LeaseDispatcher.SaveState(Map(
+        "nextGeneration", 13,
+        "active", active,
+        "operations", Map("gateway-release-13", priorRelease)
+    ))
+
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
+    LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 1, "watchdog retries a guarded early release")
+    args := LEASE_EXECUTOR_CALLS.Length > 0 ? LEASE_EXECUTOR_CALLS[1]["args"] : []
+    hasGuard := false
+    for arg in args {
+        if (arg = "--require-rdp-disconnected")
+            hasGuard := true
+    }
+    LS_TestAssert(hasGuard, "early watchdog retry keeps the reconnect guard")
+
+    ResetLeaseTestState()
+    now := A_NowUTC
+    active := ExpiredLease("lease-watchdog-disconnect-guard-end", 14, now)
+    active["state"] := "recovery-required"
+    active["updatedAt"] := FormatTime(DateAdd(now, -180, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    priorRequest := Map("command", "release-session", "args", ["--require-rdp-disconnected"])
+    failedResult := Map("exitCode", 2, "metadata", Map("code", "STATION_RDP_CLIENT_CONNECTED", "retryable", true))
+    priorRelease := Map(
+        "payload", LS_ToJson(priorRequest),
+        "state", "completed",
+        "command", "release-session",
+        "leaseId", active["leaseId"],
+        "generation", 14,
+        "updatedAt", FormatTime(DateAdd(now, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ"),
+        "result", failedResult
+    )
+    LS_LeaseDispatcher.SaveState(Map(
+        "nextGeneration", 14,
+        "active", active,
+        "operations", Map("gateway-release-14", priorRelease)
+    ))
+
+    LS_LeaseDispatcher.EnforceLeaseExpiry(LeaseTestExecutor, LeaseAllowExpiryRelease)
+    LS_TestAssert(LEASE_EXECUTOR_CALLS.Length = 1, "watchdog retries the release when scheduled expiry arrives")
+    args := LEASE_EXECUTOR_CALLS.Length > 0 ? LEASE_EXECUTOR_CALLS[1]["args"] : []
+    hasGuard := false
+    for arg in args {
+        if (arg = "--require-rdp-disconnected")
+            hasGuard := true
+    }
+    LS_TestAssert(!hasGuard,
+        "scheduled expiry owns final release and does not preserve the early-disconnect guard")
 }
 
 ExpiredLease(leaseId, generation, now) {
@@ -456,4 +530,27 @@ LeaseTestExecutor(command, args) {
         }
     }
     return LEASE_EXECUTOR_RESULT
+}
+
+LeaseAllowExpiryRelease() {
+    return ""
+}
+
+AgeLeaseRecoveryRetry() {
+    state := LS_LeaseDispatcher.LoadState()
+    retryDue := FormatTime(DateAdd(A_NowUTC, -120, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+    active := state["active"]
+    active["nextReconcileAt"] := retryDue
+    active["updatedAt"] := retryDue
+    state["active"] := active
+    operations := state["operations"]
+    for operationId, operation in operations {
+        if (!operation.Has("leaseId") || operation["leaseId"] != active["leaseId"]
+            || !operation.Has("generation") || operation["generation"] != active["generation"])
+            continue
+        operation["updatedAt"] := retryDue
+        operations[operationId] := operation
+    }
+    state["operations"] := operations
+    LS_LeaseDispatcher.SaveState(state)
 }

@@ -2,13 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+- Give reservation disconnect cleanup one local retry 25 seconds after its
+  first attempt, matching Linux and preserving time for Gateway's 180-second
+  `release-session` fallback.
+
 ## [3.9.0] - 2026-11-19
 
 ### Added
 - Keep disconnected RDP workspaces available for a 120-second reconnect window
-  during reservations, then report the ordered AppControl close to Gateway.
-- Configure and verify a 180-second Windows disconnected-session limit so the
-  orderly application close can finish before the operating-system fallback.
+  during reservations, then close the applications and disconnected desktop
+  locally when the close result is published successfully.
+- Keep a 240-second Windows disconnected-session limit as the final fallback,
+  leaving time for Gateway's 180-second `release-session` retry when local
+  cleanup or its report fails.
 
 ## [3.8.0] - 2026-11-17
 

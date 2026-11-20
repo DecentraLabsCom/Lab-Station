@@ -215,11 +215,17 @@ OnQueryEndSession(wParam, lParam, msg, hwnd) {
 ControllerStartDisconnectGrace(reason) {
     global CONTROLLER_DISCONNECT_GRACE_ACTIVE, CONTROLLER_CLOSE_IN_PROGRESS
     global CONTROLLER_DISCONNECT_GRACE_STARTED_TICK
+    global CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING, CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS
+    global CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK
     global RDP_DISCONNECT_GRACE_MS
 
-    if (CONTROLLER_CLOSE_IN_PROGRESS || CONTROLLER_DISCONNECT_GRACE_ACTIVE)
+    if (CONTROLLER_CLOSE_IN_PROGRESS || CONTROLLER_DISCONNECT_GRACE_ACTIVE
+        || CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING)
         return
 
+    CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS := 0
+    CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK := 0
+    SetTimer(ControllerReservationDisconnectCloseRetry, 0)
     CONTROLLER_DISCONNECT_GRACE_ACTIVE := true
     CONTROLLER_DISCONNECT_GRACE_STARTED_TICK := A_TickCount
     SetTimer(ControllerDisconnectGraceExpired, -RDP_DISCONNECT_GRACE_MS)
@@ -230,8 +236,21 @@ ControllerStartDisconnectGrace(reason) {
 ControllerCancelDisconnectGrace(reason) {
     global CONTROLLER_DISCONNECT_GRACE_ACTIVE, CONTROLLER_CLOSE_IN_PROGRESS
     global CONTROLLER_DISCONNECT_GRACE_STARTED_TICK, RDP_DISCONNECT_GRACE_MS
+    global CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING, CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS
+    global CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK
 
-    if (!CONTROLLER_DISCONNECT_GRACE_ACTIVE || CONTROLLER_CLOSE_IN_PROGRESS)
+    if (CONTROLLER_CLOSE_IN_PROGRESS)
+        return
+
+    if (CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING) {
+        SetTimer(ControllerReservationDisconnectCloseRetry, 0)
+        CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING := false
+        CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS := 0
+        CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK := 0
+        Log(reason . "; cancelled the pending local close retry after reconnect", "INFO")
+    }
+
+    if (!CONTROLLER_DISCONNECT_GRACE_ACTIVE)
         return
 
     elapsedMs := A_TickCount - CONTROLLER_DISCONNECT_GRACE_STARTED_TICK
@@ -262,15 +281,62 @@ ControllerDisconnectGraceExpired(*) {
     ControllerCloseForSessionEnd("RDP reconnection grace expired", true)
 }
 
+ControllerReservationDisconnectCloseRetry(*) {
+    global CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING, CONTROLLER_CLOSE_IN_PROGRESS
+
+    if (!CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING || CONTROLLER_CLOSE_IN_PROGRESS)
+        return
+
+    CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING := false
+    Log("Retrying the reservation disconnect close once after the initial local attempt failed", "INFO")
+    ControllerCloseForSessionEnd("RDP disconnect close retry", true)
+}
+
 ControllerCloseForSessionEnd(reason, publishReservationDisconnectClose := false) {
     global CONTROLLER_CLOSE_IN_PROGRESS
+    global CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING, CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS
+    global CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK, RDP_DISCONNECT_CLOSE_RETRY_MS
 
     if (CONTROLLER_CLOSE_IN_PROGRESS)
         return
 
+    if (publishReservationDisconnectClose) {
+        if (CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS >= 2)
+            return
+        CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS += 1
+        if (CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS = 1)
+            CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK := A_TickCount
+    }
+
     success := ControllerCloseManagedApps(reason)
-    if (publishReservationDisconnectClose)
-        ControllerRecordReservationDisconnectClose(success)
+    if (publishReservationDisconnectClose) {
+        recordCloseFn := closeSucceeded => ControllerRecordReservationDisconnectClose(closeSucceeded)
+        logoffSessionFn := () => ControllerLogoffCurrentSession()
+        success := ControllerCompleteReservationDisconnectClose(success, recordCloseFn, logoffSessionFn)
+
+        if (!success) {
+            ; The managed-app close may have succeeded while its status write or
+            ; desktop logoff failed. Reset the guard so the one retry can run.
+            CONTROLLER_CLOSE_IN_PROGRESS := false
+            if (CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS = 1 && ControllerHasActiveReservationLease()) {
+                elapsedMs := A_TickCount - CONTROLLER_DISCONNECT_CLOSE_FIRST_ATTEMPT_TICK
+                if (elapsedMs < 0)
+                    elapsedMs += 4294967296
+                retryDelayMs := RDP_DISCONNECT_CLOSE_RETRY_MS - elapsedMs
+                if (retryDelayMs < 1)
+                    retryDelayMs := 1
+                CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING := true
+                SetTimer(ControllerReservationDisconnectCloseRetry, -retryDelayMs)
+                Log("Reservation disconnect close failed; one local retry is scheduled 25 seconds after the first attempt", "WARNING")
+                return
+            }
+            if (CONTROLLER_DISCONNECT_CLOSE_ATTEMPTS = 1)
+                Log("Reservation disconnect close failed without an active reservation lease; no local retry is scheduled", "WARNING")
+            else
+                Log("The one local reservation disconnect close retry failed; leaving the disconnected desktop for Gateway release-session", "WARNING")
+        }
+    }
+    CONTROLLER_DISCONNECT_CLOSE_RETRY_PENDING := false
     ControllerClearPresence()
     ExitApp(success ? 0 : 1)
 }

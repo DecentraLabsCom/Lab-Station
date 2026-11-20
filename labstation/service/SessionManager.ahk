@@ -269,12 +269,15 @@ class LS_SessionManager {
         user := options.Has("user") ? options["user"] : ""
         protectActiveRemoteSession := options.Has("protectActiveRemoteSession") && options["protectActiveRemoteSession"]
         protectLocalSessions := options.Has("protectLocalSessions") && options["protectLocalSessions"]
+        requireRdpDisconnected := options.Has("requireRdpDisconnected") && options["requireRdpDisconnected"]
         if (protectLocalSessions) {
             blockReason := this.AutomaticExpiryReleaseBlockReason()
             if (blockReason != "")
                 return this.RecordAutomaticReleaseDeferred(started, user, blockReason)
         }
-        remoteSessionReleased := this.LogoffRemoteLabUser(user, protectActiveRemoteSession)
+        remoteSessionReleased := protectActiveRemoteSession
+            ? this.LogoffRemoteLabUser(user, true)
+            : this.CloseRemoteLabUserSession(user, requireRdpDisconnected)
         fmuCleanupAttempted := false
         fmuCleanupCompleted := false
         releaseBlockReason := ""
@@ -383,6 +386,150 @@ class LS_SessionManager {
         }
         LS_ServiceState.RecordReleaseSession(ok, details)
         return ok
+    }
+
+    static CloseRemoteLabUserSession(user := "", requireRdpDisconnected := false) {
+        this.LastReleaseExitCode := 0
+        this.LastReleaseRetryable := false
+        this.LastReleaseMessage := "station released"
+        this.LastReleaseMetadata := Map()
+        this.LastReleaseSessionCount := 0
+        LS_LogInfo("Orderly LABUSER session close started")
+
+        if (requireRdpDisconnected && LS_Status.IsLocalModeEnabled()) {
+            this.LastReleaseExitCode := 2
+            this.LastReleaseRetryable := true
+            this.LastReleaseMessage := "local mode is active; automatic disconnected-session release was refused"
+            this.LastReleaseMetadata := Map(
+                "code", "STATION_LOCAL_MODE_ACTIVE",
+                "retryable", true,
+                "closedLabuserSessions", 0
+            )
+            return false
+        }
+
+        blockReason := requireRdpDisconnected ? this.AutomaticExpiryReleaseBlockReason() : ""
+        if (blockReason != "") {
+            this.LastReleaseExitCode := 2
+            this.LastReleaseRetryable := true
+            this.LastReleaseMessage := "disconnected-session release was deferred: " . blockReason
+            this.LastReleaseMetadata := Map(
+                "code", "STATION_RELEASE_PROTECTED_SESSION_ACTIVE",
+                "reason", blockReason,
+                "retryable", true,
+                "closedLabuserSessions", 0
+            )
+            return false
+        }
+
+        try {
+            sessions := this.GetReleaseSessionInventory()
+        } catch as e {
+            LS_LogWarning("Release-session cannot read sessions: " . e.Message)
+            this.LastReleaseExitCode := 2
+            this.LastReleaseRetryable := true
+            this.LastReleaseMessage := "session inventory is unavailable; refusing orderly session close"
+            this.LastReleaseMetadata := Map("code", "STATION_SESSION_QUERY_FAILED", "retryable", true)
+            return false
+        }
+
+        targets := this.GetRemoteLabUserSessions(sessions, user)
+        if (targets.Length = 0) {
+            this.LastReleaseMessage := "NO_ACTIVE_SESSION: release already satisfied; no remote session found for "
+                . (user != "" ? user : LS_AccountManager.DefaultUser)
+            this.LastReleaseMetadata := Map(
+                "method", "session-ended",
+                "retryable", false,
+                "closedLabuserSessions", 0
+            )
+            return true
+        }
+        for session in targets {
+            state := session.Has("state") ? StrLower(Trim(session["state"])) : ""
+            if (requireRdpDisconnected && state != "disc" && state != "disconnected") {
+                this.LastReleaseExitCode := 2
+                this.LastReleaseRetryable := true
+                this.LastReleaseMessage := state = "active"
+                    ? "an RDP client reconnected; automatic disconnected-session release was cancelled"
+                    : "RDP session state is unknown; refusing automatic disconnected-session release"
+                this.LastReleaseMetadata := Map(
+                    "code", state = "active" ? "STATION_RDP_CLIENT_CONNECTED" : "STATION_RDP_CLIENT_STATE_UNKNOWN",
+                    "retryable", true,
+                    "closedLabuserSessions", 0
+                )
+                return false
+            }
+        }
+
+        if (!this.CloseControllerProcesses()) {
+            if (requireRdpDisconnected) {
+                this.LastReleaseExitCode := 2
+                this.LastReleaseRetryable := true
+                this.LastReleaseMessage := "AppControl did not confirm orderly application close"
+                this.LastReleaseMetadata := Map(
+                    "code", "STATION_APPCONTROL_CLOSE_FAILED",
+                    "retryable", true,
+                    "closedLabuserSessions", 0
+                )
+                return false
+            }
+            LS_LogWarning("Orderly AppControl close failed; continuing normal release with session logoff")
+        }
+
+        try {
+            sessions := this.GetReleaseSessionInventory()
+        } catch as e {
+            LS_LogWarning("Release-session cannot recheck sessions after AppControl close: " . e.Message)
+            this.LastReleaseExitCode := 2
+            this.LastReleaseRetryable := true
+            this.LastReleaseMessage := "session inventory became unavailable after application close"
+            this.LastReleaseMetadata := Map("code", "STATION_SESSION_QUERY_FAILED", "retryable", true)
+            return false
+        }
+        targets := this.GetRemoteLabUserSessions(sessions, user)
+        for session in targets {
+            state := session.Has("state") ? StrLower(Trim(session["state"])) : ""
+            if (requireRdpDisconnected && state != "disc" && state != "disconnected") {
+                this.LastReleaseExitCode := 2
+                this.LastReleaseRetryable := true
+                this.LastReleaseMessage := "an RDP client reconnected during orderly application close"
+                this.LastReleaseMetadata := Map(
+                    "code", "STATION_RDP_CLIENT_CONNECTED",
+                    "retryable", true,
+                    "closedLabuserSessions", 0
+                )
+                return false
+            }
+        }
+
+        ok := true
+        for session in targets {
+            if (!this.LogoffRemoteSession(session)) {
+                ok := false
+            } else {
+                this.LastReleaseSessionCount += 1
+            }
+        }
+        if (!ok) {
+            this.LastReleaseExitCode := 2
+            this.LastReleaseRetryable := true
+            this.LastReleaseMessage := "one or more disconnected LABUSER sessions could not be logged off"
+            this.LastReleaseMetadata := Map(
+                "code", "STATION_SESSION_TERMINATION_FAILED",
+                "retryable", true,
+                "closedLabuserSessions", this.LastReleaseSessionCount
+            )
+            return false
+        }
+
+        this.LastReleaseMessage := "LABUSER applications and session closed"
+        this.LastReleaseMetadata := Map(
+            "method", "app-control",
+            "retryable", false,
+            "closedLabuserSessions", this.LastReleaseSessionCount
+        )
+        LS_LogInfo("Orderly LABUSER application and session close completed")
+        return true
     }
 
     static WaitForSafeReboot(user, timeout) {

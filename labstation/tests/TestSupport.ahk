@@ -1,5 +1,8 @@
 #Requires AutoHotkey v2.0
 
+; Test processes must never log off the interactive session running the suite.
+global LS_TEST_MODE := true
+
 LS_TestOutput(text) {
     ; AutoHotkey's '*' pseudo-file requires a console handle. Keep test
     ; failures visible in CI, but do not show an error dialog when a test is

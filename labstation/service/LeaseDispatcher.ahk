@@ -170,7 +170,7 @@ class LS_LeaseDispatcher {
     ; The installed background task runs this watchdog independently of a
     ; Gateway connection. Expiry cleanup uses the same durable lease journal
     ; and mutex as dispatched operations so it cannot race a prepare/release.
-    static EnforceLeaseExpiry(sessionExecutor := unset) {
+    static EnforceLeaseExpiry(sessionExecutor := unset, expiryReleaseBlockReasonProvider := unset) {
         mutex := DllCall("CreateMutexW", "Ptr", 0, "Int", 0, "WStr", this.MutexName, "Ptr")
         if (!mutex) {
             LS_LogWarning("Lease expiry watchdog could not open the lease journal lock")
@@ -280,7 +280,8 @@ class LS_LeaseDispatcher {
             }
 
             ; Keep admission closed while an expired lease waits for cleanup or reconciliation.
-            if (!active.Has("state") || active["state"] != "recovery-required") {
+            if ((!active.Has("state") || active["state"] != "recovery-required")
+                && (now >= expiresAt || releaseRequested)) {
                 active["state"] := "recovery-required"
                 active["updatedAt"] := this.TimestampUtc()
                 state["active"] := active
@@ -341,7 +342,22 @@ class LS_LeaseDispatcher {
             if (now < expiresAt && !releaseRequested)
                 return
 
-            if (active["state"] = "recovery-required") {
+            ; The first pass that notices an expired active lease must release
+            ; it immediately. Apply the retry cooldown only to leases that
+            ; were already in recovery when this watchdog pass began.
+            if (wasRecoveryRequired && !operations.Has(expiryOperationId)
+                && !this.LeaseReleaseFailuresAreRetryable(operations, leaseId, generation)) {
+                reason := "expired lease has a partial or uncertain result that needs a new Release attempt"
+                try {
+                    this.RecordExpiryReconciliationRequired(state, active, reason)
+                } catch as e {
+                    LS_LogWarning("Lease expiry watchdog could not record recovery state: " . e.Message)
+                    return
+                }
+                LS_LogWarning("Expired lease has no recorded retryable Release; admission remains closed for reconciliation")
+                return
+            }
+            if (wasRecoveryRequired) {
                 retryAt := ""
                 if (active.Has("nextReconcileAt")) {
                     retryAt := this.ParseUtc(active["nextReconcileAt"])
@@ -358,23 +374,6 @@ class LS_LeaseDispatcher {
                 }
                 if (retryAt != "" && now < retryAt)
                     return
-                if (!operations.Has(expiryOperationId)
-                    && !this.LeaseReleaseFailuresAreRetryable(operations, leaseId, generation)) {
-                    reason := "expired lease has a partial or uncertain result that needs a new Release attempt"
-                    try {
-                        this.RecordExpiryReconciliationRequired(state, active, reason)
-                        operations := state["operations"]
-                        active := state["active"]
-                        retryAt := active.Has("nextReconcileAt") ? this.ParseUtc(active["nextReconcileAt"]) : ""
-                        if (retryAt != "" && now < retryAt) {
-                            this.SaveState(state)
-                            return
-                        }
-                    } catch as e {
-                        LS_LogWarning("Lease expiry watchdog could not record recovery state: " . e.Message)
-                        return
-                    }
-                }
             }
 
             expiryOperationId := this.NextLeaseExpiryOperationId(operations, leaseId, generation)
@@ -401,7 +400,9 @@ class LS_LeaseDispatcher {
                 return
             }
 
-            blockReason := this.AutomaticExpiryReleaseBlockReason()
+            blockReason := IsSet(expiryReleaseBlockReasonProvider)
+                ? expiryReleaseBlockReasonProvider.Call()
+                : this.AutomaticExpiryReleaseBlockReason()
             if (blockReason != "") {
                 try {
                     this.SetNextReconcileAt(active)
@@ -439,12 +440,15 @@ class LS_LeaseDispatcher {
                 context["reservationKey"] := active["reservationKey"]
             issuedAt := this.TimestampUtc()
             executeBefore := FormatTime(DateAdd(A_NowUTC, 300, "Seconds"), "yyyy-MM-ddTHH:mm:ssZ")
+            releaseArgs := ["--protect-local-sessions"]
+            if (now < expiresAt && this.LeaseReleaseRequiresDisconnectedRdp(operations, leaseId, generation))
+                releaseArgs.Push("--require-rdp-disconnected")
             request := Map(
                 "schemaVersion", 2,
                 "id", expiryOperationId,
                 "operation", "execute",
                 "command", "release-session",
-                "args", ["--protect-local-sessions"],
+                "args", releaseArgs,
                 "issuedAt", issuedAt,
                 "executeBefore", executeBefore,
                 "context", context
@@ -488,6 +492,28 @@ class LS_LeaseDispatcher {
             found := true
         }
         return found
+    }
+
+    static LeaseReleaseRequiresDisconnectedRdp(operations, leaseId, generation) {
+        for _, operation in operations {
+            if (Type(operation) != "Map" || !operation.Has("leaseId") || operation["leaseId"] != leaseId
+                || !operation.Has("generation") || operation["generation"] != generation
+                || !operation.Has("command") || operation["command"] != "release-session"
+                || !operation.Has("payload") || Type(operation["payload"]) != "String")
+                continue
+            try {
+                request := LS_ParseJson(operation["payload"])
+            } catch {
+                continue
+            }
+            if (Type(request) != "Map" || !request.Has("args") || Type(request["args"]) != "Array")
+                continue
+            for arg in request["args"] {
+                if (arg = "--require-rdp-disconnected")
+                    return true
+            }
+        }
+        return false
     }
 
     static LatestLeaseOperationTime(operations, active) {
@@ -955,6 +981,7 @@ class LS_LeaseDispatcher {
             "--guard-grace", true, "--guard-message", true, "--guard-silent", true,
             "--guard-notify", true, "--no-guard", true, "--user", true,
             "--reboot", true, "--reboot-timeout", true,
+            "--require-rdp-disconnected", true,
             "--protect-local-sessions", true,
             "--unreserved-remote-labuser-sessions", true
         )
@@ -968,6 +995,7 @@ class LS_LeaseDispatcher {
                 return false
             value := pair.Length > 1 ? pair[2] : "true"
             if (pair.Length = 1 && key != "--no-guard" && key != "--guard-silent" && key != "--reboot"
+                && key != "--require-rdp-disconnected"
                 && key != "--protect-local-sessions")
                 return false
             if (key = "--protect-local-sessions" && pair.Length > 1)
@@ -978,6 +1006,8 @@ class LS_LeaseDispatcher {
                     return false
                 authorizationSeen := true
             }
+            if (key = "--require-rdp-disconnected" && (command != "release-session" || pair.Length != 1))
+                return false
             if (key = "--user" && !RegExMatch(value, "^[A-Za-z0-9_.-]{1,64}$"))
                 return false
             if (key = "--guard-grace" && (!RegExMatch(value, "^\d+$") || value > 600))
@@ -1010,6 +1040,7 @@ class LS_LeaseDispatcher {
                 case "--guard-silent": options["guardNotify"] := false
                 case "--guard-notify": options["guardNotify"] := value = "true" || value = "yes"
                 case "--reboot": options["reboot"] := value = "true"
+                case "--require-rdp-disconnected": options["requireRdpDisconnected"] := true
                 case "--protect-local-sessions": options["protectLocalSessions"] := true
                 case "--unreserved-remote-labuser-sessions":
                     options["unreservedRemoteLabUserSessionIds"] := StrSplit(value, ",")
@@ -1018,7 +1049,9 @@ class LS_LeaseDispatcher {
                     options["rebootTimeout"] := value + 0
             }
         }
-        return command = "prepare-session" ? LS_SessionManager.PrepareSession(options) : LS_SessionManager.ReleaseSession(options)
+        if (command = "prepare-session")
+            return LS_SessionManager.PrepareSession(options)
+        return LS_SessionManager.ReleaseSession(options)
     }
 
     static LoadState() {

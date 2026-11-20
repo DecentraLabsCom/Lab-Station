@@ -24,7 +24,8 @@ LS_RunSetupWizard() {
         return false
     }
     if (!LS_RegistryManager.EnsureRdpDisconnectedSessionLimit()) {
-        LS_LogError("Setup wizard stopped because the 180-second RDP disconnected-session safety limit could not be verified")
+        LS_LogError("Setup wizard stopped because the " . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS
+            . "-second RDP disconnected-session safety limit could not be verified")
         return false
     }
     if (!LS_WizardSaveProfile(mode)) {

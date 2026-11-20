@@ -61,7 +61,8 @@ class LS_RegistryManager {
         current := this.GetRdpDisconnectedSessionLimit()
         if (!current["available"]) {
             LS_LogError("Setup cannot verify the RDP disconnected-session limit")
-            MsgBox "Lab Station could not read the effective RDP disconnected-session limit. Setup cannot verify the 180-second safety limit that leaves time for AppControl's 120-second reconnect grace and orderly application close.`n`nCheck the Lab Station log and the Windows Remote Desktop Session Host settings.", "Lab Station Setup", "OK Iconx"
+            MsgBox "Lab Station could not read the effective RDP disconnected-session limit. Setup cannot verify the "
+                . LAB_STATION_RDP_DISCONNECTED_SESSION_LIMIT_SECONDS . "-second safety limit that leaves time for AppControl's 120-second reconnect grace, orderly close, and the Gateway retry.`n`nCheck the Lab Station log and the Windows Remote Desktop Session Host settings.", "Lab Station Setup", "OK Iconx"
             return false
         }
 
