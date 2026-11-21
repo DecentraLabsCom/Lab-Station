@@ -4,6 +4,8 @@ AppControl.log
 LabStationPanel.exe
 LabStation.exe
 LabStation.log
+labstation-*.log*
+labstation.log.lock
 
 build.ps1
 

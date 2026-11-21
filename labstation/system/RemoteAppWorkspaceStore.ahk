@@ -20,7 +20,7 @@ class LS_RemoteAppWorkspaceStore {
         capture := LS_RunPowerShellCapture(script, "Protect RemoteApp workspace configuration", LAB_STATION_LONG_COMMAND_TIMEOUT_MS)
         ready := capture["exitCode"] = 0 && InStr(capture["stdout"], "LABSTATION_REMOTEAPP_WORKSPACE_STORE_READY") > 0
         if (ready) {
-            LS_LogInfo("Protected RemoteApp workspace store is ready: " . APP_WORKSPACE_CONFIG_ROOT)
+            LS_LogDebug("Protected RemoteApp workspace store is ready: " . APP_WORKSPACE_CONFIG_ROOT)
             return true
         }
 

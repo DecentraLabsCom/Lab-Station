@@ -19,7 +19,7 @@ LS_RunPowerShell(script, description := "PowerShell command") {
     }
 
     command := Format('"{1}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{2}"', LS_GetPowerShellPath(), tempScript)
-    LS_LogInfo("Executing PowerShell - " . description)
+    LS_LogDebug("Executing PowerShell - " . description)
     exitCode := RunWait(command, , "Hide")
     try FileDelete(tempScript)
     return exitCode
@@ -53,14 +53,14 @@ LS_GetPowerShellPath() {
 }
 
 LS_RunCommand(command, description := "command") {
-    LS_LogInfo("Executing command - " . description)
+    LS_LogDebug("Executing command - " . description)
     return RunWait(command, , "Hide")
 }
 
 LS_RunCommandCapture(command, description := "command", timeoutMs := 0) {
     if (timeoutMs <= 0)
         timeoutMs := LAB_STATION_COMMAND_TIMEOUT_MS
-    LS_LogInfo("Capturing command output - " . description)
+    LS_LogDebug("Capturing command output - " . description)
     stdoutPath := A_Temp "\LabStation-" . A_TickCount . "-stdout.txt"
     stderrPath := A_Temp "\LabStation-" . A_TickCount . "-stderr.txt"
     exitPath := A_Temp "\LabStation-" . A_TickCount . "-exit.txt"

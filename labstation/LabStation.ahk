@@ -654,6 +654,7 @@ LS_ServiceLoop() {
         now := A_TickCount
         if (nextStatus = 0 || now >= nextStatus) {
             status := LS_Status.Collect()
+            LS_LogStatusSummary(status)
             LS_Status.ExportJson(LAB_STATION_STATUS_FILE, status)
             LS_Telemetry.Publish(status)
             nextStatus := now + statusInterval

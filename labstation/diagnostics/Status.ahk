@@ -115,7 +115,7 @@ class LS_Status {
                 ; Gateway installations migrate to labstation/data.
                 LS_WriteJson(LAB_STATION_LEGACY_STATUS_FILE, data)
             }
-            LS_LogInfo("Status exported to " . fullPath)
+            LS_LogDebug("Status exported to " . fullPath)
             return true
         } catch as e {
             LS_LogError("Cannot export status: " . e.Message)

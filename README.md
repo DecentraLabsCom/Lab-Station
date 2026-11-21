@@ -97,6 +97,7 @@ test, and release instructions are in
 | WinRM, Gateway trust, and commands | [WinRM command contract](docs/winrm-command-contract.md) |
 | Windows firewall, AutoAdminLogon cleanup, and LABUSER restrictions | [Windows security hardening](docs/windows-security-hardening.md) |
 | Status, heartbeat, and schemas | [Status and heartbeat contract](docs/status-and-heartbeat.md), [status JSON schema](docs/status-json-schema.md), [heartbeat schema](docs/heartbeat-schema.md) |
+| Operational logs | [Shared log format, detail, rotation, and retention](docs/logging-policy.md) |
 | Shared local-use workstations | [Hybrid operations](docs/hybrid-operations.md) |
 | RemoteApp launch behavior | [AppControl](remote-app/README.md) and [Windows configuration](remote-app/windows-configuration.md) |
 | FMU Executor on Windows | [Station integration and package contents](docs/fmu-executor.md) |

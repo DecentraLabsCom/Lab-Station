@@ -49,7 +49,7 @@ class LS_SessionGuard {
         }
 
         if (targets.Length = 0) {
-            LS_LogInfo("Session guard: no conflicting local users found")
+            LS_LogDebug("Session guard: no conflicting local users found")
             return true
         }
 
