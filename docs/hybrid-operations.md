@@ -83,7 +83,10 @@ only; Dedicated always warns and hands off every remaining local session.
   available for the hybrid profile and expires after eight hours unless it is
   disabled earlier. Lab Station and Lab Gateway both block Hybrid preparation
   while the flag is active. Enabling local mode also requires a successful
-  session inventory and no active reservation or remote LABUSER session.
+  session inventory and no remote LABUSER session. The Station serializes the
+  command against its persisted lease journal; neither that command nor the
+  Gateway's current v3 operator path queries the authoritative reservation
+  projection, so enable local mode outside active reservation windows.
 - On Hybrid, a marker with an invalid or unrecognized timestamp remains active
   until an operator clears it. Its file modification time is not used to infer
   expiry. Dedicated reports local mode disabled and clears or ignores stale
@@ -133,4 +136,6 @@ sessions are excluded regardless of account. Windows and Linux use that same
 meaning for the Station agent's Dedicated handoff and Hybrid confirmation
 policy. Lab Station refuses Hybrid `prepare-session` while local mode is active,
 reports local mode disabled on Dedicated, and refuses to enable local mode
-during an active reservation or remote LABUSER session.
+when a persisted Station lease or remote LABUSER session is active. Enabling
+does not check Gateway's authoritative reservation projection, so operators
+should use it outside active reservation windows.
