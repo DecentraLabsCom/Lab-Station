@@ -108,14 +108,19 @@ try {
         throw "FMU Executor source lock not found: $executorLockPath"
     }
     $executorLock = Get-Content -LiteralPath $executorLockPath -Raw | ConvertFrom-Json
-    if ($executorLock.repository -ne 'DecentraLabsCom/FMU-Executor' -or
+    if ($executorLock.schemaVersion -ne 1 -or
+        $executorLock.repository -ne 'DecentraLabsCom/FMU-Executor' -or
+        $executorLock.runtimeDownloads -ne $false -or
         $executorLock.version -notmatch '^\d+\.\d+\.\d+$' -or
         $executorLock.commit -notmatch '^[0-9a-fA-F]{40}$' -or
         $executorLock.sourceTree.format -ne 'git-ls-tree-manifest-v1' -or
         $executorLock.sourceTree.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
         $executorLock.runtimePayload.format -ne 'sha256-path-manifest-v1' -or
-        $executorLock.runtimePayload.sha256 -notmatch '^[0-9a-fA-F]{64}$') {
-        throw 'FMU Executor source lock is missing valid repository, version, commit, or digest metadata.'
+        $executorLock.runtimePayload.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+        $executorLock.containerImage.repository -ne 'ghcr.io/decentralabscom/fmu-executor' -or
+        $executorLock.containerImage.digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+        $executorLock.containerImage.reference -ne "$($executorLock.containerImage.repository):$($executorLock.version)@$($executorLock.containerImage.digest)") {
+        throw 'FMU Executor source lock is missing valid source identity or digest-pinned container metadata.'
     }
     Copy-Item -LiteralPath $executorLockPath -Destination (Join-Path $fmuExecutorPackageDirectory 'SOURCE.lock.json') -Force
     Set-Content -LiteralPath (Join-Path $fmuExecutorPackageDirectory 'VERSION') -Value $executorLock.version -NoNewline -Encoding Ascii

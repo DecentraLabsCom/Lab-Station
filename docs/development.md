@@ -41,9 +41,11 @@ python -m pytest "$env:FMU_EXECUTOR_SOURCE\tests" -q
 
 CI and release builds check out the exact commit recorded in
 `fmu-executor/SOURCE.lock.json`; use `scripts/verify-shared-fmu-executor.ps1`
-to verify that pin locally. To approve a new reviewed pin, run the same script
-with `-UpdatePin` against a clean canonical checkout. Local Station runs can
-launch source mode by setting `FMU_EXECUTOR_SOURCE_DIR` to the checkout path.
+to verify that release lock locally. To approve a new reviewed pin, download
+`SOURCE.lock.json` from the corresponding FMU Executor GitHub release, then run
+the script with `-UpdatePin -ReleaseManifest <path>` against a clean checkout
+of that release. Local Station runs can launch source mode by setting
+`FMU_EXECUTOR_SOURCE_DIR` to the checkout path.
 
 Run the AHK tests with an AutoHotkey v2 executable. The list matches the CI
 smoke-test matrix:

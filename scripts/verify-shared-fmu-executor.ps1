@@ -2,6 +2,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$SharedSource,
+
+    [string]$ReleaseManifest,
+
     [switch]$UpdatePin
 )
 
@@ -9,12 +12,24 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $sourceRoot = (Resolve-Path -LiteralPath $SharedSource).Path
 $lockPath = Join-Path $repositoryRoot 'fmu-executor\SOURCE.lock.json'
-$lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+if ($UpdatePin) {
+    if (-not $ReleaseManifest -or -not (Test-Path -LiteralPath $ReleaseManifest -PathType Leaf)) {
+        throw '-UpdatePin requires -ReleaseManifest pointing to the SOURCE.lock.json from an FMU Executor release.'
+    }
+    $lock = Get-Content -LiteralPath $ReleaseManifest -Raw | ConvertFrom-Json
+} else {
+    $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+}
 
-if ($lock.repository -ne 'DecentraLabsCom/FMU-Executor' -or
+if ($lock.schemaVersion -ne 1 -or
+    $lock.repository -ne 'DecentraLabsCom/FMU-Executor' -or
+    $lock.runtimeDownloads -ne $false -or
+    $lock.containerImage.repository -ne 'ghcr.io/decentralabscom/fmu-executor' -or
+    $lock.containerImage.digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+    $lock.containerImage.reference -ne "$($lock.containerImage.repository):$($lock.version)@$($lock.containerImage.digest)" -or
     $lock.sourceTree.format -ne 'git-ls-tree-manifest-v1' -or
     $lock.runtimePayload.format -ne 'sha256-path-manifest-v1') {
-    throw 'The station source lock does not identify the canonical FMU Executor manifests.'
+    throw 'The source lock does not identify a canonical, digest-pinned FMU Executor release.'
 }
 
 $sourceCommit = (& git -C $sourceRoot rev-parse HEAD).Trim()
@@ -26,7 +41,7 @@ if ($LASTEXITCODE -ne 0 -or $dirty.Count -gt 0) {
     throw 'Shared FMU Executor checkout must be clean before verification or pin updates.'
 }
 $sourceVersion = (Get-Content -LiteralPath (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
-if (-not $UpdatePin -and ($sourceCommit -ne $lock.commit -or $sourceVersion -ne $lock.version)) {
+if ($sourceCommit -ne $lock.commit -or $sourceVersion -ne $lock.version) {
     throw "Shared FMU Executor $sourceVersion at $sourceCommit does not match the station pin ($($lock.version) at $($lock.commit))."
 }
 
@@ -85,24 +100,16 @@ try {
         $sha256.Dispose()
     }
 
+    if ($sourceDigest -ne ([string]$lock.sourceTree.sha256).ToLowerInvariant()) {
+        throw 'FMU Executor source manifest digest does not match the release lock.'
+    }
+    if ($runtimeDigest -ne ([string]$lock.runtimePayload.sha256).ToLowerInvariant()) {
+        throw 'FMU Executor runtime payload digest does not match the release lock.'
+    }
     if ($UpdatePin) {
-        $lock.version = $sourceVersion
-        $lock.commit = $sourceCommit
-        $lock.sourceTree.sha256 = $sourceDigest
-        $lock.runtimePayload.sha256 = $runtimeDigest
-        if ($lock.PSObject.Properties['syncMode']) {
-            $lock.PSObject.Properties.Remove('syncMode')
-        }
-        $lockJson = $lock | ConvertTo-Json -Depth 6
-        [IO.File]::WriteAllText($lockPath, $lockJson, [Text.UTF8Encoding]::new($false))
-        Write-Host "Updated FMU Executor pin to $sourceVersion at $sourceCommit."
+        Copy-Item -LiteralPath $ReleaseManifest -Destination $lockPath -Force
+        Write-Host "Updated FMU Executor pin from its release lock: $sourceVersion at $sourceCommit."
     } else {
-        if ($sourceDigest -ne ([string]$lock.sourceTree.sha256).ToLowerInvariant()) {
-            throw 'FMU Executor source manifest digest does not match the station pin.'
-        }
-        if ($runtimeDigest -ne ([string]$lock.runtimePayload.sha256).ToLowerInvariant()) {
-            throw 'FMU Executor runtime payload digest does not match the station pin.'
-        }
         Write-Host "FMU Executor source pin verified: $sourceVersion at $sourceCommit; source $sourceDigest; runtime $runtimeDigest."
     }
 } finally {
